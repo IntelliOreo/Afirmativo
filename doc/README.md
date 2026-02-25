@@ -37,13 +37,51 @@ npm run build
 
 ## Environment Variables
 
-Create `frontend/.env.local` for local development:
+Create `frontend/.env` for local development:
 
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:8080
 ```
 
 In production this is set via Cloud Run (Terraform).
+
+---
+
+## Database Setup (Neon Postgres)
+
+The `database/` folder is a Go CLI that runs versioned SQL migrations against Neon. It is not a container — it runs locally and in CI/CD.
+
+### First-time setup (already done — go.mod and .env exist)
+
+```bash
+cd database/
+cp .env.example .env
+# → Edit .env and fill in DATABASE_URL_DIRECT (use direct URL, no -pooler)
+```
+
+### Daily commands
+
+```bash
+cd database/
+
+go run main.go up         # apply all pending migrations
+go run main.go down       # roll back one migration
+go run main.go down all   # roll back everything
+go run main.go version    # show current migration version
+./reset.sh                # dev only: drop everything + re-apply
+```
+
+### Adding a new migration
+
+```bash
+# Manually create a pair of files:
+#   database/migrations/000002_create_coupons.up.sql
+#   database/migrations/000002_create_coupons.down.sql
+# Then apply:
+go run main.go up
+```
+
+See `database-spec-v1.md` for the full schema and migration strategy.
 
 ---
 
@@ -76,6 +114,12 @@ docker compose up
   components/         ← Shared UI primitives (Button, Card, Input, Alert, NavHeader, Footer)
   tailwind.config.ts  ← USWDS color palette + typography tokens
   next.config.ts      ← Static export config
+
+/backend/             ← Go API server (Cloud Run container)
+/database/            ← Migration tooling (NOT a container — runs locally and in CI)
+  migrations/         ← Versioned SQL files (up/down pairs)
+  main.go             ← Go migration CLI
+  reset.sh            ← Dev helper: drop all + re-apply
 
 /infra/               ← Terraform: Cloud Run, networking, secrets
 /design/              ← Reference screenshots (USCIS.gov aesthetic)
