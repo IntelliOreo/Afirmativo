@@ -1,0 +1,39 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: var(--font-source-sans), system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.625;
+    color: #1b1b1b;
+    background-color: #f0f0f0;
+  }
+
+  body {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-weight: 700;
+    color: #1a4480;
+    line-height: 1.3;
+  }
+
+  a {
+    color: #005ea2;
+    text-decoration: underline;
+  }
+
+  a:hover {
+    color: #1a4480;
+  }
+}

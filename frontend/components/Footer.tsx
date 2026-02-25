@@ -1,0 +1,24 @@
+export function Footer() {
+  return (
+    <footer className="bg-base-lightest border-t border-base-lighter mt-auto">
+      <div className="max-w-5xl mx-auto px-4 py-8 text-sm text-gray-600">
+        <div className="flex flex-col sm:flex-row justify-between gap-4">
+          <div>
+            <p className="font-semibold text-primary-darkest mb-1">
+              Affirmative Interview Simulator
+            </p>
+            <p>Simulador de Entrevista Afirmativa</p>
+          </div>
+          <div className="text-right sm:text-left">
+            <p>
+              This tool is for preparation purposes only.
+            </p>
+            <p>
+              Esta herramienta es solo para fines de preparación.
+            </p>
+          </div>
+        </div>
+      </div>
+    </footer>
+  );
+}
