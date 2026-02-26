@@ -1,6 +1,9 @@
 # Ignore all markdown files in the project root
 /*.md
 
+# Design docs (specs, analysis docs — tracked separately from source code)
+design/*.md
+
 # Dependencies
 node_modules/
 .pnp
@@ -9,6 +12,9 @@ node_modules/
 # Next.js build output
 frontend/.next/
 frontend/out/
+
+# TypeScript build cache
+*.tsbuildinfo
 
 # Production
 frontend/build/

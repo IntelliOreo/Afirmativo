@@ -5,9 +5,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/postgres"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/afirmativo/database/cmd"
 	"github.com/joho/godotenv"
 )
 
@@ -21,48 +19,42 @@ func main() {
 		log.Fatal("DATABASE_URL_DIRECT not set in .env")
 	}
 
-	m, err := migrate.New("file://migrations", dbURL)
-	if err != nil {
-		log.Fatalf("failed to create migrator: %v", err)
-	}
-	defer m.Close()
-
-	cmd := "up"
+	command := "up"
 	if len(os.Args) > 1 {
-		cmd = os.Args[1]
+		command = os.Args[1]
 	}
 
-	switch cmd {
+	// args after the command name (e.g., "down all" → args = ["all"])
+	args := os.Args[2:]
+
+	switch command {
 	case "up":
-		if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-			log.Fatalf("migrate up failed: %v", err)
-		}
-		fmt.Println("migrations applied")
+		cmd.MigrateUp(dbURL)
 
 	case "down":
-		steps := 1
-		if len(os.Args) > 2 && os.Args[2] == "all" {
-			if err := m.Down(); err != nil && err != migrate.ErrNoChange {
-				log.Fatalf("migrate down failed: %v", err)
-			}
-			fmt.Println("all migrations rolled back")
-			return
-		}
-		if err := m.Steps(-steps); err != nil && err != migrate.ErrNoChange {
-			log.Fatalf("migrate down failed: %v", err)
-		}
-		fmt.Printf("rolled back %d migration(s)\n", steps)
+		cmd.MigrateDown(dbURL, args)
 
 	case "version":
-		version, dirty, err := m.Version()
-		if err != nil {
-			log.Fatalf("could not get version: %v", err)
-		}
-		fmt.Printf("version: %d, dirty: %v\n", version, dirty)
+		cmd.MigrateVersion(dbURL)
+
+	case "load_coupon":
+		cmd.LoadCoupon(dbURL, args)
 
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command: %s\n", cmd)
-		fmt.Fprintln(os.Stderr, "usage: go run main.go [up|down|down all|version]")
+		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", command)
+		printUsage()
 		os.Exit(1)
 	}
+}
+
+func printUsage() {
+	fmt.Fprintln(os.Stderr, "usage: go run main.go <command> [args]")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "commands:")
+	fmt.Fprintln(os.Stderr, "  up                 apply all pending migrations")
+	fmt.Fprintln(os.Stderr, "  down               roll back 1 migration")
+	fmt.Fprintln(os.Stderr, "  down all           roll back all migrations")
+	fmt.Fprintln(os.Stderr, "  down <N>           roll back N migrations")
+	fmt.Fprintln(os.Stderr, "  version            show current migration version")
+	fmt.Fprintln(os.Stderr, "  load_coupon        generate and load coupons into DB")
 }

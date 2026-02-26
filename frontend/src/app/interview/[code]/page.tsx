@@ -55,7 +55,7 @@ export default function InterviewPage() {
   useEffect(() => {
     async function startInterview() {
       try {
-        const res = await fetch(`${API_URL}/api/v1/interview/start`, {
+        const res = await fetch(`${API_URL}/api/interview/start`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ sessionCode: code }),
@@ -78,7 +78,7 @@ export default function InterviewPage() {
     setStatus("submitting");
 
     try {
-      const res = await fetch(`${API_URL}/api/v1/interview/answer`, {
+      const res = await fetch(`${API_URL}/api/interview/answer`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -106,7 +106,7 @@ export default function InterviewPage() {
 
   async function handleEndInterview() {
     try {
-      await fetch(`${API_URL}/api/v1/interview/end`, {
+      await fetch(`${API_URL}/api/interview/end`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sessionCode: code }),

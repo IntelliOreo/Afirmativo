@@ -18,7 +18,7 @@ export default function DisclaimerPage() {
 
   // Fire Neon warm-up on page load — wakes the DB before user reaches /pay
   useEffect(() => {
-    fetch(`${API_URL}/api/v1/health`).catch(() => {
+    fetch(`${API_URL}/api/health`).catch(() => {
       // Best-effort; silently ignore errors
     });
   }, []);

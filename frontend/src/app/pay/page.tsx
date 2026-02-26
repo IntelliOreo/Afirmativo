@@ -21,45 +21,42 @@ export default function PayPage() {
   async function handleCouponSubmit() {
     if (!coupon.trim()) return;
 
-    // TEMP: bypass API validation — any non-empty input proceeds to session page.
-    // TODO: remove this block and uncomment the real API call before launch.
-    router.push("/session/TEST-0001");
-    return;
+    setLoading(true);
+    setCouponError("");
+    try {
+      const res = await fetch(`${API_URL}/api/coupon/validate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: coupon.trim() }),
+      });
+      const data = await res.json();
 
-    // --- real validation (disabled until backend is ready) ---
-    // setLoading(true);
-    // setCouponError("");
-    // try {
-    //   const res = await fetch(`${API_URL}/api/v1/coupon/validate`, {
-    //     method: "POST",
-    //     headers: { "Content-Type": "application/json" },
-    //     body: JSON.stringify({ code: coupon.trim() }),
-    //   });
-    //   const data = await res.json();
-    //   if (res.ok && data.sessionCode) {
-    //     router.push(`/session/${data.sessionCode}`);
-    //   } else {
-    //     setCouponError(
-    //       lang === "es"
-    //         ? "Cupón inválido o ya utilizado. / Invalid or already used coupon."
-    //         : "Invalid or already used coupon. / Cupón inválido o ya utilizado."
-    //     );
-    //   }
-    // } catch {
-    //   setCouponError(
-    //     lang === "es"
-    //       ? "Error de conexión. Intente de nuevo. / Connection error. Please try again."
-    //       : "Connection error. Please try again. / Error de conexión."
-    //   );
-    // } finally {
-    //   setLoading(false);
-    // }
+      if (res.ok && data.valid) {
+        // TODO: create session (code + PIN) and redirect to /session/[code]
+        // For now, go to a placeholder session page
+        router.push("/session/TEST-0001");
+      } else {
+        setCouponError(
+          lang === "es"
+            ? "Cupón inválido o ya utilizado. / Invalid or already used coupon."
+            : "Invalid or already used coupon. / Cupón inválido o ya utilizado."
+        );
+      }
+    } catch {
+      setCouponError(
+        lang === "es"
+          ? "Error de conexión. Intente de nuevo. / Connection error. Please try again."
+          : "Connection error. Please try again. / Error de conexión."
+      );
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function handleStripeCheckout() {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/v1/payment/checkout`, {
+      const res = await fetch(`${API_URL}/api/payment/checkout`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });

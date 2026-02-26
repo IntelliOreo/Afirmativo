@@ -54,7 +54,7 @@ export default function SessionPage() {
 
     // --- real recovery (disabled until backend is ready) ---
     // try {
-    //   const res = await fetch(`${API_URL}/api/v1/session/recover`, {
+    //   const res = await fetch(`${API_URL}/api/session/recover`, {
     //     method: "POST",
     //     headers: { "Content-Type": "application/json" },
     //     body: JSON.stringify({ sessionCode: code, pin: pin.trim() }),
@@ -154,44 +154,43 @@ export default function SessionPage() {
           {view === "hub" && (
             <>
               <h1 className="text-3xl font-bold text-primary-dark mb-2">
-                {lang === "es" ? "Su sesión" : "Your session"}
+                {lang === "es" ? "Su sesión está lista" : "Your session is ready"}
               </h1>
-              <p className="text-primary-darkest mb-8">
+              <p className="text-primary-darkest mb-6">
                 {lang === "es"
-                  ? "Guarde este código y PIN. Los necesitará para recuperar su sesión."
-                  : "Save this code and PIN. You will need them to recover your session."}
+                  ? "Puede comenzar la entrevista de inmediato con el botón de abajo."
+                  : "You can start the interview right away using the button below."}
               </p>
 
-              <Card className="mb-6">
-                <div className="space-y-4">
+              <Button fullWidth className="mb-8" onClick={() => router.push(`/interview/${code}`)}>
+                {lang === "es" ? "Comenzar entrevista" : "Begin interview"}
+              </Button>
+
+              <Card className="mb-4">
+                <p className="text-sm text-gray-600 mb-3">
+                  {lang === "es"
+                    ? "Si pierde la conexión o desea volver más tarde, use este código y PIN para recuperar su sesión. Guárdelos o tome una captura de pantalla."
+                    : "If you lose your connection or want to come back later, use this code and PIN to recover your session. Save them or take a screenshot."}
+                </p>
+                <div className="flex items-center gap-6 text-sm">
                   <div>
-                    <p className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-1">
-                      {lang === "es" ? "Código de sesión" : "Session code"}
-                    </p>
-                    <p className="text-2xl font-bold text-primary-dark tracking-widest">
+                    <span className="font-semibold text-gray-500 uppercase tracking-wide">
+                      {lang === "es" ? "Código" : "Code"}:
+                    </span>{" "}
+                    <span className="font-bold text-primary-dark tracking-wide">
                       {code}
-                    </p>
+                    </span>
                   </div>
-                  <div className="border-t border-base-lighter pt-4">
-                    <p className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-1">
-                      PIN
-                    </p>
-                    <p className="text-2xl font-bold text-primary-dark tracking-widest">
+                  <div>
+                    <span className="font-semibold text-gray-500 uppercase tracking-wide">
+                      PIN:
+                    </span>{" "}
+                    <span className="font-bold text-primary-dark tracking-wide">
                       {displayPin}
-                    </p>
+                    </span>
                   </div>
                 </div>
               </Card>
-
-              <Alert variant="warning" className="mb-8">
-                {lang === "es"
-                  ? "Tome una captura de pantalla de este código y PIN antes de continuar. Los datos se eliminan después de 48 horas."
-                  : "Take a screenshot of this code and PIN before continuing. Data is deleted after 48 hours."}
-              </Alert>
-
-              <Button fullWidth onClick={() => router.push(`/interview/${code}`)}>
-                {lang === "es" ? "Comenzar entrevista" : "Begin interview"}
-              </Button>
             </>
           )}
 
