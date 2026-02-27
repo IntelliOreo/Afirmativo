@@ -31,8 +31,8 @@ func LoadCoupon(dbURL string, args []string) {
 
 	inserted := 0
 	skipped := 0
-	for i := 1; i <= *count; i++ {
-		code := fmt.Sprintf("%s-%04d", *prefix, i)
+	for i := range *count {
+		code := fmt.Sprintf("%s-%04d", *prefix, i+1)
 
 		result, err := db.Exec(
 			`INSERT INTO coupons (code, max_uses, discount_pct, source)
@@ -44,7 +44,11 @@ func LoadCoupon(dbURL string, args []string) {
 			log.Printf("failed to insert coupon %s: %v", code, err)
 			continue
 		}
-		rows, _ := result.RowsAffected()
+		rows, err := result.RowsAffected()
+		if err != nil {
+			log.Printf("failed to get rows affected for coupon %s: %v", code, err)
+			continue
+		}
 		if rows == 0 {
 			skipped++
 			continue

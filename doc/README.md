@@ -85,6 +85,44 @@ See `database-spec-v1.md` for the full schema and migration strategy.
 
 ---
 
+## Backend Setup (Go)
+
+```bash
+cd backend
+
+# 1. Start the server (loads .env automatically)
+go run ./cmd/server
+# → listening on http://localhost:8080
+
+# 2. Test health check
+curl http://localhost:8080/api/health
+
+# 3. Test coupon validation (requires a coupon in the DB — see below)
+curl -X POST http://localhost:8080/api/coupon/validate \
+  -H "Content-Type: application/json" \
+  -d '{"code":"BETA-0001"}'
+```
+
+### Loading test coupons
+
+```bash
+cd database
+go run main.go load_coupon
+```
+
+### Regenerating sqlc code
+
+After editing `backend/sql/queries/*.sql`, regenerate the type-safe Go code:
+
+```bash
+cd backend
+sqlc generate
+```
+
+Requires `sqlc` (`brew install sqlc`).
+
+---
+
 ## Local Dev with Docker Compose
 
 Spins up frontend + backend together (requires backend repo to be cloned alongside):

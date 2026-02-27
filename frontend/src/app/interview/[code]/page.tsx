@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
+import Link from "next/link";
 import { NavHeader } from "@components/NavHeader";
 import { Footer } from "@components/Footer";
 import { Button } from "@components/Button";
@@ -13,7 +14,7 @@ const TIMER_TOTAL_SECONDS = 60 * 60; // 60 minutes
 const WARNING_AT_SECONDS = 45 * 60;  // warn at 45 min remaining
 const WRAPUP_AT_SECONDS = 5 * 60;    // wrap-up at 5 min remaining
 
-type InterviewStatus = "loading" | "active" | "submitting" | "done" | "error";
+type InterviewStatus = "guard" | "loading" | "active" | "submitting" | "done" | "error";
 
 interface Question {
   id: string;
@@ -29,7 +30,7 @@ export default function InterviewPage() {
   const code = params.code as string;
 
   const [lang, setLang] = useState<"es" | "en">("es");
-  const [status, setStatus] = useState<InterviewStatus>("loading");
+  const [status, setStatus] = useState<InterviewStatus>("guard");
   const [question, setQuestion] = useState<Question | null>(null);
   const [textAnswer, setTextAnswer] = useState("");
   const [secondsLeft, setSecondsLeft] = useState(TIMER_TOTAL_SECONDS);
@@ -51,9 +52,20 @@ export default function InterviewPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Start interview on mount
+  // Session guard: check for session cookie before starting
   useEffect(() => {
+    const cookiePin = document.cookie
+      .split("; ")
+      .find((row) => row.startsWith(`session_${code}=`))
+      ?.split("=")[1];
+
+    if (!cookiePin) {
+      setStatus("guard");
+      return;
+    }
+
     async function startInterview() {
+      setStatus("loading");
       try {
         const res = await fetch(`${API_URL}/api/interview/start`, {
           method: "POST",
@@ -161,6 +173,24 @@ export default function InterviewPage() {
 
       <main className="flex-1 bg-base-lightest">
         <div className="max-w-2xl mx-auto px-4 py-8">
+          {status === "guard" && (
+            <Card>
+              <h1 className="text-2xl font-bold text-primary-dark mb-4">
+                {lang === "es" ? "Sesión no encontrada" : "Session not found"}
+              </h1>
+              <p className="text-primary-darkest mb-6">
+                {lang === "es"
+                  ? "No se encontró una sesión activa en este navegador. Si tiene un código de sesión y PIN, puede recuperar su acceso."
+                  : "No active session found in this browser. If you have a session code and PIN, you can recover your access."}
+              </p>
+              <Link href={`/session/${code}`}>
+                <Button fullWidth>
+                  {lang === "es" ? "Recuperar sesión" : "Recover session"}
+                </Button>
+              </Link>
+            </Card>
+          )}
+
           {status === "loading" && (
             <p className="text-primary-darkest">
               {lang === "es" ? "Cargando..." : "Loading..."}

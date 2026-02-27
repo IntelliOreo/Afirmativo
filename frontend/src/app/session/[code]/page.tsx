@@ -27,7 +27,7 @@ export default function SessionPage() {
   useEffect(() => {
     const cookiePin = document.cookie
       .split("; ")
-      .find((row) => row.startsWith("session_pin="))
+      .find((row) => row.startsWith(`session_${code}=`))
       ?.split("=")[1];
 
     if (cookiePin) {
@@ -45,7 +45,7 @@ export default function SessionPage() {
 
     // TEMP: bypass API — accept any PIN for testing.
     // TODO: remove this block and uncomment the real API call before launch.
-    document.cookie = `session_pin=${pin.trim()}; path=/`;
+    document.cookie = `session_${code}=${pin.trim()}; path=/; max-age=86400; SameSite=Lax`;
     setDisplayPin(pin.trim());
     setPin("");
     setView("hub");
@@ -54,7 +54,7 @@ export default function SessionPage() {
 
     // --- real recovery (disabled until backend is ready) ---
     // try {
-    //   const res = await fetch(`${API_URL}/api/session/recover`, {
+    //   const res = await fetch(`${API_URL}/api/session/resume`, {
     //     method: "POST",
     //     headers: { "Content-Type": "application/json" },
     //     body: JSON.stringify({ sessionCode: code, pin: pin.trim() }),

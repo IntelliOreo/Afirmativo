@@ -3,7 +3,7 @@ export const disclaimerContent = {
     title: "Descargo de Responsabilidad",
     bullets: [
       "Esta herramienta está diseñada únicamente con fines de práctica y preparación. No constituye asesoría legal.",
-      "Sus respuestas se utilizan solo para generar un reporte de evaluación. Los datos de la sesión se eliminan automáticamente después de 48 horas.",
+      "Sus respuestas se utilizan solo para generar un reporte de evaluación. Los datos de la sesión se eliminan automáticamente después de 24 horas.",
       "No almacenamos información personal identificable más allá de lo que Stripe requiere para procesar pagos.",
       "Esta herramienta no garantiza ningún resultado en su proceso de asilo.",
     ],
@@ -17,7 +17,7 @@ export const disclaimerContent = {
     title: "Disclaimer",
     bullets: [
       "This tool is designed for practice and preparation purposes only. It does not constitute legal advice.",
-      "Your responses are used solely to generate an assessment report. Session data is automatically deleted after 48 hours.",
+      "Your responses are used solely to generate an assessment report. Session data is automatically deleted after 24 hours.",
       "We do not store personally identifiable information beyond what Stripe requires to process payments.",
       "This tool does not guarantee any outcome in your asylum process.",
     ],
