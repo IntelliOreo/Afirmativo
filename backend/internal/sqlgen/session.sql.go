@@ -99,3 +99,30 @@ func (q *Queries) GetSessionByCode(ctx context.Context, sessionCode string) (Ses
 	)
 	return i, err
 }
+
+const startSession = `-- name: StartSession :one
+UPDATE sessions SET status = 'interviewing', started_at = now()
+WHERE session_code = $1 AND status = 'created'
+RETURNING session_code, pin_hash, track, status, role, timer_seconds, started_at, ended_at, payment_id, coupon_code, expires_at, created_at
+`
+
+// Atomically transition session to interviewing. Only succeeds if status is 'created'.
+func (q *Queries) StartSession(ctx context.Context, sessionCode string) (Session, error) {
+	row := q.db.QueryRow(ctx, startSession, sessionCode)
+	var i Session
+	err := row.Scan(
+		&i.SessionCode,
+		&i.PinHash,
+		&i.Track,
+		&i.Status,
+		&i.Role,
+		&i.TimerSeconds,
+		&i.StartedAt,
+		&i.EndedAt,
+		&i.PaymentID,
+		&i.CouponCode,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}

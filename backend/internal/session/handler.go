@@ -1,7 +1,7 @@
 // HTTP handlers for session endpoints:
 //
-//	POST /api/coupon/validate — HandleValidateCoupon
-//	POST /api/session/resume  — HandleResumeSession
+//	POST /api/coupon/validate  — HandleValidateCoupon
+//	POST /api/session/verify   — HandleVerifySession
 package session
 
 import (
@@ -78,15 +78,15 @@ func (h *Handler) HandleValidateCoupon(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// resumeRequest is the JSON body for POST /api/session/resume.
-type resumeRequest struct {
+// verifyRequest is the JSON body for POST /api/session/verify.
+type verifyRequest struct {
 	SessionCode string `json:"sessionCode"`
 	PIN         string `json:"pin"`
 }
 
-// HandleResumeSession handles POST /api/session/resume.
-func (h *Handler) HandleResumeSession(w http.ResponseWriter, r *http.Request) {
-	var req resumeRequest
+// HandleVerifySession handles POST /api/session/verify.
+func (h *Handler) HandleVerifySession(w http.ResponseWriter, r *http.Request) {
+	var req verifyRequest
 	if err := shared.DecodeJSON(r, &req, maxJSONBody); err != nil {
 		shared.WriteError(w, shared.ErrBadRequest, "Invalid request body", "BAD_REQUEST")
 		return
@@ -97,7 +97,7 @@ func (h *Handler) HandleResumeSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess, err := h.svc.ResumeSession(r.Context(), req.SessionCode, req.PIN)
+	sess, err := h.svc.VerifySession(r.Context(), req.SessionCode, req.PIN)
 	if err != nil {
 		switch {
 		case errors.Is(err, shared.ErrNotFound):
@@ -107,7 +107,7 @@ func (h *Handler) HandleResumeSession(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, ErrSessionExpired):
 			shared.WriteError(w, shared.ErrGone, "Session expired", "SESSION_EXPIRED")
 		default:
-			slog.Error("session resume failed", "error", err)
+			slog.Error("session verify failed", "error", err)
 			shared.WriteError(w, shared.ErrInternal, "Internal server error", "INTERNAL_ERROR")
 		}
 		return

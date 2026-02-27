@@ -76,6 +76,18 @@ func (s *PostgresStore) GetSessionByCode(ctx context.Context, sessionCode string
 	return sessionFromRow(row), nil
 }
 
+// StartSession atomically transitions a session to 'interviewing'.
+func (s *PostgresStore) StartSession(ctx context.Context, sessionCode string) (*Session, error) {
+	row, err := sqlgen.New(s.pool).StartSession(ctx, sessionCode)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, shared.ErrConflict
+		}
+		return nil, fmt.Errorf("start session: %w", err)
+	}
+	return sessionFromRow(row), nil
+}
+
 // sessionFromRow maps a sqlgen.Session to the domain Session type.
 func sessionFromRow(row sqlgen.Session) *Session {
 	s := &Session{

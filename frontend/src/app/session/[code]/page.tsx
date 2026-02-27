@@ -1,13 +1,14 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { NavHeader } from "@components/NavHeader";
 import { Footer } from "@components/Footer";
 import { Button } from "@components/Button";
 import { Card } from "@components/Card";
-import { Alert } from "@components/Alert";
 import { Input } from "@components/Input";
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 type View = "loading" | "hub" | "recovery";
 
@@ -19,74 +20,153 @@ export default function SessionPage() {
   const [lang, setLang] = useState<"es" | "en">("es");
   const [view, setView] = useState<View>("loading");
   const [pin, setPin] = useState("");
-  const [displayPin, setDisplayPin] = useState("••••••");
+  const [displayPin, setDisplayPin] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [copied, setCopied] = useState(false);
 
-  // After hydration, check for existing session cookie
+  const verifySession = useCallback(
+    async (sessionCode: string, sessionPin: string) => {
+      const res = await fetch(`${API_URL}/api/session/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionCode, pin: sessionPin }),
+      });
+      if (!res.ok) return { ok: false as const, status: res.status };
+      const data = await res.json();
+      return { ok: true as const, session: data.session };
+    },
+    []
+  );
+
   useEffect(() => {
-    const cookiePin = document.cookie
-      .split("; ")
-      .find((row) => row.startsWith(`session_${code}=`))
-      ?.split("=")[1];
+    async function init() {
+      // 1. Check sessionStorage — set by /pay after coupon validate
+      const storedPin = sessionStorage.getItem(`pin_${code}`);
+      if (storedPin) {
+        sessionStorage.removeItem(`pin_${code}`);
+        document.cookie = `session_${code}=${storedPin}; path=/; max-age=86400; SameSite=Lax`;
+        setDisplayPin(storedPin);
+        setView("hub");
+        return;
+      }
 
-    if (cookiePin) {
-      setDisplayPin(cookiePin);
-      setView("hub");
-    } else {
-      setView("recovery");
+      // 2. Check for existing session cookie
+      const cookiePin = document.cookie
+        .split("; ")
+        .find((row) => row.startsWith(`session_${code}=`))
+        ?.split("=")[1];
+
+      if (!cookiePin) {
+        setView("recovery");
+        return;
+      }
+
+      // 3. Verify cookie with backend
+      try {
+        const result = await verifySession(code, cookiePin);
+        if (result.ok) {
+          setDisplayPin(cookiePin);
+          // Auto-redirect if interview already started
+          if (result.session.started_at) {
+            router.replace(`/interview/${code}`);
+            return;
+          }
+          setView("hub");
+        } else {
+          // Session invalid/expired — clear cookie, show recovery
+          document.cookie = `session_${code}=; path=/; max-age=0`;
+          setError(
+            result.status === 410
+              ? lang === "es"
+                ? "Esta sesión ha expirado. / This session has expired."
+                : "This session has expired. / Esta sesión ha expirado."
+              : ""
+          );
+          setView("recovery");
+        }
+      } catch {
+        // Network error — show hub with cached cookie (graceful degradation)
+        setDisplayPin(cookiePin);
+        setView("hub");
+      }
     }
-  }, []);
+    init();
+  }, [code, verifySession, router, lang]);
+
+  function getRecoveryUrl() {
+    if (typeof window === "undefined") return "";
+    return `${window.location.origin}/session/${code}`;
+  }
+
+  async function handleCopyAll() {
+    const url = getRecoveryUrl();
+    const text = [
+      `${lang === "es" ? "Código de sesión" : "Session code"}: ${code}`,
+      `PIN: ${displayPin}`,
+      `${lang === "es" ? "Enlace" : "Link"}: ${url}`,
+    ].join("\n");
+
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
 
   async function handleRecover() {
     if (!pin.trim() || submitting) return;
     setSubmitting(true);
     setError("");
 
-    // TEMP: bypass API — accept any PIN for testing.
-    // TODO: remove this block and uncomment the real API call before launch.
-    document.cookie = `session_${code}=${pin.trim()}; path=/; max-age=86400; SameSite=Lax`;
-    setDisplayPin(pin.trim());
-    setPin("");
-    setView("hub");
-    setSubmitting(false);
-    return;
-
-    // --- real recovery (disabled until backend is ready) ---
-    // try {
-    //   const res = await fetch(`${API_URL}/api/session/resume`, {
-    //     method: "POST",
-    //     headers: { "Content-Type": "application/json" },
-    //     body: JSON.stringify({ sessionCode: code, pin: pin.trim() }),
-    //     credentials: "include",
-    //   });
-    //   const data = await res.json();
-    //   if (res.ok) {
-    //     setDisplayPin(pin.trim());
-    //     setPin("");
-    //     setView("hub");
-    //   } else if (res.status === 404) {
-    //     setError(
-    //       lang === "es"
-    //         ? "Código de sesión no encontrado. / Session code not found."
-    //         : "Session code not found. / Código de sesión no encontrado."
-    //     );
-    //   } else {
-    //     setError(
-    //       lang === "es"
-    //         ? "PIN incorrecto. Intente de nuevo. / Incorrect PIN. Please try again."
-    //         : "Incorrect PIN. Please try again. / PIN incorrecto."
-    //     );
-    //   }
-    // } catch {
-    //   setError(
-    //     lang === "es"
-    //       ? "Error de conexión. Intente de nuevo. / Connection error. Please try again."
-    //       : "Connection error. Please try again. / Error de conexión."
-    //   );
-    // } finally {
-    //   setSubmitting(false);
-    // }
+    try {
+      const result = await verifySession(code, pin.trim());
+      if (result.ok) {
+        document.cookie = `session_${code}=${pin.trim()}; path=/; max-age=86400; SameSite=Lax`;
+        if (result.session.started_at) {
+          router.replace(`/interview/${code}`);
+          return;
+        }
+        setDisplayPin(pin.trim());
+        setPin("");
+        setView("hub");
+      } else if (result.status === 404) {
+        setError(
+          lang === "es"
+            ? "Código de sesión no encontrado. / Session code not found."
+            : "Session code not found. / Código de sesión no encontrado."
+        );
+      } else if (result.status === 410) {
+        setError(
+          lang === "es"
+            ? "Esta sesión ha expirado. / This session has expired."
+            : "This session has expired. / Esta sesión ha expirado."
+        );
+      } else {
+        setError(
+          lang === "es"
+            ? "PIN incorrecto. Intente de nuevo. / Incorrect PIN. Please try again."
+            : "Incorrect PIN. Please try again. / PIN incorrecto."
+        );
+      }
+    } catch {
+      setError(
+        lang === "es"
+          ? "Error de conexión. Intente de nuevo. / Connection error. Please try again."
+          : "Connection error. Please try again. / Error de conexión."
+      );
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -167,29 +247,48 @@ export default function SessionPage() {
               </Button>
 
               <Card className="mb-4">
-                <p className="text-sm text-gray-600 mb-3">
+                <p className="text-sm text-gray-600 mb-4">
                   {lang === "es"
-                    ? "Si pierde la conexión o desea volver más tarde, use este código y PIN para recuperar su sesión. Guárdelos o tome una captura de pantalla."
-                    : "If you lose your connection or want to come back later, use this code and PIN to recover your session. Save them or take a screenshot."}
+                    ? "Si pierde la conexión o desea volver más tarde, use esta información para recuperar su sesión. Guárdela o tome una captura de pantalla."
+                    : "If you lose your connection or want to come back later, use this info to recover your session. Save it or take a screenshot."}
                 </p>
-                <div className="flex items-center gap-6 text-sm">
-                  <div>
-                    <span className="font-semibold text-gray-500 uppercase tracking-wide">
-                      {lang === "es" ? "Código" : "Code"}:
-                    </span>{" "}
+
+                <div className="space-y-3 mb-4">
+                  <div className="flex items-center justify-between bg-base-lightest rounded px-3 py-2">
+                    <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                      {lang === "es" ? "Código" : "Code"}
+                    </span>
                     <span className="font-bold text-primary-dark tracking-wide">
                       {code}
                     </span>
                   </div>
-                  <div>
-                    <span className="font-semibold text-gray-500 uppercase tracking-wide">
-                      PIN:
-                    </span>{" "}
+                  <div className="flex items-center justify-between bg-base-lightest rounded px-3 py-2">
+                    <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                      PIN
+                    </span>
                     <span className="font-bold text-primary-dark tracking-wide">
                       {displayPin}
                     </span>
                   </div>
+                  <div className="flex items-center justify-between bg-base-lightest rounded px-3 py-2">
+                    <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                      {lang === "es" ? "Enlace" : "Link"}
+                    </span>
+                    <span className="font-bold text-primary text-sm break-all">
+                      {getRecoveryUrl()}
+                    </span>
+                  </div>
                 </div>
+
+                <Button
+                  fullWidth
+                  variant="secondary"
+                  onClick={handleCopyAll}
+                >
+                  {copied
+                    ? lang === "es" ? "Copiado" : "Copied"
+                    : lang === "es" ? "Copiar todo" : "Copy all"}
+                </Button>
               </Card>
             </>
           )}

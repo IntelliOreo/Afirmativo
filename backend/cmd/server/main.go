@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/afirmativo/backend/internal/config"
+	"github.com/afirmativo/backend/internal/interview"
 	"github.com/afirmativo/backend/internal/session"
 	"github.com/afirmativo/backend/internal/shared"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -50,12 +51,16 @@ func main() {
 	sessionSvc := session.NewService(sessionStore, cfg.SessionExpiryHours)
 	sessionHandler := session.NewHandler(sessionSvc)
 
+	interviewSvc := interview.NewService(sessionStore)
+	interviewHandler := interview.NewHandler(interviewSvc)
+
 	// Register routes.
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/health", shared.HandleHealth(pool))
 	mux.HandleFunc("POST /api/coupon/validate", sessionHandler.HandleValidateCoupon)
-	mux.HandleFunc("POST /api/session/resume", sessionHandler.HandleResumeSession)
+	mux.HandleFunc("POST /api/session/verify", sessionHandler.HandleVerifySession)
+	mux.HandleFunc("POST /api/interview/start", interviewHandler.HandleStart)
 
 	// Apply middleware.
 	handler := shared.Chain(mux,

@@ -15,3 +15,9 @@ RETURNING *;
 
 -- name: GetSessionByCode :one
 SELECT * FROM sessions WHERE session_code = $1;
+
+-- name: StartSession :one
+-- Atomically transition session to interviewing. Only succeeds if status is 'created'.
+UPDATE sessions SET status = 'interviewing', started_at = now()
+WHERE session_code = $1 AND status = 'created'
+RETURNING *;

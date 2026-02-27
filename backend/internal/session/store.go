@@ -17,4 +17,8 @@ type Store interface {
 
 	// GetSessionByCode retrieves a session by its code.
 	GetSessionByCode(ctx context.Context, sessionCode string) (*Session, error)
+
+	// StartSession atomically transitions a session from 'created' to 'interviewing'.
+	// Returns ErrConflict if the session is not in 'created' status.
+	StartSession(ctx context.Context, sessionCode string) (*Session, error)
 }

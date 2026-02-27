@@ -31,10 +31,10 @@ export default function PayPage() {
       });
       const data = await res.json();
 
-      if (res.ok && data.valid) {
-        // TODO: create session (code + PIN) and redirect to /session/[code]
-        // For now, go to a placeholder session page
-        router.push("/session/TEST-0001");
+      if (res.ok && data.valid && data.session_code) {
+        // Store PIN in sessionStorage so the session page can display it
+        sessionStorage.setItem(`pin_${data.session_code}`, data.pin);
+        router.push(`/session/${data.session_code}`);
       } else {
         setCouponError(
           lang === "es"

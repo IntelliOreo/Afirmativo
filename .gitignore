@@ -65,3 +65,6 @@ memory/
 
 # Docker
 .dockerignore
+
+#mock APIs
+mockThirdpartyAPIs/

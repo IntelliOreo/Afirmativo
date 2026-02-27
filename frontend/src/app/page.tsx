@@ -2,13 +2,67 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { NavHeader } from "../../components/NavHeader";
 import { Footer } from "../../components/Footer";
 import { Button } from "../../components/Button";
 import { Card } from "../../components/Card";
+import { Input } from "../../components/Input";
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 export default function LandingPage() {
+  const router = useRouter();
   const [lang, setLang] = useState<"es" | "en">("es");
+  const [resumeCode, setResumeCode] = useState("");
+  const [resumePin, setResumePin] = useState("");
+  const [resumeError, setResumeError] = useState("");
+  const [resumeLoading, setResumeLoading] = useState(false);
+
+  async function handleResume() {
+    if (!resumeCode.trim() || !resumePin.trim()) return;
+    setResumeLoading(true);
+    setResumeError("");
+
+    try {
+      const res = await fetch(`${API_URL}/api/session/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionCode: resumeCode.trim(), pin: resumePin.trim() }),
+      });
+
+      if (res.ok) {
+        document.cookie = `session_${resumeCode.trim()}=${resumePin.trim()}; path=/; max-age=86400; SameSite=Lax`;
+        router.push(`/session/${resumeCode.trim()}`);
+      } else if (res.status === 404) {
+        setResumeError(
+          lang === "es"
+            ? "Código de sesión no encontrado. / Session code not found."
+            : "Session code not found. / Código de sesión no encontrado."
+        );
+      } else if (res.status === 410) {
+        setResumeError(
+          lang === "es"
+            ? "Esta sesión ha expirado. / This session has expired."
+            : "This session has expired. / Esta sesión ha expirado."
+        );
+      } else {
+        setResumeError(
+          lang === "es"
+            ? "PIN incorrecto. Intente de nuevo. / Incorrect PIN. Please try again."
+            : "Incorrect PIN. Please try again. / PIN incorrecto."
+        );
+      }
+    } catch {
+      setResumeError(
+        lang === "es"
+          ? "Error de conexión. Intente de nuevo. / Connection error. Please try again."
+          : "Connection error. Please try again. / Error de conexión."
+      );
+    } finally {
+      setResumeLoading(false);
+    }
+  }
 
   const content = {
     es: {
@@ -69,7 +123,52 @@ export default function LandingPage() {
             </Link>
           </div>
 
-          <p className="text-sm text-gray-600 text-center">{t.note}</p>
+          <p className="text-sm text-gray-600 text-center mb-10">{t.note}</p>
+
+          {/* Resume session */}
+          <div className="border-t border-base-lighter pt-8">
+            <h2 className="text-lg font-bold text-primary-dark mb-2">
+              {lang === "es" ? "¿Ya tiene una sesión?" : "Already have a session?"}
+            </h2>
+            <p className="text-sm text-gray-600 mb-4">
+              {lang === "es"
+                ? "Ingrese su código de sesión y PIN para continuar."
+                : "Enter your session code and PIN to continue."}
+            </p>
+            <form
+              onSubmit={(e) => { e.preventDefault(); handleResume(); }}
+              className="space-y-3"
+            >
+              <Input
+                label={lang === "es" ? "Código de sesión" : "Session code"}
+                placeholder="AP-XXXX-XXXX"
+                value={resumeCode}
+                onChange={(e) => setResumeCode(e.target.value.toUpperCase())}
+                autoCapitalize="characters"
+                autoCorrect="off"
+              />
+              <Input
+                label="PIN"
+                placeholder="123456"
+                value={resumePin}
+                onChange={(e) => setResumePin(e.target.value)}
+                inputMode="numeric"
+                maxLength={6}
+                autoComplete="one-time-code"
+                error={resumeError}
+              />
+              <Button
+                type="submit"
+                fullWidth
+                variant="secondary"
+                disabled={resumeLoading || !resumeCode.trim() || !resumePin.trim()}
+              >
+                {resumeLoading
+                  ? lang === "es" ? "Verificando..." : "Verifying..."
+                  : lang === "es" ? "Reanudar sesión" : "Resume session"}
+              </Button>
+            </form>
+          </div>
         </div>
       </main>
 

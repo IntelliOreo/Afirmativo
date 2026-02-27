@@ -1,6 +1,6 @@
 // Service layer for session operations.
 // ValidateCoupon: atomic TX — ClaimCoupon + CreateSession in one transaction.
-// ResumeSession: verify session code + PIN (bcrypt compare).
+// VerifySession: verify session code + PIN (bcrypt compare).
 package session
 
 import (
@@ -65,8 +65,8 @@ func (s *Service) ValidateCoupon(ctx context.Context, couponCode string) (*Valid
 	}, nil
 }
 
-// ResumeSession verifies a session code and PIN, returning the session if valid.
-func (s *Service) ResumeSession(ctx context.Context, sessionCode, pin string) (*Session, error) {
+// VerifySession verifies a session code and PIN, returning the session if valid.
+func (s *Service) VerifySession(ctx context.Context, sessionCode, pin string) (*Session, error) {
 	sess, err := s.store.GetSessionByCode(ctx, sessionCode)
 	if err != nil {
 		return nil, err // ErrNotFound or internal error

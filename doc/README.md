@@ -97,7 +97,13 @@ go run ./cmd/server
 # 2. Test health check
 curl http://localhost:8080/api/health
 
-# 3. Test coupon validation (requires a coupon in the DB — see below)
+# 3. Start mock AI server (returns random interview questions)
+cd mockThirdpartyAPIs
+go run main.go
+# → listening on http://localhost:9090
+# → curl http://localhost:9090/api
+
+# 4. Test coupon validation (requires a coupon in the DB — see below)
 curl -X POST http://localhost:8080/api/coupon/validate \
   -H "Content-Type: application/json" \
   -d '{"code":"BETA-0001"}'
