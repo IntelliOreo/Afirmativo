@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"os/signal"
 	"syscall"
 	"time"
@@ -31,6 +32,22 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Set log level from config.
+	var logLevel slog.Level
+	switch strings.ToLower(cfg.LogLevel) {
+	case "debug":
+		logLevel = slog.LevelDebug
+	case "warn":
+		logLevel = slog.LevelWarn
+	case "error":
+		logLevel = slog.LevelError
+	default:
+		logLevel = slog.LevelInfo
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: logLevel,
+	})))
+
 	// Connect to Postgres.
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
@@ -51,7 +68,9 @@ func main() {
 	sessionSvc := session.NewService(sessionStore, cfg.SessionExpiryHours)
 	sessionHandler := session.NewHandler(sessionSvc)
 
-	interviewSvc := interview.NewService(sessionStore)
+	interviewStore := interview.NewPostgresStore(pool)
+	aiClient := interview.NewHTTPAIClient(cfg.MockAPIURL)
+	interviewSvc := interview.NewService(sessionStore, interviewStore, aiClient)
 	interviewHandler := interview.NewHandler(interviewSvc)
 
 	// Register routes.
@@ -61,6 +80,7 @@ func main() {
 	mux.HandleFunc("POST /api/coupon/validate", sessionHandler.HandleValidateCoupon)
 	mux.HandleFunc("POST /api/session/verify", sessionHandler.HandleVerifySession)
 	mux.HandleFunc("POST /api/interview/start", interviewHandler.HandleStart)
+	mux.HandleFunc("POST /api/interview/answer", interviewHandler.HandleAnswer)
 
 	// Apply middleware.
 	handler := shared.Chain(mux,

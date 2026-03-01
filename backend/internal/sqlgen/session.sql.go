@@ -41,7 +41,7 @@ func (q *Queries) ClaimCoupon(ctx context.Context, code string) (Coupon, error) 
 const createSession = `-- name: CreateSession :one
 INSERT INTO sessions (session_code, pin_hash, coupon_code, status, expires_at)
 VALUES ($1, $2, $3, 'created', $4)
-RETURNING session_code, pin_hash, track, status, role, timer_seconds, started_at, ended_at, payment_id, coupon_code, expires_at, created_at
+RETURNING session_code, pin_hash, track, status, role, ended_at, payment_id, coupon_code, expires_at, created_at, interview_budget_seconds, interview_lapsed_seconds, interview_lapsed_updated_at, interview_started_at, current_interview_started_at, last_api_call_at, conversation_history
 `
 
 type CreateSessionParams struct {
@@ -65,19 +65,24 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		&i.Track,
 		&i.Status,
 		&i.Role,
-		&i.TimerSeconds,
-		&i.StartedAt,
 		&i.EndedAt,
 		&i.PaymentID,
 		&i.CouponCode,
 		&i.ExpiresAt,
 		&i.CreatedAt,
+		&i.InterviewBudgetSeconds,
+		&i.InterviewLapsedSeconds,
+		&i.InterviewLapsedUpdatedAt,
+		&i.InterviewStartedAt,
+		&i.CurrentInterviewStartedAt,
+		&i.LastApiCallAt,
+		&i.ConversationHistory,
 	)
 	return i, err
 }
 
 const getSessionByCode = `-- name: GetSessionByCode :one
-SELECT session_code, pin_hash, track, status, role, timer_seconds, started_at, ended_at, payment_id, coupon_code, expires_at, created_at FROM sessions WHERE session_code = $1
+SELECT session_code, pin_hash, track, status, role, ended_at, payment_id, coupon_code, expires_at, created_at, interview_budget_seconds, interview_lapsed_seconds, interview_lapsed_updated_at, interview_started_at, current_interview_started_at, last_api_call_at, conversation_history FROM sessions WHERE session_code = $1
 `
 
 func (q *Queries) GetSessionByCode(ctx context.Context, sessionCode string) (Session, error) {
@@ -89,24 +94,34 @@ func (q *Queries) GetSessionByCode(ctx context.Context, sessionCode string) (Ses
 		&i.Track,
 		&i.Status,
 		&i.Role,
-		&i.TimerSeconds,
-		&i.StartedAt,
 		&i.EndedAt,
 		&i.PaymentID,
 		&i.CouponCode,
 		&i.ExpiresAt,
 		&i.CreatedAt,
+		&i.InterviewBudgetSeconds,
+		&i.InterviewLapsedSeconds,
+		&i.InterviewLapsedUpdatedAt,
+		&i.InterviewStartedAt,
+		&i.CurrentInterviewStartedAt,
+		&i.LastApiCallAt,
+		&i.ConversationHistory,
 	)
 	return i, err
 }
 
 const startSession = `-- name: StartSession :one
-UPDATE sessions SET status = 'interviewing', started_at = now()
-WHERE session_code = $1 AND status = 'created'
-RETURNING session_code, pin_hash, track, status, role, timer_seconds, started_at, ended_at, payment_id, coupon_code, expires_at, created_at
+UPDATE sessions
+SET status = 'interviewing',
+    interview_started_at = COALESCE(interview_started_at, now()),
+    current_interview_started_at = now()
+WHERE session_code = $1
+  AND status IN ('created', 'active', 'interviewing')
+RETURNING session_code, pin_hash, track, status, role, ended_at, payment_id, coupon_code, expires_at, created_at, interview_budget_seconds, interview_lapsed_seconds, interview_lapsed_updated_at, interview_started_at, current_interview_started_at, last_api_call_at, conversation_history
 `
 
-// Atomically transition session to interviewing. Only succeeds if status is 'created'.
+// Idempotent session start for reconnects. Sets interview_started_at on first call,
+// resets current_interview_started_at on every call. Accepts created, active, or interviewing.
 func (q *Queries) StartSession(ctx context.Context, sessionCode string) (Session, error) {
 	row := q.db.QueryRow(ctx, startSession, sessionCode)
 	var i Session
@@ -116,13 +131,18 @@ func (q *Queries) StartSession(ctx context.Context, sessionCode string) (Session
 		&i.Track,
 		&i.Status,
 		&i.Role,
-		&i.TimerSeconds,
-		&i.StartedAt,
 		&i.EndedAt,
 		&i.PaymentID,
 		&i.CouponCode,
 		&i.ExpiresAt,
 		&i.CreatedAt,
+		&i.InterviewBudgetSeconds,
+		&i.InterviewLapsedSeconds,
+		&i.InterviewLapsedUpdatedAt,
+		&i.InterviewStartedAt,
+		&i.CurrentInterviewStartedAt,
+		&i.LastApiCallAt,
+		&i.ConversationHistory,
 	)
 	return i, err
 }

@@ -19,18 +19,31 @@ var (
 
 // Session represents an active user session.
 type Session struct {
-	SessionCode  string
-	PinHash      string
-	Track        string
-	Status       string
-	Role         string
-	TimerSeconds int
-	StartedAt    *time.Time
-	EndedAt      *time.Time
-	PaymentID    string
-	CouponCode   string
-	ExpiresAt    time.Time
-	CreatedAt    time.Time
+	SessionCode string
+	PinHash     string
+	Track       string
+	Status      string
+	Role        string
+
+	// Interview time budget
+	InterviewBudgetSeconds    int
+	InterviewLapsedSeconds    int
+	InterviewLapsedUpdatedAt  *time.Time
+	InterviewStartedAt        *time.Time
+	CurrentInterviewStartedAt *time.Time
+	LastAPICallAt             *time.Time
+	EndedAt                   *time.Time
+
+	// AI context
+	ConversationHistory []byte // raw JSONB
+
+	// Payment
+	PaymentID  string
+	CouponCode string
+
+	// Session validity
+	ExpiresAt time.Time
+	CreatedAt time.Time
 }
 
 // Coupon represents a redeemable coupon.

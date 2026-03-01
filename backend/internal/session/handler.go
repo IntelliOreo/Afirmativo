@@ -115,13 +115,14 @@ func (h *Handler) HandleVerifySession(w http.ResponseWriter, r *http.Request) {
 
 	shared.WriteJSON(w, http.StatusOK, map[string]any{
 		"session": map[string]any{
-			"session_code":  sess.SessionCode,
-			"status":        sess.Status,
-			"track":         sess.Track,
-			"timer_seconds": sess.TimerSeconds,
-			"created_at":    sess.CreatedAt,
-			"expires_at":    sess.ExpiresAt,
-			"started_at":    sess.StartedAt,
+			"session_code":             sess.SessionCode,
+			"status":                   sess.Status,
+			"track":                    sess.Track,
+			"interview_budget_seconds": sess.InterviewBudgetSeconds,
+			"interview_lapsed_seconds": sess.InterviewLapsedSeconds,
+			"interview_started_at":     sess.InterviewStartedAt,
+			"created_at":               sess.CreatedAt,
+			"expires_at":               sess.ExpiresAt,
 		},
 	})
 }

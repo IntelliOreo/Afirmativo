@@ -40,15 +40,25 @@ func SecurityHeaders(next http.Handler) http.Handler {
 // Logger logs each request with method, path, status, and duration.
 func Logger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		clientIP := r.Header.Get("X-Forwarded-For")
+		if clientIP == "" {
+			clientIP = r.RemoteAddr
+		}
+		slog.Debug("request received",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"client_ip", clientIP,
+			"user_agent", r.UserAgent(),
+			"content_length", r.ContentLength,
+		)
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(sw, r)
-		slog.Info("request",
+		slog.Info("request completed",
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", sw.status,
 			"duration", time.Since(start),
-			"remote", r.RemoteAddr,
 		)
 	})
 }

@@ -10,16 +10,16 @@ import { Card } from "@components/Card";
 import { Alert } from "@components/Alert";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
-const TIMER_TOTAL_SECONDS = 60 * 60; // 60 minutes
+const TIMER_TOTAL_SECONDS = 40 * 60; // 40 minutes
 const WARNING_AT_SECONDS = 45 * 60;  // warn at 45 min remaining
 const WRAPUP_AT_SECONDS = 5 * 60;    // wrap-up at 5 min remaining
 
 type InterviewStatus = "guard" | "loading" | "active" | "submitting" | "done" | "error";
 
 interface Question {
-  id: string;
   textEs: string;
   textEn: string;
+  area: string;
   questionNumber: number;
   totalQuestions: number;
 }
@@ -95,8 +95,8 @@ export default function InterviewPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sessionCode: code,
-          questionId: question?.id,
           answerText: textAnswer.trim(),
+          questionNumber: question?.questionNumber ?? 0,
         }),
         credentials: "include",
       });
@@ -215,11 +215,8 @@ export default function InterviewPage() {
               )}
 
               <Card className="mb-6">
-                <p className="text-lg font-semibold text-primary-dark mb-2">
-                  {question.textEs}
-                </p>
-                <p className="text-base text-gray-600 italic">
-                  {question.textEn}
+                <p className="text-lg font-semibold text-primary-dark">
+                  {lang === "es" ? question.textEs : question.textEn}
                 </p>
               </Card>
 

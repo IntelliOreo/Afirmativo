@@ -17,6 +17,8 @@ type Config struct {
 	FrontendURL        string
 	DatabaseURL        string
 	SessionExpiryHours int
+	MockAPIURL         string // If non-empty, use this mock server instead of real AI APIs
+	LogLevel           string // "debug", "info", "warn", "error" — defaults to "debug"
 }
 
 // Load reads required environment variables and returns a validated Config.
@@ -33,6 +35,8 @@ func Load() (Config, error) {
 		FrontendURL:        envOr("FRONTEND_URL", "http://localhost:3000"),
 		DatabaseURL:        os.Getenv("DATABASE_URL"),
 		SessionExpiryHours: expiry,
+		MockAPIURL:         os.Getenv("MOCK_API_URL"),
+		LogLevel:           envOr("LOG_LEVEL", "debug"),
 	}
 
 	if cfg.DatabaseURL == "" {

@@ -68,3 +68,6 @@ memory/
 
 #mock APIs
 mockThirdpartyAPIs/
+
+#design docs
+design/

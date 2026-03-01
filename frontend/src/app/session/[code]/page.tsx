@@ -68,7 +68,7 @@ export default function SessionPage() {
         if (result.ok) {
           setDisplayPin(cookiePin);
           // Auto-redirect if interview already started
-          if (result.session.started_at) {
+          if (result.session.interview_started_at) {
             router.replace(`/interview/${code}`);
             return;
           }
@@ -132,7 +132,7 @@ export default function SessionPage() {
       const result = await verifySession(code, pin.trim());
       if (result.ok) {
         document.cookie = `session_${code}=${pin.trim()}; path=/; max-age=86400; SameSite=Lax`;
-        if (result.session.started_at) {
+        if (result.session.interview_started_at) {
           router.replace(`/interview/${code}`);
           return;
         }

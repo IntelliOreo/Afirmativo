@@ -17,7 +17,12 @@ RETURNING *;
 SELECT * FROM sessions WHERE session_code = $1;
 
 -- name: StartSession :one
--- Atomically transition session to interviewing. Only succeeds if status is 'created'.
-UPDATE sessions SET status = 'interviewing', started_at = now()
-WHERE session_code = $1 AND status = 'created'
+-- Idempotent session start for reconnects. Sets interview_started_at on first call,
+-- resets current_interview_started_at on every call. Accepts created, active, or interviewing.
+UPDATE sessions
+SET status = 'interviewing',
+    interview_started_at = COALESCE(interview_started_at, now()),
+    current_interview_started_at = now()
+WHERE session_code = $1
+  AND status IN ('created', 'active', 'interviewing')
 RETURNING *;

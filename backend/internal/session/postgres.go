@@ -91,24 +91,40 @@ func (s *PostgresStore) StartSession(ctx context.Context, sessionCode string) (*
 // sessionFromRow maps a sqlgen.Session to the domain Session type.
 func sessionFromRow(row sqlgen.Session) *Session {
 	s := &Session{
-		SessionCode:  row.SessionCode,
-		PinHash:      row.PinHash,
-		Status:       row.Status,
-		Role:         row.Role,
-		TimerSeconds: int(row.TimerSeconds),
-		ExpiresAt:    row.ExpiresAt.Time,
-		CreatedAt:    row.CreatedAt.Time,
+		SessionCode:            row.SessionCode,
+		PinHash:                row.PinHash,
+		Status:                 row.Status,
+		Role:                   row.Role,
+		InterviewBudgetSeconds: int(row.InterviewBudgetSeconds),
+		InterviewLapsedSeconds: int(row.InterviewLapsedSeconds),
+		ExpiresAt:              row.ExpiresAt.Time,
+		CreatedAt:              row.CreatedAt.Time,
 	}
 	if row.Track.Valid {
 		s.Track = row.Track.String
 	}
-	if row.StartedAt.Valid {
-		t := row.StartedAt.Time
-		s.StartedAt = &t
+	if row.InterviewLapsedUpdatedAt.Valid {
+		t := row.InterviewLapsedUpdatedAt.Time
+		s.InterviewLapsedUpdatedAt = &t
+	}
+	if row.InterviewStartedAt.Valid {
+		t := row.InterviewStartedAt.Time
+		s.InterviewStartedAt = &t
+	}
+	if row.CurrentInterviewStartedAt.Valid {
+		t := row.CurrentInterviewStartedAt.Time
+		s.CurrentInterviewStartedAt = &t
+	}
+	if row.LastApiCallAt.Valid {
+		t := row.LastApiCallAt.Time
+		s.LastAPICallAt = &t
 	}
 	if row.EndedAt.Valid {
 		t := row.EndedAt.Time
 		s.EndedAt = &t
+	}
+	if len(row.ConversationHistory) > 0 {
+		s.ConversationHistory = row.ConversationHistory
 	}
 	if row.PaymentID.Valid {
 		s.PaymentID = row.PaymentID.String

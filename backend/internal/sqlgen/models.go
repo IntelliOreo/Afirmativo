@@ -8,6 +8,20 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Answer struct {
+	ID           pgtype.UUID        `json:"id"`
+	SessionCode  string             `json:"session_code"`
+	Area         string             `json:"area"`
+	QuestionText pgtype.Text        `json:"question_text"`
+	AudioUrls    []byte             `json:"audio_urls"`
+	TranscriptEs pgtype.Text        `json:"transcript_es"`
+	TranscriptEn pgtype.Text        `json:"transcript_en"`
+	AiEvaluation []byte             `json:"ai_evaluation"`
+	Sufficiency  pgtype.Text        `json:"sufficiency"`
+	Flags        []byte             `json:"flags"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
 type Coupon struct {
 	ID          pgtype.UUID        `json:"id"`
 	Code        string             `json:"code"`
@@ -19,17 +33,32 @@ type Coupon struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type QuestionArea struct {
+	ID             pgtype.UUID        `json:"id"`
+	SessionCode    string             `json:"session_code"`
+	Area           string             `json:"area"`
+	Status         string             `json:"status"`
+	QuestionsCount int32              `json:"questions_count"`
+	AreaStartedAt  pgtype.Timestamptz `json:"area_started_at"`
+	AreaEndedAt    pgtype.Timestamptz `json:"area_ended_at"`
+}
+
 type Session struct {
-	SessionCode  string             `json:"session_code"`
-	PinHash      string             `json:"pin_hash"`
-	Track        pgtype.Text        `json:"track"`
-	Status       string             `json:"status"`
-	Role         string             `json:"role"`
-	TimerSeconds int32              `json:"timer_seconds"`
-	StartedAt    pgtype.Timestamptz `json:"started_at"`
-	EndedAt      pgtype.Timestamptz `json:"ended_at"`
-	PaymentID    pgtype.Text        `json:"payment_id"`
-	CouponCode   pgtype.Text        `json:"coupon_code"`
-	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	SessionCode               string             `json:"session_code"`
+	PinHash                   string             `json:"pin_hash"`
+	Track                     pgtype.Text        `json:"track"`
+	Status                    string             `json:"status"`
+	Role                      string             `json:"role"`
+	EndedAt                   pgtype.Timestamptz `json:"ended_at"`
+	PaymentID                 pgtype.Text        `json:"payment_id"`
+	CouponCode                pgtype.Text        `json:"coupon_code"`
+	ExpiresAt                 pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt                 pgtype.Timestamptz `json:"created_at"`
+	InterviewBudgetSeconds    int32              `json:"interview_budget_seconds"`
+	InterviewLapsedSeconds    int32              `json:"interview_lapsed_seconds"`
+	InterviewLapsedUpdatedAt  pgtype.Timestamptz `json:"interview_lapsed_updated_at"`
+	InterviewStartedAt        pgtype.Timestamptz `json:"interview_started_at"`
+	CurrentInterviewStartedAt pgtype.Timestamptz `json:"current_interview_started_at"`
+	LastApiCallAt             pgtype.Timestamptz `json:"last_api_call_at"`
+	ConversationHistory       []byte             `json:"conversation_history"`
 }
