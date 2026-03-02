@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/afirmativo/backend/internal/config"
@@ -30,104 +31,111 @@ type AIClientConfig struct {
 	AreaConfigs       []config.AreaConfig // loaded from AI_AREA_CONFIG env
 }
 
-// HTTPAIClient implements AIClient by calling the Claude Messages API.
-type HTTPAIClient struct {
-	baseURL           string
-	apiKey            string
-	model             string
-	maxTokens         int
+// promptComposer holds prompt pacing config shared by AI providers.
+type promptComposer struct {
 	systemPrompt      string
 	promptLastQ       string
 	promptClosing     string
 	lastQSeconds      int
 	closingSeconds    int
 	midpointAreaIndex int
-	timeoutSeconds    int
-	areaConfigs       []config.AreaConfig
-	outputSchema      map[string]interface{}
-	client            *http.Client
 }
 
-// NewHTTPAIClient creates an AI client with the given configuration.
-func NewHTTPAIClient(cfg AIClientConfig) *HTTPAIClient {
-	return &HTTPAIClient{
-		baseURL:           cfg.BaseURL,
-		apiKey:            cfg.APIKey,
-		model:             cfg.Model,
-		maxTokens:         cfg.MaxTokens,
-		systemPrompt:      cfg.SystemPrompt,
-		promptLastQ:       cfg.PromptLastQ,
-		promptClosing:     cfg.PromptClosing,
-		lastQSeconds:      cfg.LastQSeconds,
-		closingSeconds:    cfg.ClosingSeconds,
-		midpointAreaIndex: cfg.MidpointAreaIndex,
-		timeoutSeconds:    cfg.TimeoutSeconds,
-		areaConfigs:       cfg.AreaConfigs,
-		outputSchema:      buildOutputSchema(),
-		client:            &http.Client{Timeout: time.Duration(cfg.TimeoutSeconds) * time.Second},
-	}
-}
-
-// composeSystemPrompt builds the final system prompt by appending urgency
-// snippets. Priority cascade (highest wins):
+// compose builds the final system prompt by appending urgency snippets.
+// Priority cascade (highest wins):
 //  1. Closing (time-only): timeRemainingS <= closingSeconds — whole interview wrapping up
 //  2. LastQ (time): timeRemainingS <= lastQSeconds — time pressure
 //  3. LastQ (per-area): followUpsRemaining <= 1 — last follow-up for this criterion
 //  4. LastQ (midpoint pacing): at/before midpoint area AND used 2/3 of total budget
-func (c *HTTPAIClient) composeSystemPrompt(turnCtx *AITurnContext) string {
-	prompt := c.systemPrompt
+func (pc *promptComposer) compose(turnCtx *AITurnContext) string {
+	prompt := pc.systemPrompt
 
 	// 1. Closing — whole-interview time pressure only.
-	if c.promptClosing != "" && turnCtx.TimeRemainingS <= c.closingSeconds {
+	if pc.promptClosing != "" && turnCtx.TimeRemainingS <= pc.closingSeconds {
 		slog.Debug("appending closing prompt",
 			"time_remaining_s", turnCtx.TimeRemainingS,
-			"closing_seconds_threshold", c.closingSeconds,
+			"closing_seconds_threshold", pc.closingSeconds,
 		)
-		prompt += "\n\n" + c.promptClosing
+		prompt += "\n\n" + pc.promptClosing
 		return prompt
 	}
 
 	// 2. LastQ — whole-interview time pressure.
-	if c.promptLastQ != "" && turnCtx.TimeRemainingS <= c.lastQSeconds {
+	if pc.promptLastQ != "" && turnCtx.TimeRemainingS <= pc.lastQSeconds {
 		slog.Debug("appending last-question prompt (time)",
 			"time_remaining_s", turnCtx.TimeRemainingS,
-			"last_q_seconds_threshold", c.lastQSeconds,
+			"last_q_seconds_threshold", pc.lastQSeconds,
 		)
-		prompt += "\n\n" + c.promptLastQ
+		prompt += "\n\n" + pc.promptLastQ
 		return prompt
 	}
 
 	// 3. LastQ — per-area follow-up budget.
-	if c.promptLastQ != "" && turnCtx.FollowUpsRemaining <= 1 {
+	if pc.promptLastQ != "" && turnCtx.FollowUpsRemaining <= 1 {
 		slog.Debug("appending last-question prompt (per-area)",
 			"follow_ups_remaining", turnCtx.FollowUpsRemaining,
 		)
-		prompt += "\n\n" + c.promptLastQ
+		prompt += "\n\n" + pc.promptLastQ
 		return prompt
 	}
 
 	// 4. LastQ — midpoint pacing: still on an early area and 2/3 of time used.
-	if c.promptLastQ != "" && turnCtx.TotalBudgetS > 0 &&
-		turnCtx.CurrentAreaIndex <= c.midpointAreaIndex &&
+	if pc.promptLastQ != "" && turnCtx.TotalBudgetS > 0 &&
+		turnCtx.CurrentAreaIndex <= pc.midpointAreaIndex &&
 		turnCtx.TimeRemainingS <= turnCtx.TotalBudgetS/3 {
 		slog.Debug("appending last-question prompt (midpoint pacing)",
 			"area_index", turnCtx.CurrentAreaIndex,
-			"midpoint_area_index", c.midpointAreaIndex,
+			"midpoint_area_index", pc.midpointAreaIndex,
 			"time_remaining_s", turnCtx.TimeRemainingS,
 			"total_budget_s", turnCtx.TotalBudgetS,
 			"one_third_budget", turnCtx.TotalBudgetS/3,
 		)
-		prompt += "\n\n" + c.promptLastQ
+		prompt += "\n\n" + pc.promptLastQ
 		return prompt
 	}
 
 	return prompt
 }
 
+// HTTPAIClient implements AIClient by calling the Claude Messages API.
+type HTTPAIClient struct {
+	baseURL        string
+	apiKey         string
+	model          string
+	maxTokens      int
+	timeoutSeconds int
+	areaConfigs    []config.AreaConfig
+	outputSchema   map[string]interface{}
+	promptComposer promptComposer
+	client         *http.Client
+}
+
+// NewHTTPAIClient creates an AI client with the given configuration.
+func NewHTTPAIClient(cfg AIClientConfig) *HTTPAIClient {
+	return &HTTPAIClient{
+		baseURL:        cfg.BaseURL,
+		apiKey:         cfg.APIKey,
+		model:          cfg.Model,
+		maxTokens:      cfg.MaxTokens,
+		timeoutSeconds: cfg.TimeoutSeconds,
+		areaConfigs:    cfg.AreaConfigs,
+		outputSchema:   buildOutputSchema(),
+		promptComposer: promptComposer{
+			systemPrompt:      cfg.SystemPrompt,
+			promptLastQ:       cfg.PromptLastQ,
+			promptClosing:     cfg.PromptClosing,
+			lastQSeconds:      cfg.LastQSeconds,
+			closingSeconds:    cfg.ClosingSeconds,
+			midpointAreaIndex: cfg.MidpointAreaIndex,
+		},
+		client: &http.Client{Timeout: time.Duration(cfg.TimeoutSeconds) * time.Second},
+	}
+}
+
 // CallAI builds the full Claude API request, sends it, and parses the response.
 func (c *HTTPAIClient) CallAI(ctx context.Context, turnCtx *AITurnContext) (*AIResponse, error) {
 	userContent := buildUserMessage(turnCtx)
-	systemPrompt := c.composeSystemPrompt(turnCtx)
+	systemPrompt := c.promptComposer.compose(turnCtx)
 
 	requestBody := map[string]interface{}{
 		"model":      c.model,
@@ -223,6 +231,29 @@ func parseAIResponse(apiResp *ClaudeAPIResponse) (*AIResponse, error) {
 	}
 
 	return &result, nil
+}
+
+func validateAIResponse(result *AIResponse) error {
+	if strings.TrimSpace(result.NextQuestion) == "" {
+		return fmt.Errorf("invalid AI response: next_question is empty")
+	}
+	if result.Evaluation == nil {
+		return nil
+	}
+
+	switch result.Evaluation.CurrentCriterion.Status {
+	case "sufficient", "partially_sufficient", "insufficient":
+	default:
+		return fmt.Errorf("invalid AI response: unsupported current_criterion.status %q", result.Evaluation.CurrentCriterion.Status)
+	}
+
+	switch result.Evaluation.CurrentCriterion.Recommendation {
+	case "follow_up", "move_on":
+	default:
+		return fmt.Errorf("invalid AI response: unsupported current_criterion.recommendation %q", result.Evaluation.CurrentCriterion.Recommendation)
+	}
+
+	return nil
 }
 
 // buildUserMessage constructs the user prompt with all interview context.

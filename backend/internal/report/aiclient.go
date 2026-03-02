@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// AIClient generates the report assessment via Claude API.
+// AIClient generates the report assessment via the configured AI provider.
 type AIClient interface {
 	GenerateReport(ctx context.Context, areaSummaries []AreaSummary, openFloorTranscript string) (*ReportAIResponse, error)
 }
@@ -36,8 +36,8 @@ type HTTPReportAIClient struct {
 	maxTokens      int
 	timeoutSeconds int
 	reportPrompt   string
-	outputSchema map[string]interface{}
-	client       *http.Client
+	outputSchema   map[string]interface{}
+	client         *http.Client
 }
 
 // NewHTTPReportAIClient creates a report AI client.

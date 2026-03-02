@@ -73,39 +73,67 @@ func main() {
 
 	interviewStore := interview.NewPostgresStore(pool)
 
-	// AI client: use mock server URL if set, otherwise real Anthropic API.
-	aiBaseURL := "https://api.anthropic.com"
-	if cfg.MockAPIURL != "" {
-		aiBaseURL = cfg.MockAPIURL
+	reportStore := report.NewPostgresStore(pool)
+
+	var aiClient interview.AIClient
+	var reportAIClient report.AIClient
+
+	switch cfg.AIProvider {
+	case "ollama":
+		aiClient = interview.NewOllamaAIClient(interview.OllamaAIClientConfig{
+			BaseURL:            cfg.OllamaBaseURL,
+			Model:              cfg.AIModel,
+			SystemPrompt:       cfg.AISystemPrompt,
+			OutputFormatPrompt: cfg.AIOutputFormatPrompt,
+			PromptLastQ:        cfg.AIPromptLastQ,
+			PromptClosing:      cfg.AIPromptClosing,
+			LastQSeconds:       cfg.AILastQSeconds,
+			ClosingSeconds:     cfg.AIClosingSeconds,
+			MidpointAreaIndex:  cfg.AIMidpointAreaIdx,
+			TimeoutSeconds:     cfg.AITimeoutSeconds,
+			AreaConfigs:        cfg.AreaConfigs,
+		})
+		reportAIClient = report.NewOllamaReportAIClient(report.OllamaReportAIClientConfig{
+			BaseURL:            cfg.OllamaBaseURL,
+			Model:              cfg.AIModel,
+			TimeoutSeconds:     cfg.AITimeoutSeconds,
+			ReportPrompt:       cfg.AIReportPrompt,
+			OutputFormatPrompt: cfg.AIReportOutputFormatPrompt,
+		})
+	default:
+		// Claude branch: use mock server URL if set, otherwise real Anthropic API.
+		aiBaseURL := "https://api.anthropic.com"
+		if cfg.MockAPIURL != "" {
+			aiBaseURL = cfg.MockAPIURL
+		}
+		aiClient = interview.NewHTTPAIClient(interview.AIClientConfig{
+			BaseURL:           aiBaseURL,
+			APIKey:            cfg.AIAPIKey,
+			Model:             cfg.AIModel,
+			MaxTokens:         cfg.AIMaxTokens,
+			SystemPrompt:      cfg.AISystemPrompt,
+			PromptLastQ:       cfg.AIPromptLastQ,
+			PromptClosing:     cfg.AIPromptClosing,
+			LastQSeconds:      cfg.AILastQSeconds,
+			ClosingSeconds:    cfg.AIClosingSeconds,
+			MidpointAreaIndex: cfg.AIMidpointAreaIdx,
+			TimeoutSeconds:    cfg.AITimeoutSeconds,
+			AreaConfigs:       cfg.AreaConfigs,
+		})
+		reportAIClient = report.NewHTTPReportAIClient(report.ReportAIClientConfig{
+			BaseURL:        aiBaseURL,
+			APIKey:         cfg.AIAPIKey,
+			Model:          cfg.AIModel,
+			MaxTokens:      cfg.AIReportMaxTokens,
+			TimeoutSeconds: cfg.AITimeoutSeconds,
+			ReportPrompt:   cfg.AIReportPrompt,
+		})
 	}
-	aiClient := interview.NewHTTPAIClient(interview.AIClientConfig{
-		BaseURL:           aiBaseURL,
-		APIKey:            cfg.AIAPIKey,
-		Model:             cfg.AIModel,
-		MaxTokens:         cfg.AIMaxTokens,
-		SystemPrompt:      cfg.AISystemPrompt,
-		PromptLastQ:       cfg.AIPromptLastQ,
-		PromptClosing:     cfg.AIPromptClosing,
-		LastQSeconds:      cfg.AILastQSeconds,
-		ClosingSeconds:    cfg.AIClosingSeconds,
-		MidpointAreaIndex: cfg.AIMidpointAreaIdx,
-		TimeoutSeconds:    cfg.AITimeoutSeconds,
-		AreaConfigs:       cfg.AreaConfigs,
-	})
 
 	interviewSvc := interview.NewService(sessionStore, sessionStore, sessionStore, interviewStore, aiClient, cfg.AreaConfigs)
 	interviewHandler := interview.NewHandler(interviewSvc)
 
 	// Report dependencies.
-	reportStore := report.NewPostgresStore(pool)
-	reportAIClient := report.NewHTTPReportAIClient(report.ReportAIClientConfig{
-		BaseURL:      aiBaseURL,
-		APIKey:       cfg.AIAPIKey,
-		Model:        cfg.AIModel,
-		MaxTokens:      cfg.AIReportMaxTokens,
-		TimeoutSeconds: cfg.AITimeoutSeconds,
-		ReportPrompt:   cfg.AIReportPrompt,
-	})
 	reportSvc := report.NewService(
 		reportStore,
 		&interviewDataAdapter{store: interviewStore},
