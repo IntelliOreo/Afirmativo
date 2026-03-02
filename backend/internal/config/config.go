@@ -34,23 +34,23 @@ type Config struct {
 	LogLevel           string // "debug", "info", "warn", "error" — defaults to "debug"
 
 	// AI configuration — all AI instructions live here, not in Go code.
-	AIProvider                 string       // "claude" (default) or "ollama"
-	OllamaBaseURL              string       // Base URL for Ollama OpenAI-compatible endpoint
-	AISystemPrompt             string       // Base system prompt sent to Claude/Ollama on every turn
-	AIOutputFormatPrompt       string       // Extra prompt instructions for Ollama JSON output format
-	AIPromptLastQ              string       // Appended when 1 follow-up remains OR time <= AILastQSeconds
-	AIPromptClosing            string       // Appended when 0 follow-ups remain OR time <= AIClosingSeconds
-	AILastQSeconds             int          // Time threshold (seconds) to trigger last-question prompt
-	AIClosingSeconds           int          // Time threshold (seconds) to trigger closing prompt
-	AIMidpointAreaIdx          int          // Area index defining the pacing midpoint (e.g. 3 = nexus)
-	AIModel                    string       // e.g. "claude-sonnet-4-20250514"
-	AIMaxTokens                int          // e.g. 1024
-	AIAPIKey                   string       // Anthropic API key (not required for Ollama or when MOCK_API_URL is set)
-	AITimeoutSeconds           int          // HTTP timeout for AI API calls (default 30)
-	AIReportPrompt             string       // System prompt for report generation AI call
-	AIReportOutputFormatPrompt string       // Extra prompt instructions for Ollama report JSON format
-	AIReportMaxTokens          int          // Max tokens for report AI call (default 2048)
-	AreaConfigs                []AreaConfig // Per-area rubrics loaded from AI_AREA_CONFIG JSON
+	AIProvider                              string       // "claude" (default) or "ollama"
+	OllamaBaseURL                           string       // Base URL for Ollama OpenAI-compatible endpoint
+	AISystemPrompt                          string       // Base system prompt sent to Claude/Ollama on every turn
+	UnstructuredInterviewOutputFormatPrompt string       // Prompt instructions for unstructured providers to return interview JSON
+	AIPromptLastQ                           string       // Appended when 1 follow-up remains OR time <= AILastQSeconds
+	AIPromptClosing                         string       // Appended when 0 follow-ups remain OR time <= AIClosingSeconds
+	AILastQSeconds                          int          // Time threshold (seconds) to trigger last-question prompt
+	AIClosingSeconds                        int          // Time threshold (seconds) to trigger closing prompt
+	AIMidpointAreaIdx                       int          // Area index defining the pacing midpoint (e.g. 3 = nexus)
+	AIModel                                 string       // e.g. "claude-sonnet-4-20250514"
+	AIMaxTokens                             int          // e.g. 1024
+	AIAPIKey                                string       // Anthropic API key (not required for Ollama or when MOCK_API_URL is set)
+	AITimeoutSeconds                        int          // HTTP timeout for AI API calls (default 30)
+	AIReportPrompt                          string       // System prompt for report generation AI call
+	UnstructuredReportOutputFormatPrompt    string       // Prompt instructions for unstructured providers to return report JSON
+	AIReportMaxTokens                       int          // Max tokens for report AI call (default 2048)
+	AreaConfigs                             []AreaConfig // Per-area rubrics loaded from AI_AREA_CONFIG JSON
 }
 
 // Load reads required environment variables and returns a validated Config.
@@ -99,28 +99,28 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		Port:                       envOr("PORT", "8080"),
-		FrontendURL:                envOr("FRONTEND_URL", "http://localhost:3000"),
-		DatabaseURL:                os.Getenv("DATABASE_URL"),
-		SessionExpiryHours:         expiry,
-		MockAPIURL:                 os.Getenv("MOCK_API_URL"),
-		LogLevel:                   envOr("LOG_LEVEL", "debug"),
-		AIProvider:                 envOr("AI_PROVIDER", "claude"),
-		OllamaBaseURL:              envOr("OLLAMA_BASE_URL", "http://localhost:11434"),
-		AISystemPrompt:             os.Getenv("AI_SYSTEM_PROMPT"),
-		AIOutputFormatPrompt:       os.Getenv("AI_OUTPUT_FORMAT_PROMPT"),
-		AIPromptLastQ:              os.Getenv("AI_PROMPT_LAST_Q"),
-		AIPromptClosing:            os.Getenv("AI_PROMPT_CLOSING"),
-		AILastQSeconds:             lastQSec,
-		AIClosingSeconds:           closingSec,
-		AIMidpointAreaIdx:          midpointIdx,
-		AIModel:                    envOr("AI_MODEL", "claude-sonnet-4-20250514"),
-		AIMaxTokens:                maxTokens,
-		AIAPIKey:                   os.Getenv("AI_API_KEY"),
-		AITimeoutSeconds:           aiTimeout,
-		AIReportPrompt:             os.Getenv("AI_REPORT_PROMPT"),
-		AIReportOutputFormatPrompt: os.Getenv("AI_REPORT_OUTPUT_FORMAT_PROMPT"),
-		AIReportMaxTokens:          reportMaxTokens,
+		Port:                                    envOr("PORT", "8080"),
+		FrontendURL:                             envOr("FRONTEND_URL", "http://localhost:3000"),
+		DatabaseURL:                             os.Getenv("DATABASE_URL"),
+		SessionExpiryHours:                      expiry,
+		MockAPIURL:                              os.Getenv("MOCK_API_URL"),
+		LogLevel:                                envOr("LOG_LEVEL", "debug"),
+		AIProvider:                              envOr("AI_PROVIDER", "claude"),
+		OllamaBaseURL:                           envOr("OLLAMA_BASE_URL", "http://localhost:11434"),
+		AISystemPrompt:                          os.Getenv("AI_SYSTEM_PROMPT"),
+		UnstructuredInterviewOutputFormatPrompt: os.Getenv("UNSTRUCTURED_INTERVIEW_OUTPUT_FORMAT_PROMPT"),
+		AIPromptLastQ:                           os.Getenv("AI_PROMPT_LAST_Q"),
+		AIPromptClosing:                         os.Getenv("AI_PROMPT_CLOSING"),
+		AILastQSeconds:                          lastQSec,
+		AIClosingSeconds:                        closingSec,
+		AIMidpointAreaIdx:                       midpointIdx,
+		AIModel:                                 envOr("AI_MODEL", "claude-sonnet-4-20250514"),
+		AIMaxTokens:                             maxTokens,
+		AIAPIKey:                                os.Getenv("AI_API_KEY"),
+		AITimeoutSeconds:                        aiTimeout,
+		AIReportPrompt:                          os.Getenv("AI_REPORT_PROMPT"),
+		UnstructuredReportOutputFormatPrompt:    os.Getenv("UNSTRUCTURED_REPORT_OUTPUT_FORMAT_PROMPT"),
+		AIReportMaxTokens:                       reportMaxTokens,
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -139,11 +139,11 @@ func Load() (Config, error) {
 		if cfg.MockAPIURL != "" {
 			slog.Warn("MOCK_API_URL is ignored when AI_PROVIDER=ollama")
 		}
-		if cfg.AIOutputFormatPrompt == "" {
-			slog.Warn("AI_OUTPUT_FORMAT_PROMPT is empty; Ollama interview JSON reliability may be reduced")
+		if cfg.UnstructuredInterviewOutputFormatPrompt == "" {
+			slog.Warn("UNSTRUCTURED_INTERVIEW_OUTPUT_FORMAT_PROMPT is empty; Ollama interview JSON reliability may be reduced")
 		}
-		if cfg.AIReportOutputFormatPrompt == "" {
-			slog.Warn("AI_REPORT_OUTPUT_FORMAT_PROMPT is empty; Ollama report JSON reliability may be reduced")
+		if cfg.UnstructuredReportOutputFormatPrompt == "" {
+			slog.Warn("UNSTRUCTURED_REPORT_OUTPUT_FORMAT_PROMPT is empty; Ollama report JSON reliability may be reduced")
 		}
 	}
 
@@ -177,7 +177,7 @@ func (c Config) LogLoaded() {
 		"model", c.AIModel,
 		"max_tokens", c.AIMaxTokens,
 		"api_key_set", c.AIAPIKey != "",
-		"interview_output_format_prompt_len", len(c.AIOutputFormatPrompt),
+		"unstructured_interview_output_format_prompt_len", len(c.UnstructuredInterviewOutputFormatPrompt),
 		"system_prompt_len", len(c.AISystemPrompt),
 		"prompt_last_q_len", len(c.AIPromptLastQ),
 		"prompt_closing_len", len(c.AIPromptClosing),
@@ -187,7 +187,7 @@ func (c Config) LogLoaded() {
 		"ai_timeout_seconds", c.AITimeoutSeconds,
 		"area_configs_count", len(c.AreaConfigs),
 		"report_prompt_len", len(c.AIReportPrompt),
-		"report_output_format_prompt_len", len(c.AIReportOutputFormatPrompt),
+		"unstructured_report_output_format_prompt_len", len(c.UnstructuredReportOutputFormatPrompt),
 		"report_max_tokens", c.AIReportMaxTokens,
 	)
 	for _, ac := range c.AreaConfigs {

@@ -84,7 +84,7 @@ func main() {
 			BaseURL:            cfg.OllamaBaseURL,
 			Model:              cfg.AIModel,
 			SystemPrompt:       cfg.AISystemPrompt,
-			OutputFormatPrompt: cfg.AIOutputFormatPrompt,
+			OutputFormatPrompt: cfg.UnstructuredInterviewOutputFormatPrompt,
 			PromptLastQ:        cfg.AIPromptLastQ,
 			PromptClosing:      cfg.AIPromptClosing,
 			LastQSeconds:       cfg.AILastQSeconds,
@@ -98,7 +98,7 @@ func main() {
 			Model:              cfg.AIModel,
 			TimeoutSeconds:     cfg.AITimeoutSeconds,
 			ReportPrompt:       cfg.AIReportPrompt,
-			OutputFormatPrompt: cfg.AIReportOutputFormatPrompt,
+			OutputFormatPrompt: cfg.UnstructuredReportOutputFormatPrompt,
 		})
 	default:
 		// Claude branch: use mock server URL if set, otherwise real Anthropic API.
