@@ -37,3 +37,12 @@ func DebugJSONText(label, raw string) {
 
 	DebugJSON(label, parsed)
 }
+
+// DebugTextBlock prints a readable multiline text block when debug logging is enabled.
+func DebugTextBlock(label, text string) {
+	if !slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
+
+	fmt.Fprintf(os.Stdout, "level=DEBUG msg=%q\n%s\n", label, text)
+}

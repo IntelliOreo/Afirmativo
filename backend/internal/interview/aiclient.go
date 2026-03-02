@@ -159,7 +159,7 @@ func (c *HTTPAIClient) CallAI(ctx context.Context, turnCtx *AITurnContext) (*AIR
 
 	url := c.baseURL + "/v1/messages"
 	slog.Debug("calling AI API", "url", url, "area", turnCtx.CurrentAreaSlug, "model", c.model)
-	slog.Debug("AI request user message", "content", userContent)
+	shared.DebugTextBlock("AI request user message", userContent)
 	shared.DebugJSON("AI request body", requestBody)
 
 	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(c.timeoutSeconds)*time.Second)
