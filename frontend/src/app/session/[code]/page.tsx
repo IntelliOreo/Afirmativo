@@ -7,8 +7,7 @@ import { Footer } from "@components/Footer";
 import { Button } from "@components/Button";
 import { Card } from "@components/Card";
 import { Input } from "@components/Input";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
+import { api } from "@/lib/api";
 
 type View = "loading" | "hub" | "recovery";
 
@@ -27,14 +26,12 @@ export default function SessionPage() {
 
   const verifySession = useCallback(
     async (sessionCode: string, sessionPin: string) => {
-      const res = await fetch(`${API_URL}/api/session/verify`, {
+      const result = await api<{ session: { interview_started_at?: string } }>("/api/session/verify", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionCode, pin: sessionPin }),
+        body: { sessionCode, pin: sessionPin },
       });
-      if (!res.ok) return { ok: false as const, status: res.status };
-      const data = await res.json();
-      return { ok: true as const, session: data.session };
+      if (!result.ok) return { ok: false as const, status: result.status };
+      return { ok: true as const, session: result.data!.session };
     },
     []
   );

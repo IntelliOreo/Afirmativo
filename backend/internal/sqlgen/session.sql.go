@@ -38,6 +38,17 @@ func (q *Queries) ClaimCoupon(ctx context.Context, code string) (Coupon, error) 
 	return i, err
 }
 
+const completeSession = `-- name: CompleteSession :exec
+UPDATE sessions SET status = 'completed', ended_at = now()
+WHERE session_code = $1 AND status = 'interviewing'
+`
+
+// Marks an interviewing session as completed with ended_at = now().
+func (q *Queries) CompleteSession(ctx context.Context, sessionCode string) error {
+	_, err := q.db.Exec(ctx, completeSession, sessionCode)
+	return err
+}
+
 const createSession = `-- name: CreateSession :one
 INSERT INTO sessions (session_code, pin_hash, coupon_code, status, expires_at)
 VALUES ($1, $2, $3, 'created', $4)

@@ -8,8 +8,7 @@ import { Button } from "@components/Button";
 import { Card } from "@components/Card";
 import { Input } from "@components/Input";
 import { Alert } from "@components/Alert";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
+import { api } from "@/lib/api";
 
 export default function PayPage() {
   const router = useRouter();
@@ -24,16 +23,14 @@ export default function PayPage() {
     setLoading(true);
     setCouponError("");
     try {
-      const res = await fetch(`${API_URL}/api/coupon/validate`, {
+      const { ok, data } = await api<{ valid?: boolean; session_code?: string; pin?: string }>("/api/coupon/validate", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: coupon.trim() }),
+        body: { code: coupon.trim() },
       });
-      const data = await res.json();
 
-      if (res.ok && data.valid && data.session_code) {
+      if (ok && data?.valid && data.session_code) {
         // Store PIN in sessionStorage so the session page can display it
-        sessionStorage.setItem(`pin_${data.session_code}`, data.pin);
+        sessionStorage.setItem(`pin_${data.session_code}`, data.pin ?? "");
         router.push(`/session/${data.session_code}`);
       } else {
         setCouponError(
@@ -56,12 +53,10 @@ export default function PayPage() {
   async function handleStripeCheckout() {
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/payment/checkout`, {
+      const { data } = await api<{ url?: string }>("/api/payment/checkout", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
       });
-      const data = await res.json();
-      if (data.url) {
+      if (data?.url) {
         window.location.href = data.url;
       }
     } catch {

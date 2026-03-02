@@ -88,6 +88,11 @@ func (s *PostgresStore) StartSession(ctx context.Context, sessionCode string) (*
 	return sessionFromRow(row), nil
 }
 
+// CompleteSession marks an interviewing session as completed.
+func (s *PostgresStore) CompleteSession(ctx context.Context, sessionCode string) error {
+	return sqlgen.New(s.pool).CompleteSession(ctx, sessionCode)
+}
+
 // sessionFromRow maps a sqlgen.Session to the domain Session type.
 func sessionFromRow(row sqlgen.Session) *Session {
 	s := &Session{

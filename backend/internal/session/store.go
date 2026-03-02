@@ -21,4 +21,7 @@ type Store interface {
 	// StartSession atomically transitions a session from 'created' to 'interviewing'.
 	// Returns ErrConflict if the session is not in 'created' status.
 	StartSession(ctx context.Context, sessionCode string) (*Session, error)
+
+	// CompleteSession marks an interviewing session as completed with ended_at = now().
+	CompleteSession(ctx context.Context, sessionCode string) error
 }

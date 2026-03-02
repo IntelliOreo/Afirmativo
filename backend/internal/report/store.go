@@ -1,3 +1,58 @@
-// ReportStore interface — defined by the consumer (this package).
-// Implemented by PostgresReportStore in postgres.go.
+// Store defines persistence operations for the reports table.
 package report
+
+import "context"
+
+// Store defines persistence for reports.
+type Store interface {
+	// GetReportBySession returns the report for a session, or nil if not found.
+	GetReportBySession(ctx context.Context, sessionCode string) (*Report, error)
+
+	// CreateReport inserts a new report row (initially in "generating" status).
+	CreateReport(ctx context.Context, r *Report) error
+
+	// UpdateReport updates a report with the generated content.
+	UpdateReport(ctx context.Context, r *Report) error
+}
+
+// InterviewDataProvider provides read access to interview answers and question areas.
+// Implemented by the interview package's postgres store, injected from main.go.
+type InterviewDataProvider interface {
+	// GetAreasBySession returns all question_area rows for a session.
+	GetAreasBySession(ctx context.Context, sessionCode string) ([]QuestionAreaRow, error)
+
+	// GetAnswersBySession returns all answers for a session ordered by created_at.
+	GetAnswersBySession(ctx context.Context, sessionCode string) ([]AnswerRow, error)
+
+	// GetAnswerCount returns the number of answers for a session.
+	GetAnswerCount(ctx context.Context, sessionCode string) (int, error)
+}
+
+// SessionProvider provides read access to session data.
+type SessionProvider interface {
+	GetSessionByCode(ctx context.Context, sessionCode string) (*SessionInfo, error)
+}
+
+// QuestionAreaRow is a simplified view of a question area for report generation.
+type QuestionAreaRow struct {
+	Area                 string
+	Status               string
+	PreAddressedEvidence string
+}
+
+// AnswerRow is a simplified view of an answer for report generation.
+type AnswerRow struct {
+	Area         string
+	QuestionText string
+	TranscriptEs string
+	AiEvaluation string // raw JSON
+	Sufficiency  string
+}
+
+// SessionInfo is the minimal session data needed for report generation.
+type SessionInfo struct {
+	SessionCode        string
+	Status             string
+	InterviewStartedAt int64 // unix timestamp
+	EndedAt            int64 // unix timestamp
+}

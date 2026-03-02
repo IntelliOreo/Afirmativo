@@ -11,12 +11,28 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const completeArea = `-- name: CompleteArea :exec
+UPDATE question_areas
+SET status = 'complete', area_ended_at = now()
+WHERE session_code = $1 AND area = $2
+`
+
+type CompleteAreaParams struct {
+	SessionCode string `json:"session_code"`
+	Area        string `json:"area"`
+}
+
+func (q *Queries) CompleteArea(ctx context.Context, arg CompleteAreaParams) error {
+	_, err := q.db.Exec(ctx, completeArea, arg.SessionCode, arg.Area)
+	return err
+}
+
 const createQuestionArea = `-- name: CreateQuestionArea :one
 
 INSERT INTO question_areas (session_code, area)
 VALUES ($1, $2)
 ON CONFLICT (session_code, area) DO NOTHING
-RETURNING id, session_code, area, status, questions_count, area_started_at, area_ended_at
+RETURNING id, session_code, area, status, questions_count, area_started_at, area_ended_at, pre_addressed_evidence
 `
 
 type CreateQuestionAreaParams struct {
@@ -36,6 +52,7 @@ func (q *Queries) CreateQuestionArea(ctx context.Context, arg CreateQuestionArea
 		&i.QuestionsCount,
 		&i.AreaStartedAt,
 		&i.AreaEndedAt,
+		&i.PreAddressedEvidence,
 	)
 	return i, err
 }
@@ -88,7 +105,7 @@ func (q *Queries) GetAnswersBySession(ctx context.Context, sessionCode string) (
 }
 
 const getAreasBySession = `-- name: GetAreasBySession :many
-SELECT id, session_code, area, status, questions_count, area_started_at, area_ended_at FROM question_areas
+SELECT id, session_code, area, status, questions_count, area_started_at, area_ended_at, pre_addressed_evidence FROM question_areas
 WHERE session_code = $1
 ORDER BY area_started_at
 `
@@ -110,6 +127,7 @@ func (q *Queries) GetAreasBySession(ctx context.Context, sessionCode string) ([]
 			&i.QuestionsCount,
 			&i.AreaStartedAt,
 			&i.AreaEndedAt,
+			&i.PreAddressedEvidence,
 		); err != nil {
 			return nil, err
 		}
@@ -122,7 +140,7 @@ func (q *Queries) GetAreasBySession(ctx context.Context, sessionCode string) ([]
 }
 
 const getInProgressArea = `-- name: GetInProgressArea :one
-SELECT id, session_code, area, status, questions_count, area_started_at, area_ended_at FROM question_areas
+SELECT id, session_code, area, status, questions_count, area_started_at, area_ended_at, pre_addressed_evidence FROM question_areas
 WHERE session_code = $1 AND status = 'in_progress'
 LIMIT 1
 `
@@ -138,8 +156,74 @@ func (q *Queries) GetInProgressArea(ctx context.Context, sessionCode string) (Qu
 		&i.QuestionsCount,
 		&i.AreaStartedAt,
 		&i.AreaEndedAt,
+		&i.PreAddressedEvidence,
 	)
 	return i, err
+}
+
+const incrementAreaQuestions = `-- name: IncrementAreaQuestions :exec
+UPDATE question_areas
+SET questions_count = questions_count + 1
+WHERE session_code = $1 AND area = $2
+`
+
+type IncrementAreaQuestionsParams struct {
+	SessionCode string `json:"session_code"`
+	Area        string `json:"area"`
+}
+
+func (q *Queries) IncrementAreaQuestions(ctx context.Context, arg IncrementAreaQuestionsParams) error {
+	_, err := q.db.Exec(ctx, incrementAreaQuestions, arg.SessionCode, arg.Area)
+	return err
+}
+
+const markAreaInsufficient = `-- name: MarkAreaInsufficient :exec
+UPDATE question_areas
+SET status = 'insufficient', area_ended_at = now()
+WHERE session_code = $1 AND area = $2
+`
+
+type MarkAreaInsufficientParams struct {
+	SessionCode string `json:"session_code"`
+	Area        string `json:"area"`
+}
+
+func (q *Queries) MarkAreaInsufficient(ctx context.Context, arg MarkAreaInsufficientParams) error {
+	_, err := q.db.Exec(ctx, markAreaInsufficient, arg.SessionCode, arg.Area)
+	return err
+}
+
+const markAreaNotAssessed = `-- name: MarkAreaNotAssessed :exec
+UPDATE question_areas
+SET status = 'not_assessed', area_ended_at = now()
+WHERE session_code = $1 AND area = $2 AND status IN ('pending', 'pre_addressed')
+`
+
+type MarkAreaNotAssessedParams struct {
+	SessionCode string `json:"session_code"`
+	Area        string `json:"area"`
+}
+
+func (q *Queries) MarkAreaNotAssessed(ctx context.Context, arg MarkAreaNotAssessedParams) error {
+	_, err := q.db.Exec(ctx, markAreaNotAssessed, arg.SessionCode, arg.Area)
+	return err
+}
+
+const markAreaPreAddressed = `-- name: MarkAreaPreAddressed :exec
+UPDATE question_areas
+SET status = 'pre_addressed', pre_addressed_evidence = $3
+WHERE session_code = $1 AND LOWER(area) = LOWER($2) AND status = 'pending'
+`
+
+type MarkAreaPreAddressedParams struct {
+	SessionCode          string      `json:"session_code"`
+	Lower                string      `json:"lower"`
+	PreAddressedEvidence pgtype.Text `json:"pre_addressed_evidence"`
+}
+
+func (q *Queries) MarkAreaPreAddressed(ctx context.Context, arg MarkAreaPreAddressedParams) error {
+	_, err := q.db.Exec(ctx, markAreaPreAddressed, arg.SessionCode, arg.Lower, arg.PreAddressedEvidence)
+	return err
 }
 
 const saveAnswer = `-- name: SaveAnswer :one
@@ -187,4 +271,20 @@ func (q *Queries) SaveAnswer(ctx context.Context, arg SaveAnswerParams) (Answer,
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const setAreaInProgress = `-- name: SetAreaInProgress :exec
+UPDATE question_areas
+SET status = 'in_progress', area_started_at = now()
+WHERE session_code = $1 AND area = $2 AND status IN ('pending', 'pre_addressed')
+`
+
+type SetAreaInProgressParams struct {
+	SessionCode string `json:"session_code"`
+	Area        string `json:"area"`
+}
+
+func (q *Queries) SetAreaInProgress(ctx context.Context, arg SetAreaInProgressParams) error {
+	_, err := q.db.Exec(ctx, setAreaInProgress, arg.SessionCode, arg.Area)
+	return err
 }

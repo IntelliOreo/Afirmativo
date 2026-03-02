@@ -38,12 +38,14 @@ type questionResponse struct {
 
 type startResponse struct {
 	Question        questionResponse `json:"question"`
-	TimerRemainingS int              `json:"timer_remaining_s"`
+	TimerRemainingS int              `json:"timerRemainingS"`
+	Resuming        bool             `json:"resuming"`
 }
 
 type answerResponse struct {
-	Done         bool              `json:"done"`
-	NextQuestion *questionResponse `json:"nextQuestion"`
+	Done            bool              `json:"done"`
+	NextQuestion    *questionResponse `json:"nextQuestion"`
+	TimerRemainingS int               `json:"timerRemainingS"`
 }
 
 // HandleStart transitions a session to interviewing and returns the first question.
@@ -85,6 +87,7 @@ func (h *Handler) HandleStart(w http.ResponseWriter, r *http.Request) {
 			TotalQuestions: q.TotalQuestions,
 		},
 		TimerRemainingS: result.TimerRemainingS,
+		Resuming:        result.Resuming,
 	})
 }
 
@@ -94,6 +97,7 @@ type answerRequest struct {
 	SessionCode    string `json:"sessionCode"`
 	AnswerText     string `json:"answerText"`
 	QuestionNumber int    `json:"questionNumber"`
+	QuestionText   string `json:"questionText"` // echoed back from frontend
 }
 
 // HandleAnswer accepts a text answer, calls the AI API for the next question, and returns it.
@@ -104,14 +108,14 @@ func (h *Handler) HandleAnswer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.SessionCode == "" || req.AnswerText == "" {
-		shared.WriteError(w, shared.ErrBadRequest, "sessionCode and answerText are required", "BAD_REQUEST")
+	if req.SessionCode == "" {
+		shared.WriteError(w, shared.ErrBadRequest, "sessionCode is required", "BAD_REQUEST")
 		return
 	}
 
 	slog.Debug("interview/answer", "session", req.SessionCode, "question_number", req.QuestionNumber)
 
-	result, err := h.svc.SubmitAnswer(r.Context(), req.SessionCode, req.AnswerText, req.QuestionNumber)
+	result, err := h.svc.SubmitAnswer(r.Context(), req.SessionCode, req.AnswerText, req.QuestionText, req.QuestionNumber)
 	if err != nil {
 		slog.Error("answer submission failed", "error", err)
 		shared.WriteError(w, shared.ErrInternal, "Internal server error", "INTERNAL_ERROR")
@@ -119,7 +123,7 @@ func (h *Handler) HandleAnswer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if result.Done {
-		shared.WriteJSON(w, http.StatusOK, answerResponse{Done: true})
+		shared.WriteJSON(w, http.StatusOK, answerResponse{Done: true, TimerRemainingS: result.TimerRemainingS})
 		return
 	}
 
@@ -133,5 +137,6 @@ func (h *Handler) HandleAnswer(w http.ResponseWriter, r *http.Request) {
 			QuestionNumber: q.QuestionNumber,
 			TotalQuestions: q.TotalQuestions,
 		},
+		TimerRemainingS: result.TimerRemainingS,
 	})
 }

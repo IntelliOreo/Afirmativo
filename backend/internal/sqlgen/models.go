@@ -34,13 +34,29 @@ type Coupon struct {
 }
 
 type QuestionArea struct {
-	ID             pgtype.UUID        `json:"id"`
-	SessionCode    string             `json:"session_code"`
-	Area           string             `json:"area"`
-	Status         string             `json:"status"`
-	QuestionsCount int32              `json:"questions_count"`
-	AreaStartedAt  pgtype.Timestamptz `json:"area_started_at"`
-	AreaEndedAt    pgtype.Timestamptz `json:"area_ended_at"`
+	ID                   pgtype.UUID        `json:"id"`
+	SessionCode          string             `json:"session_code"`
+	Area                 string             `json:"area"`
+	Status               string             `json:"status"`
+	QuestionsCount       int32              `json:"questions_count"`
+	AreaStartedAt        pgtype.Timestamptz `json:"area_started_at"`
+	AreaEndedAt          pgtype.Timestamptz `json:"area_ended_at"`
+	PreAddressedEvidence pgtype.Text        `json:"pre_addressed_evidence"`
+}
+
+type Report struct {
+	ID              pgtype.UUID        `json:"id"`
+	SessionCode     string             `json:"session_code"`
+	Status          string             `json:"status"`
+	ContentEn       pgtype.Text        `json:"content_en"`
+	ContentEs       pgtype.Text        `json:"content_es"`
+	Strengths       []byte             `json:"strengths"`
+	Weaknesses      []byte             `json:"weaknesses"`
+	Recommendation  pgtype.Text        `json:"recommendation"`
+	QuestionCount   int32              `json:"question_count"`
+	DurationMinutes int32              `json:"duration_minutes"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Session struct {

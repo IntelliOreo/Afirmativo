@@ -8,8 +8,7 @@ import { Footer } from "../../components/Footer";
 import { Button } from "../../components/Button";
 import { Card } from "../../components/Card";
 import { Input } from "../../components/Input";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
+import { api } from "@/lib/api";
 
 export default function LandingPage() {
   const router = useRouter();
@@ -25,22 +24,21 @@ export default function LandingPage() {
     setResumeError("");
 
     try {
-      const res = await fetch(`${API_URL}/api/session/verify`, {
+      const { ok, status } = await api("/api/session/verify", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionCode: resumeCode.trim(), pin: resumePin.trim() }),
+        body: { sessionCode: resumeCode.trim(), pin: resumePin.trim() },
       });
 
-      if (res.ok) {
+      if (ok) {
         document.cookie = `session_${resumeCode.trim()}=${resumePin.trim()}; path=/; max-age=86400; SameSite=Lax`;
         router.push(`/session/${resumeCode.trim()}`);
-      } else if (res.status === 404) {
+      } else if (status === 404) {
         setResumeError(
           lang === "es"
             ? "Código de sesión no encontrado. / Session code not found."
             : "Session code not found. / Código de sesión no encontrado."
         );
-      } else if (res.status === 410) {
+      } else if (status === 410) {
         setResumeError(
           lang === "es"
             ? "Esta sesión ha expirado. / This session has expired."

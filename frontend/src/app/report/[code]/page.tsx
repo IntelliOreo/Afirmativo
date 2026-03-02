@@ -8,8 +8,7 @@ import { Footer } from "@components/Footer";
 import { Button } from "@components/Button";
 import { Card } from "@components/Card";
 import { Alert } from "@components/Alert";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
+import { api } from "@/lib/api";
 
 type ReportStatus = "guard" | "loading" | "generating" | "ready" | "error";
 
@@ -52,21 +51,19 @@ export default function ReportPage() {
   async function fetchReport() {
     setStatus("loading");
     try {
-      const res = await fetch(`${API_URL}/api/report/${code}`, {
+      const { ok, status: httpStatus, data } = await api<Report & { error?: string }>(`/api/report/${code}`, {
         credentials: "include",
       });
 
-      if (res.status === 202) {
+      if (httpStatus === 202) {
         setStatus("generating");
         return;
       }
 
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error ?? "Failed to load report");
+      if (!ok || !data) {
+        throw new Error(data?.error ?? "Failed to load report");
       }
 
-      const data: Report = await res.json();
       setReport(data);
       setStatus("ready");
     } catch (err) {
@@ -76,7 +73,7 @@ export default function ReportPage() {
   }
 
   function handleDownloadPDF() {
-    window.open(`${API_URL}/api/report/${code}/pdf`, "_blank");
+    window.open(`${process.env.NEXT_PUBLIC_API_URL ?? ""}/api/report/${code}/pdf`, "_blank");
   }
 
   return (

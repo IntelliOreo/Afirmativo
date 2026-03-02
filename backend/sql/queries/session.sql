@@ -26,3 +26,8 @@ SET status = 'interviewing',
 WHERE session_code = $1
   AND status IN ('created', 'active', 'interviewing')
 RETURNING *;
+
+-- name: CompleteSession :exec
+-- Marks an interviewing session as completed with ended_at = now().
+UPDATE sessions SET status = 'completed', ended_at = now()
+WHERE session_code = $1 AND status = 'interviewing';
