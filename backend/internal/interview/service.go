@@ -80,10 +80,14 @@ func (s *Service) StartInterview(ctx context.Context, sessionCode string) (*Star
 
 	remaining := sess.InterviewBudgetSeconds - sess.InterviewLapsedSeconds
 
-	// Detect resume: on first start, interview_started_at and current_interview_started_at
-	// are set to the same now() within one statement. On subsequent calls, they differ.
-	resuming := sess.InterviewStartedAt != nil && sess.CurrentInterviewStartedAt != nil &&
-		!sess.InterviewStartedAt.Equal(*sess.CurrentInterviewStartedAt)
+	answersCount, err := s.store.GetAnswerCount(dbCtx, sessionCode)
+	if err != nil {
+		return nil, fmt.Errorf("get answer count: %w", err)
+	}
+
+	// Resume only after there is actual prior progress. This avoids showing
+	// "Welcome back" on first entry if the start endpoint is called twice.
+	resuming := answersCount > 0
 
 	// Pre-create all 8 question area rows (idempotent — ON CONFLICT DO NOTHING).
 	for _, area := range s.areaConfigs {
@@ -155,6 +159,34 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 	timeRemainingS := s.calcTimeRemaining(sess)
 	timeExpired := timeRemainingS <= 0
 
+	// Opening/resume confirmation is a non-criteria turn.
+	// Do not evaluate, persist, or consume criterion quota on question #1.
+	if questionNumber == 1 {
+		if timeExpired {
+			s.markRemainingNotAssessed(ctx, sessionCode, areas)
+			s.finishSession(ctx, sessionCode)
+			return &AnswerResult{Done: true, TimerRemainingS: 0}, nil
+		}
+
+		areaCfg, _ := s.findAreaConfig(currentArea.Area)
+		nextQuestion := strings.TrimSpace(areaCfg.FallbackQuestion)
+		if nextQuestion == "" {
+			nextQuestion = fmt.Sprintf("Please tell me about %s.", areaCfg.Label)
+		}
+
+		return &AnswerResult{
+			Done: false,
+			NextQuestion: &Question{
+				TextEs:         nextQuestion,
+				TextEn:         nextQuestion,
+				Area:           currentArea.Area,
+				QuestionNumber: 2,
+				TotalQuestions: EstimatedTotalQuestions,
+			},
+			TimerRemainingS: timeRemainingS,
+		}, nil
+	}
+
 	// 3. Build AI turn context.
 	areaCfg, areaIndex := s.findAreaConfig(currentArea.Area)
 	criteriaCoverage := s.buildCriteriaCoverage(areas)
@@ -202,6 +234,18 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 		}
 	} else {
 		slog.Debug("AI call succeeded", "session", sessionCode, "next_question", aiResult.NextQuestion)
+	}
+
+	// Defensive guard: if model returns evaluation for a different criterion id,
+	// ignore it so area progression stays aligned with backend state.
+	if aiResult.Evaluation != nil && aiResult.Evaluation.CurrentCriterion.ID != areaCfg.ID {
+		slog.Warn("ignoring AI evaluation with mismatched criterion id",
+			"session", sessionCode,
+			"current_area", currentArea.Area,
+			"expected_criterion_id", areaCfg.ID,
+			"returned_criterion_id", aiResult.Evaluation.CurrentCriterion.ID,
+		)
+		aiResult.Evaluation = nil
 	}
 
 	// 5. Process the turn (persist answer, update areas).
