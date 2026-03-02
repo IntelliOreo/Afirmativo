@@ -80,6 +80,9 @@ func (c *HTTPReportAIClient) GenerateReport(ctx context.Context, areaSummaries [
 
 	url := c.baseURL + "/v1/messages"
 	slog.Debug("calling AI API for report", "url", url, "model", c.model)
+	if messages, ok := requestBody["messages"].([]map[string]interface{}); ok {
+		shared.DebugChatMessages("report AI request messages", messages)
+	}
 	shared.DebugJSON("report AI request body", requestBody)
 
 	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(c.timeoutSeconds)*time.Second)

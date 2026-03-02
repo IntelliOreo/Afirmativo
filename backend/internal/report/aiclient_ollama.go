@@ -67,6 +67,9 @@ func (c *OllamaReportAIClient) GenerateReport(ctx context.Context, areaSummaries
 
 	url := strings.TrimRight(c.baseURL, "/") + "/v1/chat/completions"
 	slog.Debug("calling Ollama API for report", "url", url, "model", c.model)
+	if messages, ok := requestBody["messages"].([]map[string]interface{}); ok {
+		shared.DebugChatMessages("report Ollama request messages", messages)
+	}
 	shared.DebugJSON("report Ollama request body", requestBody)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))

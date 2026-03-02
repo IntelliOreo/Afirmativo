@@ -96,6 +96,9 @@ func (c *OllamaAIClient) CallAI(ctx context.Context, turnCtx *AITurnContext) (*A
 	url := strings.TrimRight(c.baseURL, "/") + "/v1/chat/completions"
 	slog.Debug("calling Ollama API", "url", url, "area", turnCtx.CurrentAreaSlug, "model", c.model)
 	shared.DebugTextBlock("Ollama request user message", userContent)
+	if messages, ok := requestBody["messages"].([]map[string]interface{}); ok {
+		shared.DebugChatMessages("Ollama request messages", messages)
+	}
 	shared.DebugJSON("Ollama request body", requestBody)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))

@@ -46,3 +46,16 @@ func DebugTextBlock(label, text string) {
 
 	fmt.Fprintf(os.Stdout, "level=DEBUG msg=%q\n%s\n", label, text)
 }
+
+// DebugChatMessages prints chat message role + raw multiline content for readability.
+func DebugChatMessages(label string, messages []map[string]interface{}) {
+	if !slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
+
+	for i, msg := range messages {
+		role, _ := msg["role"].(string)
+		content, _ := msg["content"].(string)
+		fmt.Fprintf(os.Stdout, "level=DEBUG msg=%q message_index=%d role=%q\n%s\n", label, i, role, content)
+	}
+}
