@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/afirmativo/backend/internal/shared"
 )
 
 // AIClient generates the report assessment via the configured AI provider.
@@ -78,7 +80,7 @@ func (c *HTTPReportAIClient) GenerateReport(ctx context.Context, areaSummaries [
 
 	url := c.baseURL + "/v1/messages"
 	slog.Debug("calling AI API for report", "url", url, "model", c.model)
-	slog.Debug("report AI request body", "body", string(bodyBytes))
+	shared.DebugJSON("report AI request body", requestBody)
 
 	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(c.timeoutSeconds)*time.Second)
 	defer cancel()
@@ -126,7 +128,7 @@ func (c *HTTPReportAIClient) GenerateReport(ctx context.Context, areaSummaries [
 	}
 
 	jsonStr := apiResp.Content[0].Text
-	slog.Debug("report AI raw response", "content", jsonStr)
+	shared.DebugJSONText("report AI raw response", jsonStr)
 
 	var result ReportAIResponse
 	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {

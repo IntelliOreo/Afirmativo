@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/afirmativo/backend/internal/config"
+	"github.com/afirmativo/backend/internal/shared"
 )
 
 // AIClientConfig holds everything needed to build and call the AI API.
@@ -159,7 +160,7 @@ func (c *HTTPAIClient) CallAI(ctx context.Context, turnCtx *AITurnContext) (*AIR
 	url := c.baseURL + "/v1/messages"
 	slog.Debug("calling AI API", "url", url, "area", turnCtx.CurrentAreaSlug, "model", c.model)
 	slog.Debug("AI request user message", "content", userContent)
-	slog.Debug("AI request body", "body", string(bodyBytes))
+	shared.DebugJSON("AI request body", requestBody)
 
 	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(c.timeoutSeconds)*time.Second)
 	defer cancel()
@@ -192,10 +193,7 @@ func (c *HTTPAIClient) CallAI(ctx context.Context, turnCtx *AITurnContext) (*AIR
 		return nil, fmt.Errorf("decode API response: %w", err)
 	}
 
-	// Log raw API response envelope in debug mode.
-	if rawResp, mErr := json.Marshal(apiResp); mErr == nil {
-		slog.Debug("AI API raw response", "response", string(rawResp))
-	}
+	shared.DebugJSON("AI API raw response", apiResp)
 
 	return parseAIResponse(&apiResp)
 }

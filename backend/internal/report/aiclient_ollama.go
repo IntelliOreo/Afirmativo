@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/afirmativo/backend/internal/shared"
 )
 
 // OllamaReportAIClientConfig holds config for the Ollama report AI client.
@@ -65,7 +67,7 @@ func (c *OllamaReportAIClient) GenerateReport(ctx context.Context, areaSummaries
 
 	url := strings.TrimRight(c.baseURL, "/") + "/v1/chat/completions"
 	slog.Debug("calling Ollama API for report", "url", url, "model", c.model)
-	slog.Debug("report Ollama request body", "body", string(bodyBytes))
+	shared.DebugJSON("report Ollama request body", requestBody)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
 	if err != nil {
