@@ -209,7 +209,7 @@ function SessionPageContent() {
       />
 
       <main className="flex-1 bg-base-lightest">
-        <div className="max-w-lg mx-auto px-4 py-12">
+        <div className="max-w-lg mx-auto px-4 py-8 sm:py-12">
 
           {view === "loading" && (
             <p className="text-primary-darkest">
@@ -219,7 +219,7 @@ function SessionPageContent() {
 
           {view === "recovery" && (
             <>
-              <h1 className="text-3xl font-bold text-primary-dark mb-2">
+              <h1 className="text-2xl sm:text-3xl font-bold text-primary-dark mb-2">
                 {lang === "es" ? "Recuperar sesión" : "Recover session"}
               </h1>
               <p className="text-primary-darkest mb-8">
@@ -231,7 +231,7 @@ function SessionPageContent() {
               <Card className="mb-4">
                 <p className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">
                   {lang === "es" ? "Código de sesión" : "Session code"}:{" "}
-                  <span className="text-primary-dark font-bold tracking-widest">
+                  <span className="text-primary-dark font-bold tracking-wide break-all">
                     {code}
                   </span>
                 </p>
@@ -265,7 +265,7 @@ function SessionPageContent() {
 
           {view === "hub" && (
             <>
-              <h1 className="text-3xl font-bold text-primary-dark mb-2">
+              <h1 className="text-2xl sm:text-3xl font-bold text-primary-dark mb-2">
                 {lang === "es" ? "Su sesión está lista" : "Your session is ready"}
               </h1>
               <p className="text-primary-darkest mb-6">
@@ -286,27 +286,27 @@ function SessionPageContent() {
                 </p>
 
                 <div className="space-y-3 mb-4">
-                  <div className="flex items-center justify-between bg-base-lightest rounded px-3 py-2">
+                  <div className="flex flex-col items-start gap-1 bg-base-lightest rounded px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                     <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
                       {lang === "es" ? "Código" : "Code"}
                     </span>
-                    <span className="font-bold text-primary-dark tracking-wide">
+                    <span className="font-bold text-primary-dark tracking-wide break-all w-full text-left sm:w-auto sm:text-right">
                       {code}
                     </span>
                   </div>
-                  <div className="flex items-center justify-between bg-base-lightest rounded px-3 py-2">
+                  <div className="flex flex-col items-start gap-1 bg-base-lightest rounded px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                     <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
                       PIN
                     </span>
-                    <span className="font-bold text-primary-dark tracking-wide">
+                    <span className="font-bold text-primary-dark tracking-wide break-all w-full text-left sm:w-auto sm:text-right">
                       {displayPin}
                     </span>
                   </div>
-                  <div className="flex items-center justify-between bg-base-lightest rounded px-3 py-2">
+                  <div className="flex flex-col items-start gap-1 bg-base-lightest rounded px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                     <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
                       {lang === "es" ? "Enlace" : "Link"}
                     </span>
-                    <span className="font-bold text-primary text-sm break-all">
+                    <span className="font-bold text-primary text-sm break-all w-full text-left sm:w-auto sm:text-right">
                       {getRecoveryUrl()}
                     </span>
                   </div>

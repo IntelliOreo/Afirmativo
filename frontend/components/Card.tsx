@@ -13,7 +13,7 @@ export function Card({ children, className = "", ...props }: CardProps) {
         "border border-base-lighter",
         "shadow-sm",
         "rounded",
-        "p-6",
+        "p-4 sm:p-6",
         className,
       ]
         .filter(Boolean)

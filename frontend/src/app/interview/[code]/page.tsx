@@ -408,7 +408,7 @@ function InterviewPageContent() {
         <div className={isBlinkingTimer ? "animate-pulse" : ""}>
           {/* Timer bar */}
           <div
-            className={`flex items-center justify-between px-4 py-2 text-sm font-semibold ${
+            className={`flex flex-col items-start gap-1 px-4 py-2 text-sm font-semibold sm:flex-row sm:items-center sm:justify-between ${
               isWrapup
                 ? "bg-error text-white"
                 : isWarning
@@ -537,7 +537,7 @@ function InterviewPageContent() {
 
               {reportStatus === "ready" && report && (
                 <>
-                  <h2 className="text-3xl font-bold text-primary-dark mb-2">
+                  <h2 className="text-2xl sm:text-3xl font-bold text-primary-dark mb-2">
                     {lang === "es" ? "Reporte de Evaluación" : "Assessment Report"}
                   </h2>
                   <p className="text-sm text-gray-600 mb-6">

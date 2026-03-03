@@ -88,8 +88,8 @@ function PayPageContent() {
       />
 
       <main className="flex-1 bg-base-lightest">
-        <div className="max-w-lg mx-auto px-4 py-12">
-          <h1 className="text-3xl font-bold text-primary-dark mb-2">
+        <div className="max-w-lg mx-auto px-4 py-8 sm:py-12">
+          <h1 className="text-2xl sm:text-3xl font-bold text-primary-dark mb-2">
             {lang === "es" ? "Acceso" : "Access"}
           </h1>
           <p className="text-primary-darkest mb-8">

@@ -113,11 +113,11 @@ export default function LandingPage() {
       />
 
       <main className="flex-1 bg-base-lightest">
-        <div className="max-w-3xl mx-auto px-4 py-12">
-          <h1 className="text-3xl font-bold text-primary-dark mb-4">
+        <div className="max-w-3xl mx-auto px-4 py-8 sm:py-12">
+          <h1 className="text-2xl sm:text-3xl font-bold text-primary-dark mb-4">
             {t.headline}
           </h1>
-          <p className="text-lg text-primary-darkest mb-8">{t.subheadline}</p>
+          <p className="text-base sm:text-lg text-primary-darkest mb-8">{t.subheadline}</p>
 
           <Card className="mb-8">
             <ol className="list-decimal list-inside space-y-3 text-primary-darkest">
