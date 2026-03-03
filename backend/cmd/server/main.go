@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/afirmativo/backend/internal/admin"
 	"github.com/afirmativo/backend/internal/config"
 	"github.com/afirmativo/backend/internal/interview"
 	"github.com/afirmativo/backend/internal/report"
@@ -154,6 +155,10 @@ func main() {
 	)
 	reportHandler := report.NewHandler(reportSvc)
 
+	adminStore := admin.NewPostgresStore(pool)
+	adminSvc := admin.NewService(adminStore)
+	adminHandler := admin.NewHandler(adminSvc)
+
 	// Register routes.
 	mux := http.NewServeMux()
 
@@ -164,6 +169,7 @@ func main() {
 	mux.HandleFunc("POST /api/interview/answer", interviewHandler.HandleAnswer)
 	mux.HandleFunc("GET /api/report/{code}", reportHandler.HandleGetReport)
 	mux.HandleFunc("GET /api/report/{code}/pdf", reportHandler.HandleGetReportPDF)
+	mux.HandleFunc("POST /api/admin/clean-up-db", adminHandler.HandleCleanUpDB)
 
 	// Apply middleware.
 	handler := shared.Chain(mux,

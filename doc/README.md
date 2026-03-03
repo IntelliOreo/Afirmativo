@@ -191,6 +191,6 @@ Frontend and backend deploy independently.
 
 - All user-facing strings must be **bilingual** (Spanish + English)
 - Pages use **component abstractions** — never raw Tailwind classes in `page.tsx` files
-- **No Next.js API routes** — the Go backend is the sole API layer
-- `NEXT_PUBLIC_API_URL` is the only environment variable the frontend uses
+- Keep business APIs in Go; Next.js route handlers are only for local/dev admin proxying
+- Frontend env vars: `NEXT_PUBLIC_API_URL` (required). Admin proxy route is gated by `NODE_ENV=development`.
 - Target device: cheap Android phones on Chrome

@@ -9,6 +9,7 @@ import { Button } from "../../components/Button";
 import { Card } from "../../components/Card";
 import { Input } from "../../components/Input";
 import { api } from "@/lib/api";
+import { isDevEnv } from "@/lib/env";
 import { resolveLang, withLang, writeStoredLang } from "@/lib/language";
 
 export default function LandingPage() {
@@ -104,6 +105,7 @@ export default function LandingPage() {
   };
 
   const t = content[lang];
+  const showAdminLink = isDevEnv();
 
   return (
     <div className="flex flex-col min-h-screen">
@@ -134,6 +136,14 @@ export default function LandingPage() {
           </div>
 
           <p className="text-sm text-gray-600 text-center mb-10">{t.note}</p>
+
+          {showAdminLink && (
+            <p className="text-sm text-center mb-10">
+              <Link href="/admin">
+                Admin (dev): Limpieza DB / DB cleanup
+              </Link>
+            </p>
+          )}
 
           {/* Resume session */}
           <div className="border-t border-base-lighter pt-8">
