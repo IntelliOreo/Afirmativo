@@ -387,6 +387,7 @@ function InterviewPageContent() {
   const timerLabel = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
   const isWarning = secondsLeft <= WARNING_AT_SECONDS;
   const isWrapup = secondsLeft <= WRAPUP_AT_SECONDS;
+  const isBlinkingTimer = secondsLeft <= 30 && secondsLeft > 0;
   const isAutoSubmitCountdown =
     secondsLeft <= AUTOSUBMIT_SECONDS
     && secondsLeft > 0
@@ -404,7 +405,7 @@ function InterviewPageContent() {
       <NavHeader lang={lang} />
 
       {showInterviewProgress && (
-        <>
+        <div className={isBlinkingTimer ? "animate-pulse" : ""}>
           {/* Timer bar */}
           <div
             className={`flex items-center justify-between px-4 py-2 text-sm font-semibold ${
@@ -432,7 +433,7 @@ function InterviewPageContent() {
               style={{ width: `${progressPct}%` }}
             />
           </div>
-        </>
+        </div>
       )}
 
       <main className="flex-1 bg-base-lightest">
