@@ -9,6 +9,8 @@ import { Button } from "@components/Button";
 import { Card } from "@components/Card";
 import { Alert } from "@components/Alert";
 import { api } from "@/lib/api";
+import { parseLang, writeStoredLang } from "@/lib/language";
+import { beforeYouStartContent } from "../../../../content/beforeYouStart";
 
 const AUTOSUBMIT_SECONDS = 10;   // auto-submit countdown threshold
 const WARNING_AT_SECONDS = 45 * 60;  // orange bar at 45 min remaining
@@ -38,6 +40,10 @@ interface StartResponse {
   error?: string;
 }
 
+type DisclaimerBlock =
+  | { type: "paragraph"; text: string }
+  | { type: "list"; items: string[] };
+
 function getQuestionTextForLang(
   q: Question | null | undefined,
   language: "es" | "en",
@@ -45,6 +51,38 @@ function getQuestionTextForLang(
   if (!q) return "";
   if (language === "es") return q.textEs || q.textEn || "";
   return q.textEn || q.textEs || "";
+}
+
+function parseDisclaimerBlocks(rawText: string): DisclaimerBlock[] {
+  const lines = rawText.split("\n");
+  const blocks: DisclaimerBlock[] = [];
+  let currentListItems: string[] = [];
+
+  const flushCurrentList = () => {
+    if (currentListItems.length > 0) {
+      blocks.push({ type: "list", items: currentListItems });
+      currentListItems = [];
+    }
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      flushCurrentList();
+      continue;
+    }
+
+    if (trimmed.startsWith("- ") || trimmed.startsWith("• ")) {
+      currentListItems.push(trimmed.replace(/^[-•]\s+/, ""));
+      continue;
+    }
+
+    flushCurrentList();
+    blocks.push({ type: "paragraph", text: trimmed });
+  }
+
+  flushCurrentList();
+  return blocks;
 }
 
 export default function InterviewPage() {
@@ -57,8 +95,10 @@ export default function InterviewPage() {
   const [lang, setLang] = useState<"es" | "en">(() => {
     if (requestedLang === "en" || requestedLang === "es") return requestedLang;
     if (typeof window !== "undefined") {
-      const stored = sessionStorage.getItem(`interview_lang_${code}`);
-      if (stored === "en" || stored === "es") return stored;
+      const storedInterviewLang = parseLang(sessionStorage.getItem(`interview_lang_${code}`));
+      if (storedInterviewLang) return storedInterviewLang;
+      const storedUiLang = parseLang(sessionStorage.getItem("ui_lang"));
+      if (storedUiLang) return storedUiLang;
     }
     return "es";
   });
@@ -68,6 +108,8 @@ export default function InterviewPage() {
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [error, setError] = useState("");
   const [forceSubmit, setForceSubmit] = useState(false);
+  const [hasReachedDisclaimerBottom, setHasReachedDisclaimerBottom] = useState(false);
+  const disclaimerScrollRef = useRef<HTMLDivElement | null>(null);
 
   // Ref to access latest textAnswer and question inside timer callback
   const textAnswerRef = useRef(textAnswer);
@@ -81,9 +123,32 @@ export default function InterviewPage() {
 
   useEffect(() => {
     if (typeof window !== "undefined") {
+      writeStoredLang(lang);
       sessionStorage.setItem(`interview_lang_${code}`, lang);
     }
   }, [code, lang]);
+
+  useEffect(() => {
+    if (question?.questionNumber === 1) {
+      setHasReachedDisclaimerBottom(false);
+    }
+  }, [question?.questionNumber]);
+
+  const updateDisclaimerScrollState = useCallback(() => {
+    const el = disclaimerScrollRef.current;
+    if (!el) return;
+    const noScrollNeeded = el.scrollHeight <= el.clientHeight + 4;
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 4;
+    if (noScrollNeeded || atBottom) {
+      setHasReachedDisclaimerBottom(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (question?.questionNumber !== 1) return;
+    const id = window.requestAnimationFrame(updateDisclaimerScrollState);
+    return () => window.cancelAnimationFrame(id);
+  }, [question?.questionNumber, question?.textEn, question?.textEs, updateDisclaimerScrollState]);
 
   // Auto-submit at timer expiry: processes the final answer through AI, then redirects.
   const autoSubmit = useCallback(async () => {
@@ -164,9 +229,8 @@ export default function InterviewPage() {
     startInterview();
   }, [code]);
 
-  // Manual answer submission
-  async function handleSubmitAnswer() {
-    if (!textAnswer.trim() || status !== "active") return;
+  async function submitAnswer(answerValue: string) {
+    if (status !== "active") return;
     setStatus("submitting");
 
     try {
@@ -174,7 +238,7 @@ export default function InterviewPage() {
         method: "POST",
         body: {
           sessionCode: code,
-          answerText: textAnswer.trim(),
+          answerText: answerValue.trim(),
           questionNumber: question?.questionNumber ?? 0,
           questionText: getQuestionTextForLang(question, lang),
         },
@@ -196,12 +260,26 @@ export default function InterviewPage() {
     }
   }
 
+  // Manual answer submission
+  async function handleSubmitAnswer() {
+    if (!textAnswer.trim()) return;
+    await submitAnswer(textAnswer);
+  }
+
+  async function handleAgreeAndContinue() {
+    const agreementText = lang === "es" ? "Entiendo" : "I understand";
+    await submitAnswer(agreementText);
+  }
+
   const minutes = Math.floor(secondsLeft / 60);
   const seconds = secondsLeft % 60;
   const timerLabel = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
   const isWarning = secondsLeft <= WARNING_AT_SECONDS;
   const isWrapup = secondsLeft <= WRAPUP_AT_SECONDS;
   const isAutoSubmitCountdown = secondsLeft <= AUTOSUBMIT_SECONDS && secondsLeft > 0 && (status === "active" || status === "submitting");
+  const isConsentQuestion = question?.questionNumber === 1;
+  const consentQuestionText = getQuestionTextForLang(question, lang);
+  const consentBlocks = parseDisclaimerBlocks(consentQuestionText);
   const progressPct = question
     ? (question.questionNumber / question.totalQuestions) * 100
     : 0;
@@ -330,47 +408,103 @@ export default function InterviewPage() {
               )}
 
               <Card className="mb-6">
-                <p className="text-lg font-semibold text-primary-dark">
-                  {lang === "es" ? question.textEs : question.textEn}
-                </p>
+                {isConsentQuestion ? (
+                  <div
+                    ref={disclaimerScrollRef}
+                    onScroll={updateDisclaimerScrollState}
+                    className="max-h-72 overflow-y-auto pr-1"
+                  >
+                    <div className="space-y-4 text-base font-normal text-primary-darkest leading-relaxed">
+                      {consentBlocks.map((block, index) =>
+                        block.type === "paragraph" ? (
+                          <p key={`p-${index}`} className="whitespace-pre-line">
+                            {block.text}
+                          </p>
+                        ) : (
+                          <ul key={`l-${index}`} className="list-disc list-inside space-y-2">
+                            {block.items.map((item, itemIndex) => (
+                              <li key={`li-${index}-${itemIndex}`}>{item}</li>
+                            ))}
+                          </ul>
+                        ),
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-lg font-semibold text-primary-dark whitespace-pre-line">
+                    {lang === "es" ? question.textEs : question.textEn}
+                  </p>
+                )}
               </Card>
 
-              <div className="mb-4">
-                <label className="block font-semibold text-primary-darkest mb-2">
-                  {lang === "es" ? "Su respuesta" : "Your answer"}
-                  <span className="block text-sm font-normal text-gray-500">
-                    {lang === "es"
-                      ? "Responda en su idioma seleccionado"
-                      : "Please answer in your selected language"}
-                  </span>
-                </label>
-                <textarea
-                  value={textAnswer}
-                  onChange={(e) => setTextAnswer(e.target.value)}
-                  rows={6}
-                  disabled={status === "submitting"}
-                  className="w-full px-3 py-3 text-base border border-base-lighter rounded focus:outline-none focus:ring-2 focus:ring-primary resize-none"
-                  placeholder={
-                    lang === "es"
-                      ? "Escriba su respuesta aquí..."
-                      : "Type your answer here..."
-                  }
-                />
-              </div>
+              {isConsentQuestion ? (
+                <>
+                  <Alert variant="warning" className="mb-6">
+                    {beforeYouStartContent[lang].warningAlert}
+                  </Alert>
 
-              <Button
-                fullWidth
-                disabled={status === "submitting" || !textAnswer.trim()}
-                onClick={handleSubmitAnswer}
-              >
-                {status === "submitting"
-                  ? lang === "es"
-                    ? "Enviando..."
-                    : "Submitting..."
-                  : lang === "es"
-                    ? "Enviar respuesta"
-                    : "Submit answer"}
-              </Button>
+                  {!hasReachedDisclaimerBottom && (
+                    <p className="text-sm text-primary-darkest mb-4">
+                      {lang === "es"
+                        ? "Desplácese hasta el final del aviso para continuar."
+                        : "Scroll to the bottom of the disclaimer to continue."}
+                    </p>
+                  )}
+
+                  <Button
+                    fullWidth
+                    disabled={status === "submitting" || !hasReachedDisclaimerBottom}
+                    onClick={handleAgreeAndContinue}
+                  >
+                    {status === "submitting"
+                      ? lang === "es"
+                        ? "Enviando..."
+                        : "Submitting..."
+                      : lang === "es"
+                        ? "Entiendo"
+                        : "I understand"}
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <div className="mb-4">
+                    <label className="block font-semibold text-primary-darkest mb-2">
+                      {lang === "es" ? "Su respuesta" : "Your answer"}
+                      <span className="block text-sm font-normal text-gray-500">
+                        {lang === "es"
+                          ? "Responda en su idioma seleccionado"
+                          : "Please answer in your selected language"}
+                      </span>
+                    </label>
+                    <textarea
+                      value={textAnswer}
+                      onChange={(e) => setTextAnswer(e.target.value)}
+                      rows={6}
+                      disabled={status === "submitting"}
+                      className="w-full px-3 py-3 text-base border border-base-lighter rounded focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+                      placeholder={
+                        lang === "es"
+                          ? "Escriba su respuesta aquí..."
+                          : "Type your answer here..."
+                      }
+                    />
+                  </div>
+
+                  <Button
+                    fullWidth
+                    disabled={status === "submitting" || !textAnswer.trim()}
+                    onClick={handleSubmitAnswer}
+                  >
+                    {status === "submitting"
+                      ? lang === "es"
+                        ? "Enviando..."
+                        : "Submitting..."
+                      : lang === "es"
+                        ? "Enviar respuesta"
+                        : "Submit answer"}
+                  </Button>
+                </>
+              )}
             </>
           )}
         </div>

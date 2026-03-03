@@ -1,22 +1,25 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { NavHeader } from "@components/NavHeader";
 import { Footer } from "@components/Footer";
 import { Button } from "@components/Button";
 import { Card } from "@components/Card";
 import { Input } from "@components/Input";
 import { api } from "@/lib/api";
+import { parseLang, resolveLang, writeStoredLang } from "@/lib/language";
 
 type View = "loading" | "hub" | "recovery";
 
 export default function SessionPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const code = params.code as string;
+  const requestedLang = searchParams.get("lang");
 
-  const [lang, setLang] = useState<"es" | "en">("es");
+  const [lang, setLang] = useState<"es" | "en">(() => resolveLang(requestedLang));
   const [view, setView] = useState<View>("loading");
   const [pin, setPin] = useState("");
   const [displayPin, setDisplayPin] = useState("");
@@ -32,6 +35,7 @@ export default function SessionPage() {
   const goToInterview = useCallback(
     (selectedLang: "es" | "en", replace = false) => {
       if (typeof window !== "undefined") {
+        writeStoredLang(selectedLang);
         sessionStorage.setItem(`interview_lang_${code}`, selectedLang);
       }
       const nextUrl = interviewUrlForLang(selectedLang);
@@ -43,6 +47,17 @@ export default function SessionPage() {
     },
     [code, interviewUrlForLang, router],
   );
+
+  useEffect(() => {
+    writeStoredLang(lang);
+  }, [lang]);
+
+  useEffect(() => {
+    const langFromQuery = parseLang(requestedLang);
+    if (langFromQuery) {
+      setLang(langFromQuery);
+    }
+  }, [requestedLang]);
 
   const verifySession = useCallback(
     async (sessionCode: string, sessionPin: string) => {

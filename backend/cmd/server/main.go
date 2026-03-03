@@ -130,7 +130,18 @@ func main() {
 		})
 	}
 
-	interviewSvc := interview.NewService(sessionStore, sessionStore, sessionStore, interviewStore, aiClient, cfg.AreaConfigs)
+	interviewSvc := interview.NewService(
+		sessionStore,
+		sessionStore,
+		sessionStore,
+		interviewStore,
+		aiClient,
+		cfg.AreaConfigs,
+		cfg.InterviewOpeningDisclaimerEn,
+		cfg.InterviewOpeningDisclaimerEs,
+		cfg.InterviewReadinessQuestionEn,
+		cfg.InterviewReadinessQuestionEs,
+	)
 	interviewHandler := interview.NewHandler(interviewSvc)
 
 	// Report dependencies.
@@ -165,9 +176,9 @@ func main() {
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%s", cfg.Port),
 		Handler:      handler,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		ReadTimeout:  time.Duration(cfg.HTTPReadTimeoutS) * time.Second,
+		WriteTimeout: time.Duration(cfg.HTTPWriteTimeoutS) * time.Second,
+		IdleTimeout:  time.Duration(cfg.HTTPIdleTimeoutS) * time.Second,
 	}
 
 	go func() {

@@ -3,6 +3,8 @@
 // No infrastructure imports — domain types are infrastructure-free.
 package interview
 
+import "strings"
+
 // ── Area status constants ──────────────────────────────────────────
 
 // AreaStatus represents the lifecycle state of a question area.
@@ -170,13 +172,31 @@ type Answer struct {
 
 // ── Static questions ───────────────────────────────────────────────
 
-// FirstQuestion returns the opening question for every interview.
-func FirstQuestion(firstAreaSlug string) *Question {
+const (
+	defaultReadinessQuestionEs = "¿Cómo se siente hoy? ¿Está física y mentalmente preparado/a para continuar con esta entrevista?"
+	defaultReadinessQuestionEn = "How are you feeling today? Are you physically and mentally ready to proceed with this interview?"
+	defaultOpeningDisclaimerEs = "Aviso importante: esta entrevista simulada es solo para preparacion y no constituye asesoramiento legal. Al continuar, usted confirma que leyo y acepta estos terminos."
+	defaultOpeningDisclaimerEn = "Important disclaimer: this mock interview is for preparation only and does not constitute legal advice. By continuing, you confirm that you read and accept these terms."
+)
+
+// OpeningDisclaimerQuestion returns the opening disclaimer shown on interview start.
+func OpeningDisclaimerQuestion(firstAreaSlug, textEs, textEn string) *Question {
 	return &Question{
-		TextEs:         "¿Cómo se siente hoy? ¿Está física y mentalmente preparado/a para continuar con esta entrevista?",
-		TextEn:         "How are you feeling today? Are you physically and mentally ready to proceed with this interview?",
+		TextEs:         firstNonEmpty(textEs, defaultOpeningDisclaimerEs),
+		TextEn:         firstNonEmpty(textEn, defaultOpeningDisclaimerEn),
 		Area:           firstAreaSlug,
 		QuestionNumber: 1,
+		TotalQuestions: EstimatedTotalQuestions,
+	}
+}
+
+// ReadinessQuestion returns the non-criteria readiness question shown after disclaimer confirmation.
+func ReadinessQuestion(firstAreaSlug, textEs, textEn string, questionNumber int) *Question {
+	return &Question{
+		TextEs:         firstNonEmpty(textEs, defaultReadinessQuestionEs),
+		TextEn:         firstNonEmpty(textEn, defaultReadinessQuestionEn),
+		Area:           firstAreaSlug,
+		QuestionNumber: questionNumber,
 		TotalQuestions: EstimatedTotalQuestions,
 	}
 }
@@ -190,4 +210,11 @@ func ResumeQuestion(firstAreaSlug string) *Question {
 		QuestionNumber: 1,
 		TotalQuestions: EstimatedTotalQuestions,
 	}
+}
+
+func firstNonEmpty(v, fallback string) string {
+	if strings.TrimSpace(v) != "" {
+		return v
+	}
+	return fallback
 }

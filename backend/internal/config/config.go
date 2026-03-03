@@ -32,6 +32,9 @@ type Config struct {
 	SessionExpiryHours int
 	MockAPIURL         string // If non-empty, use this mock server instead of real AI APIs
 	LogLevel           string // "debug", "info", "warn", "error" — defaults to "debug"
+	HTTPReadTimeoutS   int    // HTTP server read timeout in seconds
+	HTTPWriteTimeoutS  int    // HTTP server write timeout in seconds
+	HTTPIdleTimeoutS   int    // HTTP server idle timeout in seconds
 
 	// AI configuration — all AI instructions live here, not in Go code.
 	AIProvider                              string       // "claude" (default) or "ollama"
@@ -51,6 +54,10 @@ type Config struct {
 	UnstructuredReportOutputFormatPrompt    string       // Prompt instructions for unstructured providers to return report JSON
 	AIReportMaxTokens                       int          // Max tokens for report AI call (default 2048)
 	AreaConfigs                             []AreaConfig // Per-area rubrics loaded from AI_AREA_CONFIG JSON
+	InterviewOpeningDisclaimerEn            string       // Opening disclaimer shown on interview/start in English
+	InterviewOpeningDisclaimerEs            string       // Opening disclaimer shown on interview/start in Spanish
+	InterviewReadinessQuestionEn            string       // Non-criteria readiness question shown after disclaimer in English
+	InterviewReadinessQuestionEs            string       // Non-criteria readiness question shown after disclaimer in Spanish
 }
 
 // Load reads required environment variables and returns a validated Config.
@@ -98,6 +105,24 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("invalid AI_REPORT_MAX_TOKENS: %w", err7)
 	}
 
+	httpReadTimeoutStr := envOr("HTTP_READ_TIMEOUT_SECONDS", "10")
+	httpReadTimeout, err8 := strconv.Atoi(httpReadTimeoutStr)
+	if err8 != nil {
+		return Config{}, fmt.Errorf("invalid HTTP_READ_TIMEOUT_SECONDS: %w", err8)
+	}
+
+	httpWriteTimeoutStr := envOr("HTTP_WRITE_TIMEOUT_SECONDS", "30")
+	httpWriteTimeout, err9 := strconv.Atoi(httpWriteTimeoutStr)
+	if err9 != nil {
+		return Config{}, fmt.Errorf("invalid HTTP_WRITE_TIMEOUT_SECONDS: %w", err9)
+	}
+
+	httpIdleTimeoutStr := envOr("HTTP_IDLE_TIMEOUT_SECONDS", "60")
+	httpIdleTimeout, err10 := strconv.Atoi(httpIdleTimeoutStr)
+	if err10 != nil {
+		return Config{}, fmt.Errorf("invalid HTTP_IDLE_TIMEOUT_SECONDS: %w", err10)
+	}
+
 	cfg := Config{
 		Port:                                    envOr("PORT", "8080"),
 		FrontendURL:                             envOr("FRONTEND_URL", "http://localhost:3000"),
@@ -105,6 +130,9 @@ func Load() (Config, error) {
 		SessionExpiryHours:                      expiry,
 		MockAPIURL:                              os.Getenv("MOCK_API_URL"),
 		LogLevel:                                envOr("LOG_LEVEL", "debug"),
+		HTTPReadTimeoutS:                        httpReadTimeout,
+		HTTPWriteTimeoutS:                       httpWriteTimeout,
+		HTTPIdleTimeoutS:                        httpIdleTimeout,
 		AIProvider:                              envOr("AI_PROVIDER", "claude"),
 		OllamaBaseURL:                           envOr("OLLAMA_BASE_URL", "http://localhost:11434"),
 		AISystemPrompt:                          os.Getenv("AI_SYSTEM_PROMPT"),
@@ -121,6 +149,10 @@ func Load() (Config, error) {
 		AIReportPrompt:                          os.Getenv("AI_REPORT_PROMPT"),
 		UnstructuredReportOutputFormatPrompt:    os.Getenv("UNSTRUCTURED_REPORT_OUTPUT_FORMAT_PROMPT"),
 		AIReportMaxTokens:                       reportMaxTokens,
+		InterviewOpeningDisclaimerEn:            os.Getenv("INTERVIEW_OPENING_DISCLAIMER_EN"),
+		InterviewOpeningDisclaimerEs:            os.Getenv("INTERVIEW_OPENING_DISCLAIMER_ES"),
+		InterviewReadinessQuestionEn:            os.Getenv("INTERVIEW_READINESS_QUESTION_EN"),
+		InterviewReadinessQuestionEs:            os.Getenv("INTERVIEW_READINESS_QUESTION_ES"),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -170,6 +202,9 @@ func (c Config) LogLoaded() {
 		"session_expiry_hours", c.SessionExpiryHours,
 		"mock_api_url", c.MockAPIURL,
 		"log_level", c.LogLevel,
+		"http_read_timeout_seconds", c.HTTPReadTimeoutS,
+		"http_write_timeout_seconds", c.HTTPWriteTimeoutS,
+		"http_idle_timeout_seconds", c.HTTPIdleTimeoutS,
 	)
 	slog.Debug("AI config loaded",
 		"provider", c.AIProvider,
@@ -189,6 +224,10 @@ func (c Config) LogLoaded() {
 		"report_prompt_len", len(c.AIReportPrompt),
 		"unstructured_report_output_format_prompt_len", len(c.UnstructuredReportOutputFormatPrompt),
 		"report_max_tokens", c.AIReportMaxTokens,
+		"interview_opening_disclaimer_en_len", len(c.InterviewOpeningDisclaimerEn),
+		"interview_opening_disclaimer_es_len", len(c.InterviewOpeningDisclaimerEs),
+		"interview_readiness_question_en_len", len(c.InterviewReadinessQuestionEn),
+		"interview_readiness_question_es_len", len(c.InterviewReadinessQuestionEs),
 	)
 	for _, ac := range c.AreaConfigs {
 		slog.Debug("area config",

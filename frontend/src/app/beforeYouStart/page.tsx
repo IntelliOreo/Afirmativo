@@ -1,20 +1,23 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { NavHeader } from "@components/NavHeader";
 import { Footer } from "@components/Footer";
 import { Button } from "@components/Button";
 import { Alert } from "@components/Alert";
 import { Card } from "@components/Card";
-import { disclaimerContent } from "../../../content/disclaimer";
+import { beforeYouStartContent } from "../../../content/beforeYouStart";
+import { parseLang, resolveLang, withLang, writeStoredLang } from "@/lib/language";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
 
-export default function DisclaimerPage() {
+export default function BeforeYouStartPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const requestedLang = searchParams.get("lang");
   const [agreed, setAgreed] = useState(false);
-  const [lang, setLang] = useState<"es" | "en">("es");
+  const [lang, setLang] = useState<"es" | "en">(() => resolveLang(requestedLang));
 
   // Fire Neon warm-up on page load — wakes the DB before user reaches /pay
   useEffect(() => {
@@ -23,7 +26,18 @@ export default function DisclaimerPage() {
     });
   }, []);
 
-  const t = disclaimerContent[lang];
+  useEffect(() => {
+    writeStoredLang(lang);
+  }, [lang]);
+
+  useEffect(() => {
+    const langFromQuery = parseLang(requestedLang);
+    if (langFromQuery) {
+      setLang(langFromQuery);
+    }
+  }, [requestedLang]);
+
+  const t = beforeYouStartContent[lang];
 
   return (
     <div className="flex flex-col min-h-screen">
@@ -40,12 +54,9 @@ export default function DisclaimerPage() {
 
           <Card className="mb-6">
             <div className="max-h-64 overflow-y-auto pr-2">
-              <ul className="space-y-4">
+              <ul className="list-disc list-inside space-y-3 text-primary-darkest leading-relaxed">
                 {t.bullets.map((item, i) => (
-                  <li key={i} className="flex gap-3 text-primary-darkest">
-                    <span className="text-primary-dark font-bold mt-0.5">•</span>
-                    <span>{item}</span>
-                  </li>
+                  <li key={i} className="text-base">{item}</li>
                 ))}
               </ul>
             </div>
@@ -68,7 +79,7 @@ export default function DisclaimerPage() {
           <Button
             fullWidth
             disabled={!agreed}
-            onClick={() => agreed && router.push("/pay")}
+            onClick={() => agreed && router.push(withLang("/pay", lang))}
           >
             {t.cta}
           </Button>

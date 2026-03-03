@@ -45,10 +45,22 @@ type Service struct {
 	store            Store
 	aiClient         AIClient
 	areaConfigs      []config.AreaConfig
+	openingTextEn    string
+	openingTextEs    string
+	readinessTextEn  string
+	readinessTextEs  string
 }
 
 // NewService creates a Service with the given dependencies.
-func NewService(ss SessionStarter, sg SessionGetter, sc SessionCompleter, store Store, ai AIClient, areaConfigs []config.AreaConfig) *Service {
+func NewService(
+	ss SessionStarter,
+	sg SessionGetter,
+	sc SessionCompleter,
+	store Store,
+	ai AIClient,
+	areaConfigs []config.AreaConfig,
+	openingTextEn, openingTextEs, readinessTextEn, readinessTextEs string,
+) *Service {
 	return &Service{
 		sessionStarter:   ss,
 		sessionGetter:    sg,
@@ -56,6 +68,10 @@ func NewService(ss SessionStarter, sg SessionGetter, sc SessionCompleter, store 
 		store:            store,
 		aiClient:         ai,
 		areaConfigs:      areaConfigs,
+		openingTextEn:    openingTextEn,
+		openingTextEs:    openingTextEs,
+		readinessTextEn:  readinessTextEn,
+		readinessTextEs:  readinessTextEs,
 	}
 }
 
@@ -108,7 +124,7 @@ func (s *Service) StartInterview(ctx context.Context, sessionCode, preferredLang
 	if resuming {
 		q = ResumeQuestion(firstArea)
 	} else {
-		q = FirstQuestion(firstArea)
+		q = OpeningDisclaimerQuestion(firstArea, s.openingTextEs, s.openingTextEn)
 	}
 
 	return &StartResult{
@@ -163,13 +179,26 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 	timeExpired := timeRemainingS <= 0
 	preferredLanguage := normalizePreferredLanguage(sess.PreferredLanguage)
 
-	// Opening/resume confirmation is a non-criteria turn.
-	// Do not evaluate, persist, or consume criterion quota on question #1.
+	// Opening confirmation and readiness are non-criteria turns on first entry.
+	// Do not evaluate, persist, or consume criterion quota during these steps.
 	if questionNumber == 1 {
 		if timeExpired {
 			s.markRemainingNotAssessed(ctx, sessionCode, areas)
 			s.finishSession(ctx, sessionCode)
 			return &AnswerResult{Done: true, TimerRemainingS: 0}, nil
+		}
+
+		if len(answers) == 0 {
+			return &AnswerResult{
+				Done: false,
+				NextQuestion: ReadinessQuestion(
+					currentArea.Area,
+					s.readinessTextEs,
+					s.readinessTextEn,
+					2,
+				),
+				TimerRemainingS: timeRemainingS,
+			}, nil
 		}
 
 		areaCfg, _ := s.findAreaConfig(currentArea.Area)
@@ -189,6 +218,12 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 			},
 			TimerRemainingS: timeRemainingS,
 		}, nil
+	}
+
+	if len(answers) == 0 && questionNumber == 2 && timeExpired {
+		s.markRemainingNotAssessed(ctx, sessionCode, areas)
+		s.finishSession(ctx, sessionCode)
+		return &AnswerResult{Done: true, TimerRemainingS: 0}, nil
 	}
 
 	// 3. Build AI turn context.
@@ -251,6 +286,29 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 			"returned_criterion_id", aiResult.Evaluation.CurrentCriterion.ID,
 		)
 		aiResult.Evaluation = nil
+	}
+
+	// First-entry readiness answer (question #2) should not be persisted or scored.
+	// Use AI only to generate the first criterion question.
+	if len(answers) == 0 && questionNumber == 2 {
+		nextQuestion := strings.TrimSpace(aiResult.NextQuestion)
+		if nextQuestion == "" {
+			nextQuestion = strings.TrimSpace(areaCfg.FallbackQuestion)
+		}
+		if nextQuestion == "" {
+			nextQuestion = fmt.Sprintf("Please tell me about %s.", areaCfg.Label)
+		}
+		return &AnswerResult{
+			Done: false,
+			NextQuestion: &Question{
+				TextEs:         nextQuestion,
+				TextEn:         nextQuestion,
+				Area:           currentArea.Area,
+				QuestionNumber: 3,
+				TotalQuestions: EstimatedTotalQuestions,
+			},
+			TimerRemainingS: timeRemainingS,
+		}, nil
 	}
 
 	// 5. Process the turn (persist answer, update areas).

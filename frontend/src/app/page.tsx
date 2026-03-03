@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { NavHeader } from "../../components/NavHeader";
@@ -9,14 +9,19 @@ import { Button } from "../../components/Button";
 import { Card } from "../../components/Card";
 import { Input } from "../../components/Input";
 import { api } from "@/lib/api";
+import { resolveLang, withLang, writeStoredLang } from "@/lib/language";
 
 export default function LandingPage() {
   const router = useRouter();
-  const [lang, setLang] = useState<"es" | "en">("es");
+  const [lang, setLang] = useState<"es" | "en">(() => resolveLang(null));
   const [resumeCode, setResumeCode] = useState("");
   const [resumePin, setResumePin] = useState("");
   const [resumeError, setResumeError] = useState("");
   const [resumeLoading, setResumeLoading] = useState(false);
+
+  useEffect(() => {
+    writeStoredLang(lang);
+  }, [lang]);
 
   async function handleResume() {
     if (!resumeCode.trim() || !resumePin.trim()) return;
@@ -31,7 +36,7 @@ export default function LandingPage() {
 
       if (ok) {
         document.cookie = `session_${resumeCode.trim()}=${resumePin.trim()}; path=/; max-age=86400; SameSite=Lax`;
-        router.push(`/session/${resumeCode.trim()}`);
+        router.push(withLang(`/session/${resumeCode.trim()}`, lang));
       } else if (status === 404) {
         setResumeError(
           lang === "es"
@@ -68,7 +73,7 @@ export default function LandingPage() {
       subheadline:
         "Una herramienta de práctica confidencial con reporte bilingüe.",
       steps: [
-        "Lea el descargo de responsabilidad y acepte los términos",
+        "Lea Antes de Comenzar y acepte los términos",
         "Ingrese un cupón o pague en línea",
         "Realice la entrevista simulada — una pregunta a la vez",
         "Descargue su reporte de evaluación bilingüe",
@@ -81,7 +86,7 @@ export default function LandingPage() {
       subheadline:
         "A confidential practice tool with a bilingual assessment report.",
       steps: [
-        "Read the disclaimer and agree to the terms",
+        "Read Before You Start and agree to the terms",
         "Enter a coupon code or pay online",
         "Complete the simulated interview — one question at a time",
         "Download your bilingual assessment report",
@@ -116,7 +121,7 @@ export default function LandingPage() {
           </Card>
 
           <div className="mb-6">
-            <Link href="/disclaimer">
+            <Link href={withLang("/beforeYouStart", lang)}>
               <Button fullWidth>{t.cta}</Button>
             </Link>
           </div>

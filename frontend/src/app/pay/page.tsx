@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { NavHeader } from "@components/NavHeader";
 import { Footer } from "@components/Footer";
 import { Button } from "@components/Button";
@@ -9,13 +9,27 @@ import { Card } from "@components/Card";
 import { Input } from "@components/Input";
 import { Alert } from "@components/Alert";
 import { api } from "@/lib/api";
+import { parseLang, resolveLang, withLang, writeStoredLang } from "@/lib/language";
 
 export default function PayPage() {
   const router = useRouter();
-  const [lang, setLang] = useState<"es" | "en">("es");
+  const searchParams = useSearchParams();
+  const requestedLang = searchParams.get("lang");
+  const [lang, setLang] = useState<"es" | "en">(() => resolveLang(requestedLang));
   const [coupon, setCoupon] = useState("");
   const [couponError, setCouponError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    writeStoredLang(lang);
+  }, [lang]);
+
+  useEffect(() => {
+    const langFromQuery = parseLang(requestedLang);
+    if (langFromQuery) {
+      setLang(langFromQuery);
+    }
+  }, [requestedLang]);
 
   async function handleCouponSubmit() {
     if (!coupon.trim()) return;
@@ -31,7 +45,7 @@ export default function PayPage() {
       if (ok && data?.valid && data.session_code) {
         // Store PIN in sessionStorage so the session page can display it
         sessionStorage.setItem(`pin_${data.session_code}`, data.pin ?? "");
-        router.push(`/session/${data.session_code}`);
+        router.push(withLang(`/session/${data.session_code}`, lang));
       } else {
         setCouponError(
           lang === "es"
@@ -92,7 +106,6 @@ export default function PayPage() {
             <form onSubmit={(e) => { e.preventDefault(); handleCouponSubmit(); }} className="space-y-4">
               <Input
                 label={lang === "es" ? "Cupón" : "Coupon"}
-                labelEs={lang === "en" ? "Cupón" : undefined}
                 placeholder="EJEMPLO-1234"
                 value={coupon}
                 onChange={(e) => setCoupon(e.target.value)}
