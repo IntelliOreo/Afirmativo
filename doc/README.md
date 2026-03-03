@@ -114,6 +114,8 @@ curl -X POST http://localhost:8080/api/coupon/validate \
 ```bash
 cd database
 go run main.go load_coupon
+go run main.go load_coupon --prefix TEST --count 5 --max-uses 100 --discount-pct 100 --source manual_test
+
 ```
 
 ### Regenerating sqlc code
