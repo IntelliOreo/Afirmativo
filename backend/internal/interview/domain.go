@@ -163,6 +163,7 @@ type AITurnContext struct {
 	CurrentAreaSlug    string
 	CurrentAreaID      int
 	CurrentAreaIndex   int // position in the ordered area list (0-based)
+	IsOpeningTurn      bool
 	CurrentAreaLabel   string
 	Description        string
 	SufficiencyReqs    string

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { NavHeader } from "@components/NavHeader";
 import { Footer } from "@components/Footer";
@@ -11,7 +11,7 @@ import { Alert } from "@components/Alert";
 import { api } from "@/lib/api";
 import { parseLang, resolveLang, withLang, writeStoredLang } from "@/lib/language";
 
-export default function PayPage() {
+function PayPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const requestedLang = searchParams.get("lang");
@@ -163,5 +163,13 @@ export default function PayPage() {
 
       <Footer />
     </div>
+  );
+}
+
+export default function PayPage() {
+  return (
+    <Suspense fallback={null}>
+      <PayPageContent />
+    </Suspense>
   );
 }

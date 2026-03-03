@@ -253,7 +253,46 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 			return nil, fmt.Errorf("advance readiness step: %w", err)
 		}
 
+		answers, err := s.store.GetAnswersBySession(dbCtx, sessionCode)
+		if err != nil {
+			return nil, fmt.Errorf("get answers: %w", err)
+		}
+		areaCfg, areaIndex := s.findAreaConfig(currentArea.Area)
+		criteriaCoverage := s.buildCriteriaCoverage(areas)
+		criteriaRemaining := s.countCriteriaRemaining(areas)
+		transcript := s.buildTranscript(answers)
+
 		nextQuestion := s.fallbackQuestionForArea(currentArea.Area)
+		turnCtx := &AITurnContext{
+			PreferredLanguage:  preferredLanguage,
+			CurrentAreaSlug:    currentArea.Area,
+			CurrentAreaID:      areaCfg.ID,
+			CurrentAreaIndex:   areaIndex,
+			IsOpeningTurn:      true,
+			CurrentAreaLabel:   areaCfg.Label,
+			Description:        areaCfg.Description,
+			SufficiencyReqs:    areaCfg.SufficiencyRequirements,
+			AreaStatus:         string(currentArea.Status),
+			IsPreAddressed:     currentArea.Status == AreaStatusPreAddressed,
+			FollowUpsRemaining: MaxQuestionsPerArea - currentArea.QuestionsCount,
+			TotalBudgetS:       sess.InterviewBudgetSeconds,
+			TimeRemainingS:     timeRemainingS,
+			QuestionsRemaining: EstimatedTotalQuestions - len(answers),
+			CriteriaRemaining:  criteriaRemaining,
+			CriteriaCoverage:   criteriaCoverage,
+			Transcript:         transcript,
+		}
+
+		slog.Debug("calling AI for first criterion question", "session", sessionCode, "area", currentArea.Area)
+		aiResult, err := s.aiClient.CallAI(ctx, turnCtx)
+		if err != nil {
+			slog.Warn("AI API error on first criterion question, using fallback", "error", err, "area", currentArea.Area)
+		} else if candidate := strings.TrimSpace(aiResult.NextQuestion); candidate != "" {
+			nextQuestion = candidate
+		} else {
+			slog.Warn("AI returned empty first criterion question, using fallback", "session", sessionCode, "area", currentArea.Area)
+		}
+
 		return &AnswerResult{
 			Done: false,
 			NextQuestion: &Question{
@@ -292,6 +331,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 			CurrentAreaSlug:    currentArea.Area,
 			CurrentAreaID:      areaCfg.ID,
 			CurrentAreaIndex:   areaIndex,
+			IsOpeningTurn:      false,
 			CurrentAreaLabel:   areaCfg.Label,
 			Description:        areaCfg.Description,
 			SufficiencyReqs:    areaCfg.SufficiencyRequirements,
@@ -334,7 +374,8 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 		}
 
 		preAddressed := s.extractPreAddressed(aiResult.Evaluation.OtherCriteriaAddressed)
-		result, err := s.store.ProcessCriterionTurn(dbCtx, ProcessCriterionTurnParams{
+		processCtx, processCancel := context.WithTimeout(ctx, dbTimeout)
+		result, err := s.store.ProcessCriterionTurn(processCtx, ProcessCriterionTurnParams{
 			SessionCode:         sessionCode,
 			ExpectedTurnID:      turnID,
 			CurrentArea:         currentArea.Area,
@@ -347,6 +388,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 			MaxQuestionsPerArea: MaxQuestionsPerArea,
 			NextTurnID:          nextTurnID,
 		})
+		processCancel()
 		if err != nil {
 			if errors.Is(err, ErrTurnConflict) {
 				return nil, ErrTurnConflict
@@ -354,7 +396,9 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 			return nil, fmt.Errorf("process criterion turn: %w", err)
 		}
 
-		areas, _, err = s.refreshAreaState(dbCtx, sessionCode)
+		refreshCtx, refreshCancel := context.WithTimeout(ctx, dbTimeout)
+		areas, _, err = s.refreshAreaState(refreshCtx, sessionCode)
+		refreshCancel()
 		if err != nil {
 			return nil, fmt.Errorf("refresh areas after criterion: %w", err)
 		}
@@ -380,8 +424,60 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 		nextQuestion := strings.TrimSpace(aiResult.NextQuestion)
 		if result.Action == "next" {
 			nextQuestion = s.fallbackQuestionForArea(result.NextArea)
+
+			var nextAreaState *QuestionArea
+			for i := range areas {
+				if areas[i].Area == result.NextArea {
+					nextAreaState = &areas[i]
+					break
+				}
+			}
+			if nextAreaState != nil {
+				answersCtx, answersCancel := context.WithTimeout(ctx, dbTimeout)
+				latestAnswers, err := s.store.GetAnswersBySession(answersCtx, sessionCode)
+				answersCancel()
+				if err != nil {
+					slog.Warn("failed to load answers for next-area opening question", "session", sessionCode, "area", result.NextArea, "error", err)
+				} else {
+					nextAreaCfg, nextAreaIndex := s.findAreaConfig(result.NextArea)
+					nextAreaCoverage := s.buildCriteriaCoverage(areas)
+					nextAreaRemaining := s.countCriteriaRemaining(areas)
+					nextAreaTranscript := s.buildTranscript(latestAnswers)
+
+					openingTurnCtx := &AITurnContext{
+						PreferredLanguage:  preferredLanguage,
+						CurrentAreaSlug:    result.NextArea,
+						CurrentAreaID:      nextAreaCfg.ID,
+						CurrentAreaIndex:   nextAreaIndex,
+						IsOpeningTurn:      true,
+						CurrentAreaLabel:   nextAreaCfg.Label,
+						Description:        nextAreaCfg.Description,
+						SufficiencyReqs:    nextAreaCfg.SufficiencyRequirements,
+						AreaStatus:         string(nextAreaState.Status),
+						IsPreAddressed:     nextAreaState.Status == AreaStatusPreAddressed,
+						FollowUpsRemaining: MaxQuestionsPerArea - nextAreaState.QuestionsCount,
+						TotalBudgetS:       sess.InterviewBudgetSeconds,
+						TimeRemainingS:     timeRemainingS,
+						QuestionsRemaining: EstimatedTotalQuestions - len(latestAnswers),
+						CriteriaRemaining:  nextAreaRemaining,
+						CriteriaCoverage:   nextAreaCoverage,
+						Transcript:         nextAreaTranscript,
+					}
+
+					slog.Debug("calling AI for next criterion opening question", "session", sessionCode, "area", result.NextArea)
+					nextAreaAIResult, err := s.aiClient.CallAI(ctx, openingTurnCtx)
+					if err != nil {
+						slog.Warn("AI API error on next criterion opening question, using fallback", "error", err, "area", result.NextArea)
+					} else if candidate := strings.TrimSpace(nextAreaAIResult.NextQuestion); candidate != "" {
+						nextQuestion = candidate
+					} else {
+						slog.Warn("AI returned empty next criterion opening question, using fallback", "session", sessionCode, "area", result.NextArea)
+					}
+				}
+			}
 		}
 		if nextQuestion == "" {
+			slog.Warn("next question is empty after AI processing, using fallback", "session", sessionCode, "area", result.NextArea)
 			nextQuestion = s.fallbackQuestionForArea(result.NextArea)
 		}
 

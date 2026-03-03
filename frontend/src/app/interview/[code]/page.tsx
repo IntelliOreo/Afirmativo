@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { Suspense, useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { NavHeader } from "@components/NavHeader";
@@ -87,28 +87,22 @@ function parseDisclaimerBlocks(rawText: string): DisclaimerBlock[] {
   return blocks;
 }
 
-export default function InterviewPage() {
+function InterviewPageContent() {
   const params = useParams();
   const searchParams = useSearchParams();
   const router = useRouter();
   const code = params.code as string;
   const requestedLang = searchParams.get("lang");
+  const reportPath = `/report/${code}`;
 
-  const [lang, setLang] = useState<"es" | "en">(() => {
-    if (requestedLang === "en" || requestedLang === "es") return requestedLang;
-    if (typeof window !== "undefined") {
-      const storedInterviewLang = parseLang(sessionStorage.getItem(`interview_lang_${code}`));
-      if (storedInterviewLang) return storedInterviewLang;
-      const storedUiLang = parseLang(sessionStorage.getItem("ui_lang"));
-      if (storedUiLang) return storedUiLang;
-    }
-    return "es";
-  });
+  const [lang, setLang] = useState<"es" | "en">("es");
+  const [langInitialized, setLangInitialized] = useState(false);
   const [status, setStatus] = useState<InterviewStatus>("guard");
   const [question, setQuestion] = useState<Question | null>(null);
   const [textAnswer, setTextAnswer] = useState("");
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [error, setError] = useState("");
+  const [isInterviewCompleted, setIsInterviewCompleted] = useState(false);
   const [forceSubmit, setForceSubmit] = useState(false);
   const [hasReachedDisclaimerBottom, setHasReachedDisclaimerBottom] = useState(false);
   const disclaimerScrollRef = useRef<HTMLDivElement | null>(null);
@@ -124,11 +118,51 @@ export default function InterviewPage() {
   statusRef.current = status;
 
   useEffect(() => {
+    const langFromQuery = parseLang(requestedLang);
+    if (langFromQuery) {
+      setLang(langFromQuery);
+      setLangInitialized(true);
+      return;
+    }
+
+    if (typeof window !== "undefined") {
+      const storedInterviewLang = parseLang(sessionStorage.getItem(`interview_lang_${code}`));
+      if (storedInterviewLang) {
+        setLang(storedInterviewLang);
+        setLangInitialized(true);
+        return;
+      }
+      const storedUiLang = parseLang(sessionStorage.getItem("ui_lang"));
+      if (storedUiLang) {
+        setLang(storedUiLang);
+      }
+    }
+
+    setLangInitialized(true);
+  }, [code, requestedLang]);
+
+  useEffect(() => {
+    if (!langInitialized) return;
     if (typeof window !== "undefined") {
       writeStoredLang(lang);
       sessionStorage.setItem(`interview_lang_${code}`, lang);
     }
-  }, [code, lang]);
+  }, [code, lang, langInitialized]);
+
+  const goToReport = useCallback(() => {
+    if (typeof window !== "undefined") {
+      const hasSessionCookie = document.cookie
+        .split("; ")
+        .some((row) => row.startsWith(`session_${code}=`));
+      if (!hasSessionCookie) {
+        router.push(`/session/${code}`);
+        return;
+      }
+      window.location.assign(reportPath);
+      return;
+    }
+    router.push(reportPath);
+  }, [code, reportPath, router]);
 
   useEffect(() => {
     if (question?.kind === "disclaimer") {
@@ -170,12 +204,14 @@ export default function InterviewPage() {
         credentials: "include",
       });
       if (!ok || !data) throw new Error(data?.error ?? "Failed to submit");
-      router.push(`/report/${code}`);
+      setStatus("done");
+      goToReport();
     } catch {
       // If the call fails, redirect to report anyway — session is done server-side.
-      router.push(`/report/${code}`);
+      setStatus("done");
+      goToReport();
     }
-  }, [code, router]);
+  }, [code, goToReport]);
 
   // Countdown timer — ticks every second, auto-submits at 0
   useEffect(() => {
@@ -198,6 +234,7 @@ export default function InterviewPage() {
 
   // Session guard: check for session cookie before starting
   useEffect(() => {
+    if (!langInitialized) return;
     const cookiePin = document.cookie
       .split("; ")
       .find((row) => row.startsWith(`session_${code}=`))
@@ -211,12 +248,20 @@ export default function InterviewPage() {
     async function startInterview() {
       setStatus("loading");
       try {
-        const { ok, data } = await api<StartResponse>("/api/interview/start", {
+        const { ok, status: httpStatus, data } = await api<StartResponse & { error?: string; code?: string }>("/api/interview/start", {
           method: "POST",
           body: { sessionCode: code, language: langRef.current },
           credentials: "include",
         });
-        if (!ok || !data) throw new Error(data?.error ?? "Failed to start");
+        if (!ok || !data) {
+          const errorMessage = data?.error ?? "Failed to start";
+          const completed = httpStatus === 409
+            || data?.code === "INTERVIEW_COMPLETED"
+            || errorMessage.toLowerCase().includes("completed");
+          setIsInterviewCompleted(completed);
+          throw new Error(errorMessage);
+        }
+        setIsInterviewCompleted(false);
         setQuestion(data.question);
         setSecondsLeft(data.timerRemainingS);
         if (data.language === "en" || data.language === "es") {
@@ -229,7 +274,7 @@ export default function InterviewPage() {
       }
     }
     startInterview();
-  }, [code]);
+  }, [code, langInitialized]);
 
   async function submitAnswer(answerValue: string) {
     if (status !== "active") return;
@@ -249,7 +294,9 @@ export default function InterviewPage() {
       if (!ok || !data) throw new Error(data?.error ?? "Failed to submit");
 
       if (data.done) {
-        router.push(`/report/${code}`);
+        setStatus("done");
+        setQuestion(null);
+        goToReport();
       } else {
         setQuestion(data.nextQuestion ?? null);
         setTextAnswer("");
@@ -346,29 +393,45 @@ export default function InterviewPage() {
           )}
 
           {status === "error" && (
-            <Alert variant="error">
-              {lang === "es" ? "Error: " : "Error: "}
-              {error}
-            </Alert>
+            <>
+              <Alert variant="error" className="mb-4">
+                {lang === "es" ? "Error: " : "Error: "}
+                {error}
+              </Alert>
+              {isInterviewCompleted && (
+                <>
+                  <Button fullWidth className="mb-3" onClick={goToReport}>
+                    {lang === "es" ? "Ir al reporte" : "Go to report"}
+                  </Button>
+                  <Link href={reportPath} className="block text-center text-sm underline text-primary">
+                    {lang === "es" ? "Abrir reporte manualmente" : "Open report manually"}
+                  </Link>
+                  <Link href={`/session/${code}`} className="block text-center text-sm underline text-primary mt-2">
+                    {lang === "es" ? "Recuperar sesión con PIN" : "Recover session with PIN"}
+                  </Link>
+                </>
+              )}
+            </>
           )}
 
           {status === "done" && (
             <Card>
               <h1 className="text-2xl font-bold text-primary-dark mb-4">
-                {lang === "es" ? "Entrevista finalizada" : "Interview ended"}
+                {lang === "es" ? "Entrevista completada" : "Interview completed"}
               </h1>
               <p className="text-primary-darkest mb-4">
                 {lang === "es"
-                  ? "Su entrevista de práctica ha terminado."
-                  : "Your practice interview has ended."}
+                  ? "Redirigiendo al reporte..."
+                  : "Redirecting to report..."}
               </p>
-              <Alert variant="info" className="mb-6">
-                {lang === "es"
-                  ? "La generación del reporte aún no está disponible. Esta función está en desarrollo."
-                  : "Report generation is not yet available. This feature is under development."}
-              </Alert>
+              <Button fullWidth className="mb-3" onClick={goToReport}>
+                {lang === "es" ? "Ir al reporte" : "Go to report"}
+              </Button>
+              <Link href={reportPath} className="block text-center text-sm underline text-primary mb-3">
+                {lang === "es" ? "Abrir reporte manualmente" : "Open report manually"}
+              </Link>
               <Link href="/">
-                <Button fullWidth>
+                <Button fullWidth variant="secondary">
                   {lang === "es" ? "Volver al inicio" : "Back to home"}
                 </Button>
               </Link>
@@ -514,5 +577,13 @@ export default function InterviewPage() {
 
       <Footer />
     </div>
+  );
+}
+
+export default function InterviewPage() {
+  return (
+    <Suspense fallback={null}>
+      <InterviewPageContent />
+    </Suspense>
   );
 }

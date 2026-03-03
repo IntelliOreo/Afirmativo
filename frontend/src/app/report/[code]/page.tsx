@@ -33,7 +33,6 @@ export default function ReportPage() {
   const [report, setReport] = useState<Report | null>(null);
   const [error, setError] = useState("");
 
-  // Session guard: check for session cookie
   useEffect(() => {
     const cookiePin = document.cookie
       .split("; ")

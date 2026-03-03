@@ -13,15 +13,22 @@ import { resolveLang, withLang, writeStoredLang } from "@/lib/language";
 
 export default function LandingPage() {
   const router = useRouter();
-  const [lang, setLang] = useState<"es" | "en">(() => resolveLang(null));
+  const [lang, setLang] = useState<"es" | "en">("es");
+  const [hasInitializedLang, setHasInitializedLang] = useState(false);
   const [resumeCode, setResumeCode] = useState("");
   const [resumePin, setResumePin] = useState("");
   const [resumeError, setResumeError] = useState("");
   const [resumeLoading, setResumeLoading] = useState(false);
 
   useEffect(() => {
+    setLang(resolveLang(null));
+    setHasInitializedLang(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hasInitializedLang) return;
     writeStoredLang(lang);
-  }, [lang]);
+  }, [hasInitializedLang, lang]);
 
   async function handleResume() {
     if (!resumeCode.trim() || !resumePin.trim()) return;

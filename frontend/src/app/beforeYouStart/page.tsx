@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Suspense, useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { NavHeader } from "@components/NavHeader";
 import { Footer } from "@components/Footer";
@@ -12,7 +12,7 @@ import { parseLang, resolveLang, withLang, writeStoredLang } from "@/lib/languag
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
 
-export default function BeforeYouStartPage() {
+function BeforeYouStartPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const requestedLang = searchParams.get("lang");
@@ -88,5 +88,13 @@ export default function BeforeYouStartPage() {
 
       <Footer />
     </div>
+  );
+}
+
+export default function BeforeYouStartPage() {
+  return (
+    <Suspense fallback={null}>
+      <BeforeYouStartPageContent />
+    </Suspense>
   );
 }

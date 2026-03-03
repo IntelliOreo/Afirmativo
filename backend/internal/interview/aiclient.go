@@ -267,6 +267,10 @@ func buildUserMessage(tc *AITurnContext) string {
 		requiredLanguageCode = "en"
 		requiredLanguageLabel = "English"
 	}
+	openingTurnInstruction := ""
+	if tc.IsOpeningTurn {
+		openingTurnInstruction = "\n\nThis is an opening turn for the current criterion. There is no answer to evaluate for this criterion in this turn. Set evaluation to null and generate an opening question for the current criterion."
+	}
 
 	return fmt.Sprintf(`CURRENT CRITERION:
 {
@@ -293,7 +297,7 @@ TRANSCRIPT:
 %s
 
 Please evaluate the candidate's most recent answer against the current criterion and generate the next question.
-Return next_question strictly in the required next question language. Do not switch languages.`,
+Return next_question strictly in the required next question language. Do not switch languages.%s`,
 		tc.CurrentAreaID,
 		tc.CurrentAreaLabel,
 		tc.Description,
@@ -308,6 +312,7 @@ Return next_question strictly in the required next question language. Do not swi
 		requiredLanguageCode,
 		string(criteriaJSON),
 		string(transcriptJSON),
+		openingTurnInstruction,
 	)
 }
 

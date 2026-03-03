@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { Suspense, useState, useEffect, useCallback } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { NavHeader } from "@components/NavHeader";
 import { Footer } from "@components/Footer";
@@ -12,7 +12,7 @@ import { parseLang, resolveLang, writeStoredLang } from "@/lib/language";
 
 type View = "loading" | "hub" | "recovery";
 
-export default function SessionPage() {
+function SessionPageContent() {
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -330,5 +330,13 @@ export default function SessionPage() {
 
       <Footer />
     </div>
+  );
+}
+
+export default function SessionPage() {
+  return (
+    <Suspense fallback={null}>
+      <SessionPageContent />
+    </Suspense>
   );
 }

@@ -148,6 +148,11 @@ func (c *OllamaAIClient) CallAI(ctx context.Context, turnCtx *AITurnContext) (*A
 	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
 		return nil, fmt.Errorf("parse AI response JSON: %w", err)
 	}
+	if turnCtx.IsOpeningTurn {
+		// Opening turns only need next_question; some models emit partial
+		// evaluation objects even when instructed to return null.
+		result.Evaluation = nil
+	}
 	if err := validateAIResponse(&result); err != nil {
 		return nil, err
 	}
