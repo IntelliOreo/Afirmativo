@@ -34,6 +34,8 @@ type questionResponse struct {
 	TextEs         string `json:"textEs"`
 	TextEn         string `json:"textEn"`
 	Area           string `json:"area"`
+	Kind           string `json:"kind"`
+	TurnID         string `json:"turnId"`
 	QuestionNumber int    `json:"questionNumber"`
 	TotalQuestions int    `json:"totalQuestions"`
 }
@@ -92,6 +94,8 @@ func (h *Handler) HandleStart(w http.ResponseWriter, r *http.Request) {
 			TextEs:         q.TextEs,
 			TextEn:         q.TextEn,
 			Area:           q.Area,
+			Kind:           string(q.Kind),
+			TurnID:         q.TurnID,
 			QuestionNumber: q.QuestionNumber,
 			TotalQuestions: q.TotalQuestions,
 		},
@@ -104,10 +108,10 @@ func (h *Handler) HandleStart(w http.ResponseWriter, r *http.Request) {
 const maxAnswerBody = 10 * 1024 // 10KB per spec
 
 type answerRequest struct {
-	SessionCode    string `json:"sessionCode"`
-	AnswerText     string `json:"answerText"`
-	QuestionNumber int    `json:"questionNumber"`
-	QuestionText   string `json:"questionText"` // echoed back from frontend
+	SessionCode  string `json:"sessionCode"`
+	AnswerText   string `json:"answerText"`
+	QuestionText string `json:"questionText"` // echoed back from frontend
+	TurnID       string `json:"turnId"`
 }
 
 // HandleAnswer accepts a text answer, calls the AI API for the next question, and returns it.
@@ -122,13 +126,24 @@ func (h *Handler) HandleAnswer(w http.ResponseWriter, r *http.Request) {
 		shared.WriteError(w, shared.ErrBadRequest, "sessionCode is required", "BAD_REQUEST")
 		return
 	}
+	if strings.TrimSpace(req.TurnID) == "" {
+		shared.WriteError(w, shared.ErrBadRequest, "turnId is required", "BAD_REQUEST")
+		return
+	}
 
 	slog.Debug("interview/answer payload", "body", req)
 
-	result, err := h.svc.SubmitAnswer(r.Context(), req.SessionCode, req.AnswerText, req.QuestionText, req.QuestionNumber)
+	result, err := h.svc.SubmitAnswer(r.Context(), req.SessionCode, req.AnswerText, req.QuestionText, req.TurnID)
 	if err != nil {
-		slog.Error("answer submission failed", "error", err)
-		shared.WriteError(w, shared.ErrInternal, "Internal server error", "INTERNAL_ERROR")
+		switch {
+		case errors.Is(err, ErrTurnConflict):
+			shared.WriteError(w, shared.ErrConflict, "Turn is stale or out of order", "TURN_CONFLICT")
+		case errors.Is(err, ErrInvalidFlow):
+			shared.WriteError(w, shared.ErrConflict, "Interview flow is not in a valid state", "FLOW_INVALID")
+		default:
+			slog.Error("answer submission failed", "error", err)
+			shared.WriteError(w, shared.ErrInternal, "Internal server error", "INTERNAL_ERROR")
+		}
 		return
 	}
 
@@ -144,6 +159,8 @@ func (h *Handler) HandleAnswer(w http.ResponseWriter, r *http.Request) {
 			TextEs:         q.TextEs,
 			TextEn:         q.TextEn,
 			Area:           q.Area,
+			Kind:           string(q.Kind),
+			TurnID:         q.TurnID,
 			QuestionNumber: q.QuestionNumber,
 			TotalQuestions: q.TotalQuestions,
 		},

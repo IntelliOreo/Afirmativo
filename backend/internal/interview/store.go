@@ -41,6 +41,21 @@ type Store interface {
 
 	// GetAnswerCount returns the number of answers for a session.
 	GetAnswerCount(ctx context.Context, sessionCode string) (int, error)
+
+	// GetFlowState returns the session's interview flow pointer.
+	GetFlowState(ctx context.Context, sessionCode string) (*FlowState, error)
+
+	// PrepareDisclaimerStep sets flow_step=disclaimer and assigns the expected turn id.
+	PrepareDisclaimerStep(ctx context.Context, sessionCode, turnID string) (*FlowState, error)
+
+	// AdvanceNonCriterionStep records a non-criterion event and advances flow state atomically.
+	AdvanceNonCriterionStep(ctx context.Context, params AdvanceNonCriterionStepParams) (*FlowState, error)
+
+	// ProcessCriterionTurn persists answer + area transitions + flow pointer atomically.
+	ProcessCriterionTurn(ctx context.Context, params ProcessCriterionTurnParams) (*ProcessCriterionTurnResult, error)
+
+	// MarkFlowDone clears expected turn and marks flow as done.
+	MarkFlowDone(ctx context.Context, sessionCode string) error
 }
 
 // SaveAnswerParams holds the inputs for saving an answer.
@@ -52,4 +67,40 @@ type SaveAnswerParams struct {
 	TranscriptEn string
 	AiEvaluation []byte // JSON blob
 	Sufficiency  string
+}
+
+type AdvanceNonCriterionStepParams struct {
+	SessionCode    string
+	ExpectedTurnID string
+	CurrentStep    FlowStep
+	NextStep       FlowStep
+	NextTurnID     string
+	EventType      string
+	AnswerText     string
+}
+
+type ProcessCriterionTurnParams struct {
+	SessionCode         string
+	ExpectedTurnID      string
+	CurrentArea         string
+	QuestionText        string
+	AnswerText          string
+	PreferredLanguage   string
+	Evaluation          *Evaluation
+	PreAddressed        []PreAddressedArea
+	OrderedAreaSlugs    []string
+	MaxQuestionsPerArea int
+	NextTurnID          string
+}
+
+type PreAddressedArea struct {
+	Slug     string
+	Evidence string
+}
+
+type ProcessCriterionTurnResult struct {
+	Action         string
+	NextArea       string
+	QuestionNumber int
+	NewCount       int
 }

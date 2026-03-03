@@ -3,8 +3,10 @@ package interview
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/afirmativo/backend/internal/sqlgen"
 	"github.com/jackc/pgx/v5"
@@ -205,4 +207,330 @@ func uuidToString(u pgtype.UUID) string {
 	b := u.Bytes
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
 		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// GetFlowState returns the persisted interview flow pointer for a session.
+func (s *PostgresStore) GetFlowState(ctx context.Context, sessionCode string) (*FlowState, error) {
+	row := s.pool.QueryRow(ctx,
+		`SELECT flow_step, COALESCE(expected_turn_id, ''), display_question_number
+		 FROM sessions
+		 WHERE session_code = $1`,
+		sessionCode,
+	)
+
+	var step string
+	var turnID string
+	var questionNumber int
+	if err := row.Scan(&step, &turnID, &questionNumber); err != nil {
+		return nil, fmt.Errorf("get flow state: %w", err)
+	}
+
+	return &FlowState{
+		Step:           FlowStep(step),
+		ExpectedTurnID: turnID,
+		QuestionNumber: questionNumber,
+	}, nil
+}
+
+// PrepareDisclaimerStep forces the flow pointer to disclaimer and sets turn id.
+func (s *PostgresStore) PrepareDisclaimerStep(ctx context.Context, sessionCode, turnID string) (*FlowState, error) {
+	row := s.pool.QueryRow(ctx,
+		`UPDATE sessions
+		 SET flow_step = 'disclaimer',
+		     expected_turn_id = $2
+		 WHERE session_code = $1
+		 RETURNING flow_step, COALESCE(expected_turn_id, ''), display_question_number`,
+		sessionCode,
+		turnID,
+	)
+
+	var step string
+	var expectedTurnID string
+	var questionNumber int
+	if err := row.Scan(&step, &expectedTurnID, &questionNumber); err != nil {
+		return nil, fmt.Errorf("prepare disclaimer step: %w", err)
+	}
+
+	return &FlowState{
+		Step:           FlowStep(step),
+		ExpectedTurnID: expectedTurnID,
+		QuestionNumber: questionNumber,
+	}, nil
+}
+
+// AdvanceNonCriterionStep records an event and advances flow atomically.
+func (s *PostgresStore) AdvanceNonCriterionStep(ctx context.Context, params AdvanceNonCriterionStepParams) (*FlowState, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback on committed tx is a no-op
+
+	var currentStep string
+	var expectedTurnID string
+	var questionNumber int
+	lockRow := tx.QueryRow(ctx,
+		`SELECT flow_step, COALESCE(expected_turn_id, ''), display_question_number
+		 FROM sessions
+		 WHERE session_code = $1
+		 FOR UPDATE`,
+		params.SessionCode,
+	)
+	if err := lockRow.Scan(&currentStep, &expectedTurnID, &questionNumber); err != nil {
+		return nil, fmt.Errorf("lock flow state: %w", err)
+	}
+
+	if FlowStep(currentStep) != params.CurrentStep || expectedTurnID != params.ExpectedTurnID {
+		return nil, ErrTurnConflict
+	}
+
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO interview_events (session_code, event_type, answer_text)
+		 VALUES ($1, $2, $3)`,
+		params.SessionCode,
+		params.EventType,
+		params.AnswerText,
+	); err != nil {
+		return nil, fmt.Errorf("insert interview event: %w", err)
+	}
+
+	updateRow := tx.QueryRow(ctx,
+		`UPDATE sessions
+		 SET flow_step = $2,
+		     expected_turn_id = $3,
+		     display_question_number = display_question_number + 1
+		 WHERE session_code = $1
+		 RETURNING flow_step, COALESCE(expected_turn_id, ''), display_question_number`,
+		params.SessionCode,
+		string(params.NextStep),
+		params.NextTurnID,
+	)
+
+	var newStep string
+	var newTurnID string
+	var newQuestionNumber int
+	if err := updateRow.Scan(&newStep, &newTurnID, &newQuestionNumber); err != nil {
+		return nil, fmt.Errorf("advance non-criterion flow: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit tx: %w", err)
+	}
+
+	return &FlowState{
+		Step:           FlowStep(newStep),
+		ExpectedTurnID: newTurnID,
+		QuestionNumber: newQuestionNumber,
+	}, nil
+}
+
+// ProcessCriterionTurn persists one scored criterion answer and transition atomically.
+func (s *PostgresStore) ProcessCriterionTurn(ctx context.Context, params ProcessCriterionTurnParams) (*ProcessCriterionTurnResult, error) {
+	if params.Evaluation == nil {
+		return nil, ErrInvalidFlow
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // rollback on committed tx is a no-op
+
+	var currentStep string
+	var expectedTurnID string
+	lockRow := tx.QueryRow(ctx,
+		`SELECT flow_step, COALESCE(expected_turn_id, '')
+		 FROM sessions
+		 WHERE session_code = $1
+		 FOR UPDATE`,
+		params.SessionCode,
+	)
+	if err := lockRow.Scan(&currentStep, &expectedTurnID); err != nil {
+		return nil, fmt.Errorf("lock criterion flow: %w", err)
+	}
+	if FlowStep(currentStep) != FlowStepCriterion || expectedTurnID != params.ExpectedTurnID {
+		return nil, ErrTurnConflict
+	}
+
+	var transcriptEs, transcriptEn string
+	if strings.EqualFold(strings.TrimSpace(params.PreferredLanguage), "en") {
+		transcriptEn = params.AnswerText
+	} else {
+		transcriptEs = params.AnswerText
+	}
+
+	evalJSON, _ := json.Marshal(params.Evaluation)
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO answers (session_code, area, question_text, transcript_es, transcript_en, ai_evaluation, sufficiency)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		params.SessionCode,
+		params.CurrentArea,
+		params.QuestionText,
+		nullIfEmpty(transcriptEs),
+		nullIfEmpty(transcriptEn),
+		evalJSON,
+		nullIfEmpty(params.Evaluation.CurrentCriterion.Status),
+	); err != nil {
+		return nil, fmt.Errorf("insert answer: %w", err)
+	}
+
+	var newCount int
+	countRow := tx.QueryRow(ctx,
+		`UPDATE question_areas
+		 SET questions_count = questions_count + 1
+		 WHERE session_code = $1 AND area = $2
+		 RETURNING questions_count`,
+		params.SessionCode,
+		params.CurrentArea,
+	)
+	if err := countRow.Scan(&newCount); err != nil {
+		return nil, fmt.Errorf("increment area questions: %w", err)
+	}
+
+	action := "stay"
+	if params.Evaluation.CurrentCriterion.Status == "sufficient" {
+		if _, err := tx.Exec(ctx,
+			`UPDATE question_areas
+			 SET status = 'complete', area_ended_at = now()
+			 WHERE session_code = $1 AND area = $2`,
+			params.SessionCode,
+			params.CurrentArea,
+		); err != nil {
+			return nil, fmt.Errorf("complete area: %w", err)
+		}
+		action = "next"
+	} else if newCount >= params.MaxQuestionsPerArea || params.Evaluation.CurrentCriterion.Recommendation == "move_on" {
+		if _, err := tx.Exec(ctx,
+			`UPDATE question_areas
+			 SET status = 'insufficient', area_ended_at = now()
+			 WHERE session_code = $1 AND area = $2`,
+			params.SessionCode,
+			params.CurrentArea,
+		); err != nil {
+			return nil, fmt.Errorf("mark area insufficient: %w", err)
+		}
+		action = "next"
+	}
+
+	for _, flag := range params.PreAddressed {
+		if strings.TrimSpace(flag.Slug) == "" {
+			continue
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE question_areas
+			 SET status = 'pre_addressed', pre_addressed_evidence = $3
+			 WHERE session_code = $1
+			   AND LOWER(area) = LOWER($2)
+			   AND status = 'pending'`,
+			params.SessionCode,
+			flag.Slug,
+			nullIfEmpty(flag.Evidence),
+		); err != nil {
+			return nil, fmt.Errorf("mark pre_addressed %s: %w", flag.Slug, err)
+		}
+	}
+
+	nextArea := params.CurrentArea
+	if action == "next" {
+		rows, err := tx.Query(ctx,
+			`SELECT area, status
+			 FROM question_areas
+			 WHERE session_code = $1`,
+			params.SessionCode,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("list areas for transition: %w", err)
+		}
+
+		statusByArea := make(map[string]string)
+		for rows.Next() {
+			var area string
+			var status string
+			if err := rows.Scan(&area, &status); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scan area status: %w", err)
+			}
+			statusByArea[area] = status
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("iterate area statuses: %w", err)
+		}
+		rows.Close()
+
+		nextArea = ""
+		for _, slug := range params.OrderedAreaSlugs {
+			status, ok := statusByArea[slug]
+			if !ok {
+				continue
+			}
+			if status == string(AreaStatusPending) || status == string(AreaStatusPreAddressed) {
+				nextArea = slug
+				break
+			}
+		}
+
+		if nextArea != "" {
+			if _, err := tx.Exec(ctx,
+				`UPDATE question_areas
+				 SET status = 'in_progress', area_started_at = now()
+				 WHERE session_code = $1
+				   AND area = $2
+				   AND status IN ('pending', 'pre_addressed')`,
+				params.SessionCode,
+				nextArea,
+			); err != nil {
+				return nil, fmt.Errorf("set next area in_progress: %w", err)
+			}
+		}
+	}
+
+	updateStateRow := tx.QueryRow(ctx,
+		`UPDATE sessions
+		 SET flow_step = CASE WHEN $2 = '' THEN 'done' ELSE 'criterion' END,
+		     expected_turn_id = CASE WHEN $2 = '' THEN NULL ELSE $3 END,
+		     display_question_number = display_question_number + 1
+		 WHERE session_code = $1
+		 RETURNING display_question_number`,
+		params.SessionCode,
+		nextArea,
+		params.NextTurnID,
+	)
+	var questionNumber int
+	if err := updateStateRow.Scan(&questionNumber); err != nil {
+		return nil, fmt.Errorf("advance flow state after criterion: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit criterion turn: %w", err)
+	}
+
+	return &ProcessCriterionTurnResult{
+		Action:         action,
+		NextArea:       nextArea,
+		QuestionNumber: questionNumber,
+		NewCount:       newCount,
+	}, nil
+}
+
+// MarkFlowDone marks the flow pointer as done and clears expected turn.
+func (s *PostgresStore) MarkFlowDone(ctx context.Context, sessionCode string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE sessions
+		 SET flow_step = 'done',
+		     expected_turn_id = NULL
+		 WHERE session_code = $1`,
+		sessionCode,
+	)
+	if err != nil {
+		return fmt.Errorf("mark flow done: %w", err)
+	}
+	return nil
+}
+
+func nullIfEmpty(v string) any {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	return v
 }

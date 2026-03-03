@@ -22,6 +22,8 @@ interface Question {
   textEs: string;
   textEn: string;
   area: string;
+  kind: "disclaimer" | "readiness" | "criterion";
+  turnId: string;
   questionNumber: number;
   totalQuestions: number;
 }
@@ -129,10 +131,10 @@ export default function InterviewPage() {
   }, [code, lang]);
 
   useEffect(() => {
-    if (question?.questionNumber === 1) {
+    if (question?.kind === "disclaimer") {
       setHasReachedDisclaimerBottom(false);
     }
-  }, [question?.questionNumber]);
+  }, [question?.kind]);
 
   const updateDisclaimerScrollState = useCallback(() => {
     const el = disclaimerScrollRef.current;
@@ -145,10 +147,10 @@ export default function InterviewPage() {
   }, []);
 
   useEffect(() => {
-    if (question?.questionNumber !== 1) return;
+    if (question?.kind !== "disclaimer") return;
     const id = window.requestAnimationFrame(updateDisclaimerScrollState);
     return () => window.cancelAnimationFrame(id);
-  }, [question?.questionNumber, question?.textEn, question?.textEs, updateDisclaimerScrollState]);
+  }, [question?.kind, question?.textEn, question?.textEs, updateDisclaimerScrollState]);
 
   // Auto-submit at timer expiry: processes the final answer through AI, then redirects.
   const autoSubmit = useCallback(async () => {
@@ -162,8 +164,8 @@ export default function InterviewPage() {
         body: {
           sessionCode: code,
           answerText: textAnswerRef.current.trim(),
-          questionNumber: questionRef.current?.questionNumber ?? 0,
           questionText: getQuestionTextForLang(questionRef.current, langRef.current),
+          turnId: questionRef.current?.turnId ?? "",
         },
         credentials: "include",
       });
@@ -239,8 +241,8 @@ export default function InterviewPage() {
         body: {
           sessionCode: code,
           answerText: answerValue.trim(),
-          questionNumber: question?.questionNumber ?? 0,
           questionText: getQuestionTextForLang(question, lang),
+          turnId: question?.turnId ?? "",
         },
         credentials: "include",
       });
@@ -277,7 +279,7 @@ export default function InterviewPage() {
   const isWarning = secondsLeft <= WARNING_AT_SECONDS;
   const isWrapup = secondsLeft <= WRAPUP_AT_SECONDS;
   const isAutoSubmitCountdown = secondsLeft <= AUTOSUBMIT_SECONDS && secondsLeft > 0 && (status === "active" || status === "submitting");
-  const isConsentQuestion = question?.questionNumber === 1;
+  const isConsentQuestion = question?.kind === "disclaimer";
   const consentQuestionText = getQuestionTextForLang(question, lang);
   const consentBlocks = parseDisclaimerBlocks(consentQuestionText);
   const progressPct = question

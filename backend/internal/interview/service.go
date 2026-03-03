@@ -5,7 +5,9 @@ package interview
 
 import (
 	"context"
-	"encoding/json"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -120,12 +122,22 @@ func (s *Service) StartInterview(ctx context.Context, sessionCode, preferredLang
 		return nil, fmt.Errorf("set first area in_progress: %w", err)
 	}
 
-	var q *Question
-	if resuming {
-		q = ResumeQuestion(firstArea)
-	} else {
-		q = OpeningDisclaimerQuestion(firstArea, s.openingTextEs, s.openingTextEn)
+	turnID, err := newTurnID()
+	if err != nil {
+		return nil, fmt.Errorf("new turn id: %w", err)
 	}
+	flowState, err := s.store.PrepareDisclaimerStep(dbCtx, sessionCode, turnID)
+	if err != nil {
+		return nil, fmt.Errorf("prepare disclaimer step: %w", err)
+	}
+
+	q := OpeningDisclaimerQuestion(
+		firstArea,
+		s.openingTextEs,
+		s.openingTextEn,
+		flowState.QuestionNumber,
+		turnID,
+	)
 
 	return &StartResult{
 		Question:        q,
@@ -143,220 +155,252 @@ type AnswerResult struct {
 	TimerRemainingS int
 }
 
-// SubmitAnswer processes a user's answer: persists it, evaluates via AI,
-// manages area transitions, and returns the next question.
-func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, questionText string, questionNumber int) (*AnswerResult, error) {
+// SubmitAnswer processes one answer according to the explicit flow step.
+func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, questionText, turnID string) (*AnswerResult, error) {
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
-	// 1. Load current state from DB.
 	sess, err := s.sessionGetter.GetSessionByCode(dbCtx, sessionCode)
 	if err != nil {
 		return nil, fmt.Errorf("get session: %w", err)
 	}
-
-	areas, err := s.store.GetAreasBySession(dbCtx, sessionCode)
+	flowState, err := s.store.GetFlowState(dbCtx, sessionCode)
 	if err != nil {
-		return nil, fmt.Errorf("get areas: %w", err)
+		return nil, fmt.Errorf("get flow state: %w", err)
 	}
 
-	answers, err := s.store.GetAnswersBySession(dbCtx, sessionCode)
+	areas, currentArea, err := s.refreshAreaState(dbCtx, sessionCode)
 	if err != nil {
-		return nil, fmt.Errorf("get answers: %w", err)
+		return nil, fmt.Errorf("refresh area state: %w", err)
 	}
 
-	currentArea, err := s.store.GetInProgressArea(dbCtx, sessionCode)
-	if err != nil {
-		return nil, fmt.Errorf("get in-progress area: %w", err)
-	}
-	if currentArea == nil {
+	if flowState.Step == FlowStepDone {
 		s.finishSession(ctx, sessionCode)
-		return &AnswerResult{Done: true}, nil
+		return &AnswerResult{Done: true, TimerRemainingS: 0}, nil
+	}
+	if strings.TrimSpace(turnID) == "" || turnID != flowState.ExpectedTurnID {
+		return nil, ErrTurnConflict
 	}
 
-	// 2. Calculate timer.
 	timeRemainingS := s.calcTimeRemaining(sess)
-	timeExpired := timeRemainingS <= 0
+	if timeRemainingS <= 0 {
+		s.markRemainingNotAssessed(ctx, sessionCode, areas)
+		if err := s.store.MarkFlowDone(ctx, sessionCode); err != nil {
+			slog.Warn("failed to mark flow done on timeout", "session", sessionCode, "error", err)
+		}
+		s.finishSession(ctx, sessionCode)
+		return &AnswerResult{Done: true, TimerRemainingS: 0}, nil
+	}
+
 	preferredLanguage := normalizePreferredLanguage(sess.PreferredLanguage)
 
-	// Opening confirmation and readiness are non-criteria turns on first entry.
-	// Do not evaluate, persist, or consume criterion quota during these steps.
-	if questionNumber == 1 {
-		if timeExpired {
-			s.markRemainingNotAssessed(ctx, sessionCode, areas)
+	switch flowState.Step {
+	case FlowStepDisclaimer:
+		if currentArea == nil {
 			s.finishSession(ctx, sessionCode)
 			return &AnswerResult{Done: true, TimerRemainingS: 0}, nil
 		}
 
-		if len(answers) == 0 {
-			return &AnswerResult{
-				Done: false,
-				NextQuestion: ReadinessQuestion(
-					currentArea.Area,
-					s.readinessTextEs,
-					s.readinessTextEn,
-					2,
-				),
-				TimerRemainingS: timeRemainingS,
-			}, nil
-		}
-
-		areaCfg, _ := s.findAreaConfig(currentArea.Area)
-		nextQuestion := strings.TrimSpace(areaCfg.FallbackQuestion)
-		if nextQuestion == "" {
-			nextQuestion = fmt.Sprintf("Please tell me about %s.", areaCfg.Label)
-		}
-
-		return &AnswerResult{
-			Done: false,
-			NextQuestion: &Question{
-				TextEs:         nextQuestion,
-				TextEn:         nextQuestion,
-				Area:           currentArea.Area,
-				QuestionNumber: 2,
-				TotalQuestions: EstimatedTotalQuestions,
-			},
-			TimerRemainingS: timeRemainingS,
-		}, nil
-	}
-
-	if len(answers) == 0 && questionNumber == 2 && timeExpired {
-		s.markRemainingNotAssessed(ctx, sessionCode, areas)
-		s.finishSession(ctx, sessionCode)
-		return &AnswerResult{Done: true, TimerRemainingS: 0}, nil
-	}
-
-	// 3. Build AI turn context.
-	areaCfg, areaIndex := s.findAreaConfig(currentArea.Area)
-	criteriaCoverage := s.buildCriteriaCoverage(areas)
-	transcript := s.buildTranscript(answers)
-	criteriaRemaining := s.countCriteriaRemaining(areas)
-
-	slog.Debug("building AI turn context",
-		"session", sessionCode,
-		"area", currentArea.Area,
-		"area_index", areaIndex,
-		"area_status", currentArea.Status,
-		"questions_count", currentArea.QuestionsCount,
-		"time_remaining_s", timeRemainingS,
-		"total_budget_s", sess.InterviewBudgetSeconds,
-		"criteria_remaining", criteriaRemaining,
-		"transcript_len", len(transcript),
-	)
-
-	turnCtx := &AITurnContext{
-		PreferredLanguage:  preferredLanguage,
-		CurrentAreaSlug:    currentArea.Area,
-		CurrentAreaID:      areaCfg.ID,
-		CurrentAreaIndex:   areaIndex,
-		CurrentAreaLabel:   areaCfg.Label,
-		Description:        areaCfg.Description,
-		SufficiencyReqs:    areaCfg.SufficiencyRequirements,
-		AreaStatus:         string(currentArea.Status),
-		IsPreAddressed:     currentArea.Status == AreaStatusPreAddressed,
-		FollowUpsRemaining: MaxQuestionsPerArea - currentArea.QuestionsCount,
-		TotalBudgetS:       sess.InterviewBudgetSeconds,
-		TimeRemainingS:     timeRemainingS,
-		QuestionsRemaining: EstimatedTotalQuestions - len(answers),
-		CriteriaRemaining:  criteriaRemaining,
-		CriteriaCoverage:   criteriaCoverage,
-		Transcript:         transcript,
-	}
-
-	// 4. Call AI (with fallback on error).
-	slog.Debug("calling AI for turn", "session", sessionCode, "area", currentArea.Area)
-	aiResult, err := s.aiClient.CallAI(ctx, turnCtx)
-	if err != nil {
-		slog.Warn("AI API error, using fallback", "error", err, "area", currentArea.Area)
-		aiResult = &AIResponse{
-			Evaluation:   nil,
-			NextQuestion: areaCfg.FallbackQuestion,
-		}
-	} else {
-		slog.Debug("AI call succeeded", "session", sessionCode, "next_question", aiResult.NextQuestion)
-	}
-
-	// Defensive guard: if model returns evaluation for a different criterion id,
-	// ignore it so area progression stays aligned with backend state.
-	if aiResult.Evaluation != nil && aiResult.Evaluation.CurrentCriterion.ID != areaCfg.ID {
-		slog.Warn("ignoring AI evaluation with mismatched criterion id",
-			"session", sessionCode,
-			"current_area", currentArea.Area,
-			"expected_criterion_id", areaCfg.ID,
-			"returned_criterion_id", aiResult.Evaluation.CurrentCriterion.ID,
-		)
-		aiResult.Evaluation = nil
-	}
-
-	// First-entry readiness answer (question #2) should not be persisted or scored.
-	// Use AI only to generate the first criterion question.
-	if len(answers) == 0 && questionNumber == 2 {
-		nextQuestion := strings.TrimSpace(aiResult.NextQuestion)
-		if nextQuestion == "" {
-			nextQuestion = strings.TrimSpace(areaCfg.FallbackQuestion)
-		}
-		if nextQuestion == "" {
-			nextQuestion = fmt.Sprintf("Please tell me about %s.", areaCfg.Label)
-		}
-		return &AnswerResult{
-			Done: false,
-			NextQuestion: &Question{
-				TextEs:         nextQuestion,
-				TextEn:         nextQuestion,
-				Area:           currentArea.Area,
-				QuestionNumber: 3,
-				TotalQuestions: EstimatedTotalQuestions,
-			},
-			TimerRemainingS: timeRemainingS,
-		}, nil
-	}
-
-	// 5. Process the turn (persist answer, update areas).
-	nextAction, err := s.processTurn(ctx, sessionCode, currentArea, answerText, questionText, questionNumber, preferredLanguage, aiResult)
-	if err != nil {
-		return nil, fmt.Errorf("process turn: %w", err)
-	}
-
-	// Recalculate timer after processing.
-	timeRemainingS = s.calcTimeRemaining(sess)
-	if !timeExpired {
-		timeExpired = timeRemainingS <= 0
-	}
-
-	// 6. Determine what to return.
-	// If time expired, we already processed the final answer above — now finish up.
-	if timeExpired || nextAction == "end" {
-		s.markRemainingNotAssessed(ctx, sessionCode, areas)
-		s.finishSession(ctx, sessionCode)
-		return &AnswerResult{Done: true, TimerRemainingS: 0}, nil
-	}
-
-	// Find the area for the next question.
-	nextAreaSlug := currentArea.Area
-	if nextAction == "next" {
-		nextAreaSlug, err = s.advanceToNextArea(ctx, sessionCode, areas)
+		nextTurnID, err := newTurnID()
 		if err != nil {
-			return nil, fmt.Errorf("advance area: %w", err)
+			return nil, fmt.Errorf("new turn id: %w", err)
 		}
-		if nextAreaSlug == "" {
+		nextFlow, err := s.store.AdvanceNonCriterionStep(dbCtx, AdvanceNonCriterionStepParams{
+			SessionCode:    sessionCode,
+			ExpectedTurnID: turnID,
+			CurrentStep:    FlowStepDisclaimer,
+			NextStep:       FlowStepReadiness,
+			NextTurnID:     nextTurnID,
+			EventType:      "disclaimer_ack",
+			AnswerText:     answerText,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("advance disclaimer step: %w", err)
+		}
+
+		return &AnswerResult{
+			Done: false,
+			NextQuestion: ReadinessQuestion(
+				currentArea.Area,
+				s.readinessTextEs,
+				s.readinessTextEn,
+				nextFlow.QuestionNumber,
+				nextTurnID,
+			),
+			TimerRemainingS: timeRemainingS,
+		}, nil
+
+	case FlowStepReadiness:
+		if currentArea == nil {
 			s.finishSession(ctx, sessionCode)
 			return &AnswerResult{Done: true, TimerRemainingS: 0}, nil
 		}
+
+		nextTurnID, err := newTurnID()
+		if err != nil {
+			return nil, fmt.Errorf("new turn id: %w", err)
+		}
+		nextFlow, err := s.store.AdvanceNonCriterionStep(dbCtx, AdvanceNonCriterionStepParams{
+			SessionCode:    sessionCode,
+			ExpectedTurnID: turnID,
+			CurrentStep:    FlowStepReadiness,
+			NextStep:       FlowStepCriterion,
+			NextTurnID:     nextTurnID,
+			EventType:      "readiness_ack",
+			AnswerText:     answerText,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("advance readiness step: %w", err)
+		}
+
+		nextQuestion := s.fallbackQuestionForArea(currentArea.Area)
+		return &AnswerResult{
+			Done: false,
+			NextQuestion: &Question{
+				TextEs:         nextQuestion,
+				TextEn:         nextQuestion,
+				Area:           currentArea.Area,
+				Kind:           QuestionKindCriterion,
+				TurnID:         nextTurnID,
+				QuestionNumber: nextFlow.QuestionNumber,
+				TotalQuestions: EstimatedTotalQuestions,
+			},
+			TimerRemainingS: timeRemainingS,
+		}, nil
+
+	case FlowStepCriterion:
+		if currentArea == nil {
+			if err := s.store.MarkFlowDone(ctx, sessionCode); err != nil {
+				slog.Warn("failed to mark flow done with no in-progress area", "session", sessionCode, "error", err)
+			}
+			s.finishSession(ctx, sessionCode)
+			return &AnswerResult{Done: true, TimerRemainingS: 0}, nil
+		}
+
+		answers, err := s.store.GetAnswersBySession(dbCtx, sessionCode)
+		if err != nil {
+			return nil, fmt.Errorf("get answers: %w", err)
+		}
+
+		areaCfg, areaIndex := s.findAreaConfig(currentArea.Area)
+		criteriaCoverage := s.buildCriteriaCoverage(areas)
+		transcript := s.buildTranscript(answers)
+		criteriaRemaining := s.countCriteriaRemaining(areas)
+
+		turnCtx := &AITurnContext{
+			PreferredLanguage:  preferredLanguage,
+			CurrentAreaSlug:    currentArea.Area,
+			CurrentAreaID:      areaCfg.ID,
+			CurrentAreaIndex:   areaIndex,
+			CurrentAreaLabel:   areaCfg.Label,
+			Description:        areaCfg.Description,
+			SufficiencyReqs:    areaCfg.SufficiencyRequirements,
+			AreaStatus:         string(currentArea.Status),
+			IsPreAddressed:     currentArea.Status == AreaStatusPreAddressed,
+			FollowUpsRemaining: MaxQuestionsPerArea - currentArea.QuestionsCount,
+			TotalBudgetS:       sess.InterviewBudgetSeconds,
+			TimeRemainingS:     timeRemainingS,
+			QuestionsRemaining: EstimatedTotalQuestions - len(answers),
+			CriteriaRemaining:  criteriaRemaining,
+			CriteriaCoverage:   criteriaCoverage,
+			Transcript:         transcript,
+		}
+
+		slog.Debug("calling AI for criterion turn", "session", sessionCode, "area", currentArea.Area)
+		aiResult, err := s.aiClient.CallAI(ctx, turnCtx)
+		if err != nil {
+			slog.Warn("AI API error, using fallback evaluation", "error", err, "area", currentArea.Area)
+			aiResult = &AIResponse{
+				Evaluation:   s.fallbackEvaluation(areaCfg.ID),
+				NextQuestion: s.fallbackQuestionForArea(currentArea.Area),
+			}
+		}
+
+		if aiResult.Evaluation == nil || aiResult.Evaluation.CurrentCriterion.ID != areaCfg.ID {
+			if aiResult.Evaluation != nil {
+				slog.Warn("AI evaluation criterion mismatch, replacing with fallback",
+					"session", sessionCode,
+					"current_area", currentArea.Area,
+					"expected_criterion_id", areaCfg.ID,
+					"returned_criterion_id", aiResult.Evaluation.CurrentCriterion.ID,
+				)
+			}
+			aiResult.Evaluation = s.fallbackEvaluation(areaCfg.ID)
+		}
+
+		nextTurnID, err := newTurnID()
+		if err != nil {
+			return nil, fmt.Errorf("new turn id: %w", err)
+		}
+
+		preAddressed := s.extractPreAddressed(aiResult.Evaluation.OtherCriteriaAddressed)
+		result, err := s.store.ProcessCriterionTurn(dbCtx, ProcessCriterionTurnParams{
+			SessionCode:         sessionCode,
+			ExpectedTurnID:      turnID,
+			CurrentArea:         currentArea.Area,
+			QuestionText:        questionText,
+			AnswerText:          answerText,
+			PreferredLanguage:   preferredLanguage,
+			Evaluation:          aiResult.Evaluation,
+			PreAddressed:        preAddressed,
+			OrderedAreaSlugs:    s.orderedAreaSlugs(),
+			MaxQuestionsPerArea: MaxQuestionsPerArea,
+			NextTurnID:          nextTurnID,
+		})
+		if err != nil {
+			if errors.Is(err, ErrTurnConflict) {
+				return nil, ErrTurnConflict
+			}
+			return nil, fmt.Errorf("process criterion turn: %w", err)
+		}
+
+		areas, _, err = s.refreshAreaState(dbCtx, sessionCode)
+		if err != nil {
+			return nil, fmt.Errorf("refresh areas after criterion: %w", err)
+		}
+
+		timeRemainingS = s.calcTimeRemaining(sess)
+		if timeRemainingS <= 0 {
+			s.markRemainingNotAssessed(ctx, sessionCode, areas)
+			if err := s.store.MarkFlowDone(ctx, sessionCode); err != nil {
+				slog.Warn("failed to mark flow done on timeout after criterion", "session", sessionCode, "error", err)
+			}
+			s.finishSession(ctx, sessionCode)
+			return &AnswerResult{Done: true, TimerRemainingS: 0}, nil
+		}
+
+		if strings.TrimSpace(result.NextArea) == "" {
+			if err := s.store.MarkFlowDone(ctx, sessionCode); err != nil {
+				slog.Warn("failed to mark flow done on final criterion", "session", sessionCode, "error", err)
+			}
+			s.finishSession(ctx, sessionCode)
+			return &AnswerResult{Done: true, TimerRemainingS: 0}, nil
+		}
+
+		nextQuestion := strings.TrimSpace(aiResult.NextQuestion)
+		if result.Action == "next" {
+			nextQuestion = s.fallbackQuestionForArea(result.NextArea)
+		}
+		if nextQuestion == "" {
+			nextQuestion = s.fallbackQuestionForArea(result.NextArea)
+		}
+
+		return &AnswerResult{
+			Done: false,
+			NextQuestion: &Question{
+				TextEs:         nextQuestion,
+				TextEn:         nextQuestion,
+				Area:           result.NextArea,
+				Kind:           QuestionKindCriterion,
+				TurnID:         nextTurnID,
+				QuestionNumber: result.QuestionNumber,
+				TotalQuestions: EstimatedTotalQuestions,
+			},
+			TimerRemainingS: timeRemainingS,
+		}, nil
+	default:
+		return nil, ErrInvalidFlow
 	}
-
-	nextNum := questionNumber + 1
-
-	return &AnswerResult{
-		Done: false,
-		NextQuestion: &Question{
-			TextEs:         aiResult.NextQuestion,
-			TextEn:         aiResult.NextQuestion,
-			Area:           nextAreaSlug,
-			QuestionNumber: nextNum,
-			TotalQuestions: EstimatedTotalQuestions,
-		},
-		TimerRemainingS: timeRemainingS,
-	}, nil
 }
 
 // finishSession marks the session as completed. Logs on error but does not
@@ -367,127 +411,49 @@ func (s *Service) finishSession(ctx context.Context, sessionCode string) {
 	}
 }
 
-// processTurn handles the evaluation and DB writes for one turn.
-// Returns "stay", "next", or "end".
-func (s *Service) processTurn(
-	ctx context.Context,
-	sessionCode string,
-	currentArea *QuestionArea,
-	answerText, questionText string,
-	questionNumber int,
-	preferredLanguage string,
-	aiResult *AIResponse,
-) (string, error) {
-	eval := aiResult.Evaluation
-
-	// First turn (opening question) — no evaluation to process.
-	if eval == nil {
-		return "stay", nil
+func (s *Service) orderedAreaSlugs() []string {
+	slugs := make([]string, 0, len(s.areaConfigs))
+	for _, cfg := range s.areaConfigs {
+		slugs = append(slugs, cfg.Slug)
 	}
-
-	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
-	defer dbCancel()
-
-	var transcriptEs, transcriptEn string
-	if preferredLanguage == "en" {
-		transcriptEn = answerText
-	} else {
-		transcriptEs = answerText
-	}
-
-	// a. Save the answer.
-	evalJSON, _ := json.Marshal(eval)
-	_, err := s.store.SaveAnswer(dbCtx, SaveAnswerParams{
-		SessionCode:  sessionCode,
-		Area:         currentArea.Area, // backend decides this, not AI
-		QuestionText: questionText,
-		TranscriptEs: transcriptEs,
-		TranscriptEn: transcriptEn,
-		AiEvaluation: evalJSON,
-		Sufficiency:  eval.CurrentCriterion.Status,
-	})
-	if err != nil {
-		return "", fmt.Errorf("save answer: %w", err)
-	}
-
-	// b. Increment question count for current area.
-	if err := s.store.IncrementAreaQuestions(dbCtx, sessionCode, currentArea.Area); err != nil {
-		return "", fmt.Errorf("increment questions: %w", err)
-	}
-
-	newCount := currentArea.QuestionsCount + 1
-	action := "stay"
-
-	// c. Determine action based on evaluation + backend rules.
-	if eval.CurrentCriterion.Status == "sufficient" {
-		if err := s.store.CompleteArea(dbCtx, sessionCode, currentArea.Area); err != nil {
-			return "", fmt.Errorf("complete area: %w", err)
-		}
-		action = "next"
-	} else if newCount >= MaxQuestionsPerArea {
-		// Follow-up budget exhausted.
-		if err := s.store.MarkAreaInsufficient(dbCtx, sessionCode, currentArea.Area); err != nil {
-			return "", fmt.Errorf("mark insufficient (budget): %w", err)
-		}
-		action = "next"
-	} else if eval.CurrentCriterion.Recommendation == "move_on" {
-		// AI says move on even with budget remaining.
-		if err := s.store.MarkAreaInsufficient(dbCtx, sessionCode, currentArea.Area); err != nil {
-			return "", fmt.Errorf("mark insufficient (move_on): %w", err)
-		}
-		action = "next"
-	}
-
-	// d. Process cross-criteria flags.
-	for _, other := range eval.OtherCriteriaAddressed {
-		slug := s.matchAreaSlug(other.Name)
-		if slug == "" {
-			slog.Warn("cross-criteria flag: no matching area", "name", other.Name)
-			continue
-		}
-		if err := s.store.MarkAreaPreAddressed(dbCtx, sessionCode, slug, other.EvidenceSummary); err != nil {
-			slog.Warn("failed to mark pre_addressed", "area", slug, "error", err)
-		}
-	}
-
-	slog.Info("turn processed",
-		"session", sessionCode,
-		"area", currentArea.Area,
-		"status", eval.CurrentCriterion.Status,
-		"recommendation", eval.CurrentCriterion.Recommendation,
-		"action", action,
-		"questions_count", newCount,
-	)
-
-	return action, nil
+	return slugs
 }
 
-// advanceToNextArea finds the next pending/pre_addressed area in sequence,
-// sets it to in_progress, and returns its slug. Returns "" if no more areas.
-func (s *Service) advanceToNextArea(ctx context.Context, sessionCode string, areas []QuestionArea) (string, error) {
-	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
-	defer dbCancel()
-
-	// Walk areaConfigs in order to find the next uncovered one.
-	areaStatusMap := make(map[string]AreaStatus)
-	for _, a := range areas {
-		areaStatusMap[a.Area] = a.Status
+func (s *Service) fallbackQuestionForArea(slug string) string {
+	areaCfg, _ := s.findAreaConfig(slug)
+	nextQuestion := strings.TrimSpace(areaCfg.FallbackQuestion)
+	if nextQuestion == "" {
+		nextQuestion = fmt.Sprintf("Please tell me about %s.", areaCfg.Label)
 	}
+	return nextQuestion
+}
 
-	for _, ac := range s.areaConfigs {
-		status, ok := areaStatusMap[ac.Slug]
-		if !ok {
+func (s *Service) fallbackEvaluation(criterionID int) *Evaluation {
+	return &Evaluation{
+		CurrentCriterion: CurrentCriterion{
+			ID:              criterionID,
+			Status:          "partially_sufficient",
+			EvidenceSummary: "Fallback evaluation due to model parsing or provider error.",
+			Recommendation:  "follow_up",
+		},
+		OtherCriteriaAddressed: nil,
+	}
+}
+
+func (s *Service) extractPreAddressed(other []OtherCriterion) []PreAddressedArea {
+	flags := make([]PreAddressedArea, 0, len(other))
+	for _, item := range other {
+		slug := s.matchAreaSlug(item.Name)
+		if slug == "" {
+			slog.Warn("cross-criteria flag: no matching area", "name", item.Name)
 			continue
 		}
-		if status == AreaStatusPending || status == AreaStatusPreAddressed {
-			if err := s.store.SetAreaInProgress(dbCtx, sessionCode, ac.Slug); err != nil {
-				return "", fmt.Errorf("set area in_progress: %w", err)
-			}
-			return ac.Slug, nil
-		}
+		flags = append(flags, PreAddressedArea{
+			Slug:     slug,
+			Evidence: item.EvidenceSummary,
+		})
 	}
-
-	return "", nil // all areas done
+	return flags
 }
 
 // ── Helper methods ──────────────────────────────────────────────────
@@ -576,6 +542,31 @@ func (s *Service) markRemainingNotAssessed(ctx context.Context, sessionCode stri
 			}
 		}
 	}
+}
+
+func (s *Service) refreshAreaState(ctx context.Context, sessionCode string) ([]QuestionArea, *QuestionArea, error) {
+	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
+	defer dbCancel()
+
+	areas, err := s.store.GetAreasBySession(dbCtx, sessionCode)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get areas by session: %w", err)
+	}
+
+	currentArea, err := s.store.GetInProgressArea(dbCtx, sessionCode)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get in-progress area: %w", err)
+	}
+
+	return areas, currentArea, nil
+}
+
+func newTurnID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("read random bytes: %w", err)
+	}
+	return hex.EncodeToString(b[:]), nil
 }
 
 func normalizePreferredLanguage(language string) string {

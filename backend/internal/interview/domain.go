@@ -3,7 +3,10 @@
 // No infrastructure imports — domain types are infrastructure-free.
 package interview
 
-import "strings"
+import (
+	"errors"
+	"strings"
+)
 
 // ── Area status constants ──────────────────────────────────────────
 
@@ -29,6 +32,30 @@ var ValidAreaStatuses = map[AreaStatus]bool{
 	AreaStatusNotAssessed:  true,
 }
 
+// ── Interview flow constants ──────────────────────────────────────────
+
+type FlowStep string
+
+const (
+	FlowStepDisclaimer FlowStep = "disclaimer"
+	FlowStepReadiness  FlowStep = "readiness"
+	FlowStepCriterion  FlowStep = "criterion"
+	FlowStepDone       FlowStep = "done"
+)
+
+type QuestionKind string
+
+const (
+	QuestionKindDisclaimer QuestionKind = "disclaimer"
+	QuestionKindReadiness  QuestionKind = "readiness"
+	QuestionKindCriterion  QuestionKind = "criterion"
+)
+
+var (
+	ErrTurnConflict = errors.New("turn conflict")
+	ErrInvalidFlow  = errors.New("invalid flow state")
+)
+
 // ── Domain types ───────────────────────────────────────────────────
 
 // Question represents a single interview question sent to the client.
@@ -36,8 +63,17 @@ type Question struct {
 	TextEs         string
 	TextEn         string
 	Area           string
+	Kind           QuestionKind
+	TurnID         string
 	QuestionNumber int
 	TotalQuestions int
+}
+
+// FlowState represents the interview flow pointer persisted on sessions.
+type FlowState struct {
+	Step           FlowStep
+	ExpectedTurnID string
+	QuestionNumber int
 }
 
 // QuestionArea represents a focus area in the interview.
@@ -179,23 +215,27 @@ const (
 	defaultOpeningDisclaimerEn = "Important disclaimer: this mock interview is for preparation only and does not constitute legal advice. By continuing, you confirm that you read and accept these terms."
 )
 
-// OpeningDisclaimerQuestion returns the opening disclaimer shown on interview start.
-func OpeningDisclaimerQuestion(firstAreaSlug, textEs, textEn string) *Question {
+// OpeningDisclaimerQuestion returns the opening disclaimer shown on interview start/resume.
+func OpeningDisclaimerQuestion(firstAreaSlug, textEs, textEn string, questionNumber int, turnID string) *Question {
 	return &Question{
 		TextEs:         firstNonEmpty(textEs, defaultOpeningDisclaimerEs),
 		TextEn:         firstNonEmpty(textEn, defaultOpeningDisclaimerEn),
 		Area:           firstAreaSlug,
-		QuestionNumber: 1,
+		Kind:           QuestionKindDisclaimer,
+		TurnID:         turnID,
+		QuestionNumber: questionNumber,
 		TotalQuestions: EstimatedTotalQuestions,
 	}
 }
 
 // ReadinessQuestion returns the non-criteria readiness question shown after disclaimer confirmation.
-func ReadinessQuestion(firstAreaSlug, textEs, textEn string, questionNumber int) *Question {
+func ReadinessQuestion(firstAreaSlug, textEs, textEn string, questionNumber int, turnID string) *Question {
 	return &Question{
 		TextEs:         firstNonEmpty(textEs, defaultReadinessQuestionEs),
 		TextEn:         firstNonEmpty(textEn, defaultReadinessQuestionEn),
 		Area:           firstAreaSlug,
+		Kind:           QuestionKindReadiness,
+		TurnID:         turnID,
 		QuestionNumber: questionNumber,
 		TotalQuestions: EstimatedTotalQuestions,
 	}
@@ -207,6 +247,7 @@ func ResumeQuestion(firstAreaSlug string) *Question {
 		TextEs:         "Bienvenido/a de nuevo. Su entrevista fue iniciada anteriormente. ¿Está listo/a para continuar donde lo dejó?",
 		TextEn:         "Welcome back. Your interview was started previously. Are you ready to continue where you left off?",
 		Area:           firstAreaSlug,
+		Kind:           QuestionKindReadiness,
 		QuestionNumber: 1,
 		TotalQuestions: EstimatedTotalQuestions,
 	}
