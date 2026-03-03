@@ -24,6 +24,26 @@ export default function SessionPage() {
   const [submitting, setSubmitting] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  const interviewUrlForLang = useCallback(
+    (selectedLang: "es" | "en") => `/interview/${code}?lang=${selectedLang}`,
+    [code],
+  );
+
+  const goToInterview = useCallback(
+    (selectedLang: "es" | "en", replace = false) => {
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem(`interview_lang_${code}`, selectedLang);
+      }
+      const nextUrl = interviewUrlForLang(selectedLang);
+      if (replace) {
+        router.replace(nextUrl);
+        return;
+      }
+      router.push(nextUrl);
+    },
+    [code, interviewUrlForLang, router],
+  );
+
   const verifySession = useCallback(
     async (sessionCode: string, sessionPin: string) => {
       const result = await api<{ session: { interview_started_at?: string } }>("/api/session/verify", {
@@ -66,7 +86,7 @@ export default function SessionPage() {
           setDisplayPin(cookiePin);
           // Auto-redirect if interview already started
           if (result.session.interview_started_at) {
-            router.replace(`/interview/${code}`);
+            goToInterview(lang, true);
             return;
           }
           setView("hub");
@@ -89,7 +109,7 @@ export default function SessionPage() {
       }
     }
     init();
-  }, [code, verifySession, router, lang]);
+  }, [code, verifySession, goToInterview, lang]);
 
   function getRecoveryUrl() {
     if (typeof window === "undefined") return "";
@@ -130,7 +150,7 @@ export default function SessionPage() {
       if (result.ok) {
         document.cookie = `session_${code}=${pin.trim()}; path=/; max-age=86400; SameSite=Lax`;
         if (result.session.interview_started_at) {
-          router.replace(`/interview/${code}`);
+          goToInterview(lang, true);
           return;
         }
         setDisplayPin(pin.trim());
@@ -239,7 +259,7 @@ export default function SessionPage() {
                   : "You can start the interview right away using the button below."}
               </p>
 
-              <Button fullWidth className="mb-8" onClick={() => router.push(`/interview/${code}`)}>
+              <Button fullWidth className="mb-8" onClick={() => goToInterview(lang)}>
                 {lang === "es" ? "Comenzar entrevista" : "Begin interview"}
               </Button>
 

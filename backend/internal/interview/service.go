@@ -19,7 +19,7 @@ const dbTimeout = 5 * time.Second
 
 // SessionStarter transitions a session to 'interviewing'.
 type SessionStarter interface {
-	StartSession(ctx context.Context, sessionCode string) (*session.Session, error)
+	StartSession(ctx context.Context, sessionCode, preferredLanguage string) (*session.Session, error)
 }
 
 // SessionGetter retrieves session data (for timer calculation).
@@ -39,12 +39,12 @@ type AIClient interface {
 
 // Service contains interview business logic.
 type Service struct {
-	sessionStarter    SessionStarter
-	sessionGetter     SessionGetter
-	sessionCompleter  SessionCompleter
-	store             Store
-	aiClient          AIClient
-	areaConfigs       []config.AreaConfig
+	sessionStarter   SessionStarter
+	sessionGetter    SessionGetter
+	sessionCompleter SessionCompleter
+	store            Store
+	aiClient         AIClient
+	areaConfigs      []config.AreaConfig
 }
 
 // NewService creates a Service with the given dependencies.
@@ -65,18 +65,20 @@ type StartResult struct {
 	TimerRemainingS int
 	Area            string
 	Resuming        bool
+	Language        string
 }
 
 // StartInterview transitions the session to interviewing,
 // creates all question area rows, and returns the opening question.
-func (s *Service) StartInterview(ctx context.Context, sessionCode string) (*StartResult, error) {
+func (s *Service) StartInterview(ctx context.Context, sessionCode, preferredLanguage string) (*StartResult, error) {
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
-	sess, err := s.sessionStarter.StartSession(dbCtx, sessionCode)
+	sess, err := s.sessionStarter.StartSession(dbCtx, sessionCode, preferredLanguage)
 	if err != nil {
 		return nil, err
 	}
+	effectiveLanguage := normalizePreferredLanguage(sess.PreferredLanguage)
 
 	remaining := sess.InterviewBudgetSeconds - sess.InterviewLapsedSeconds
 
@@ -114,6 +116,7 @@ func (s *Service) StartInterview(ctx context.Context, sessionCode string) (*Star
 		TimerRemainingS: remaining,
 		Area:            firstArea,
 		Resuming:        resuming,
+		Language:        effectiveLanguage,
 	}, nil
 }
 
@@ -158,6 +161,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 	// 2. Calculate timer.
 	timeRemainingS := s.calcTimeRemaining(sess)
 	timeExpired := timeRemainingS <= 0
+	preferredLanguage := normalizePreferredLanguage(sess.PreferredLanguage)
 
 	// Opening/resume confirmation is a non-criteria turn.
 	// Do not evaluate, persist, or consume criterion quota on question #1.
@@ -206,6 +210,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 	)
 
 	turnCtx := &AITurnContext{
+		PreferredLanguage:  preferredLanguage,
 		CurrentAreaSlug:    currentArea.Area,
 		CurrentAreaID:      areaCfg.ID,
 		CurrentAreaIndex:   areaIndex,
@@ -249,7 +254,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 	}
 
 	// 5. Process the turn (persist answer, update areas).
-	nextAction, err := s.processTurn(ctx, sessionCode, currentArea, answerText, questionText, questionNumber, aiResult)
+	nextAction, err := s.processTurn(ctx, sessionCode, currentArea, answerText, questionText, questionNumber, preferredLanguage, aiResult)
 	if err != nil {
 		return nil, fmt.Errorf("process turn: %w", err)
 	}
@@ -312,6 +317,7 @@ func (s *Service) processTurn(
 	currentArea *QuestionArea,
 	answerText, questionText string,
 	questionNumber int,
+	preferredLanguage string,
 	aiResult *AIResponse,
 ) (string, error) {
 	eval := aiResult.Evaluation
@@ -324,13 +330,21 @@ func (s *Service) processTurn(
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
+	var transcriptEs, transcriptEn string
+	if preferredLanguage == "en" {
+		transcriptEn = answerText
+	} else {
+		transcriptEs = answerText
+	}
+
 	// a. Save the answer.
 	evalJSON, _ := json.Marshal(eval)
 	_, err := s.store.SaveAnswer(dbCtx, SaveAnswerParams{
 		SessionCode:  sessionCode,
 		Area:         currentArea.Area, // backend decides this, not AI
 		QuestionText: questionText,
-		TranscriptEs: answerText,       // user answers in Spanish
+		TranscriptEs: transcriptEs,
+		TranscriptEn: transcriptEn,
 		AiEvaluation: evalJSON,
 		Sufficiency:  eval.CurrentCriterion.Status,
 	})
@@ -503,5 +517,14 @@ func (s *Service) markRemainingNotAssessed(ctx context.Context, sessionCode stri
 				slog.Warn("failed to mark not_assessed", "area", a.Area, "error", err)
 			}
 		}
+	}
+}
+
+func normalizePreferredLanguage(language string) string {
+	switch strings.ToLower(strings.TrimSpace(language)) {
+	case "en":
+		return "en"
+	default:
+		return "es"
 	}
 }

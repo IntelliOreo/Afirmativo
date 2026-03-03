@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/afirmativo/backend/internal/shared"
 )
@@ -26,6 +27,7 @@ func NewHandler(svc *Service) *Handler {
 
 type startRequest struct {
 	SessionCode string `json:"sessionCode"`
+	Language    string `json:"language"`
 }
 
 type questionResponse struct {
@@ -40,6 +42,7 @@ type startResponse struct {
 	Question        questionResponse `json:"question"`
 	TimerRemainingS int              `json:"timerRemainingS"`
 	Resuming        bool             `json:"resuming"`
+	Language        string           `json:"language"`
 }
 
 type answerResponse struct {
@@ -61,9 +64,15 @@ func (h *Handler) HandleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Debug("interview/start", "session", req.SessionCode)
+	language, ok := normalizeRequestLanguage(req.Language)
+	if !ok {
+		shared.WriteError(w, shared.ErrBadRequest, "language must be es or en", "BAD_REQUEST")
+		return
+	}
 
-	result, err := h.svc.StartInterview(r.Context(), req.SessionCode)
+	slog.Debug("interview/start payload", "body", req)
+
+	result, err := h.svc.StartInterview(r.Context(), req.SessionCode, language)
 	if err != nil {
 		switch {
 		case errors.Is(err, shared.ErrConflict):
@@ -88,6 +97,7 @@ func (h *Handler) HandleStart(w http.ResponseWriter, r *http.Request) {
 		},
 		TimerRemainingS: result.TimerRemainingS,
 		Resuming:        result.Resuming,
+		Language:        result.Language,
 	})
 }
 
@@ -113,7 +123,7 @@ func (h *Handler) HandleAnswer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Debug("interview/answer", "session", req.SessionCode, "question_number", req.QuestionNumber)
+	slog.Debug("interview/answer payload", "body", req)
 
 	result, err := h.svc.SubmitAnswer(r.Context(), req.SessionCode, req.AnswerText, req.QuestionText, req.QuestionNumber)
 	if err != nil {
@@ -139,4 +149,15 @@ func (h *Handler) HandleAnswer(w http.ResponseWriter, r *http.Request) {
 		},
 		TimerRemainingS: result.TimerRemainingS,
 	})
+}
+
+func normalizeRequestLanguage(language string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(language)) {
+	case "", "es":
+		return "es", true
+	case "en":
+		return "en", true
+	default:
+		return "", false
+	}
 }

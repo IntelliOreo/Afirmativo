@@ -19,10 +19,12 @@ SELECT * FROM sessions WHERE session_code = $1;
 -- name: StartSession :one
 -- Idempotent session start for reconnects. Sets interview_started_at on first call,
 -- resets current_interview_started_at on every call. Accepts created, active, or interviewing.
+-- preferred_language is only set once (on first start), then remains locked.
 UPDATE sessions
 SET status = 'interviewing',
     interview_started_at = COALESCE(interview_started_at, now()),
-    current_interview_started_at = now()
+    current_interview_started_at = now(),
+    preferred_language = COALESCE(preferred_language, $2)
 WHERE session_code = $1
   AND status IN ('created', 'active', 'interviewing')
 RETURNING *;

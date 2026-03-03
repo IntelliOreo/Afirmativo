@@ -18,9 +18,10 @@ type Store interface {
 	// GetSessionByCode retrieves a session by its code.
 	GetSessionByCode(ctx context.Context, sessionCode string) (*Session, error)
 
-	// StartSession atomically transitions a session from 'created' to 'interviewing'.
+	// StartSession atomically transitions a session from 'created' to 'interviewing'
+	// and stores preferredLanguage on first interview start.
 	// Returns ErrConflict if the session is not in 'created' status.
-	StartSession(ctx context.Context, sessionCode string) (*Session, error)
+	StartSession(ctx context.Context, sessionCode, preferredLanguage string) (*Session, error)
 
 	// CompleteSession marks an interviewing session as completed with ended_at = now().
 	CompleteSession(ctx context.Context, sessionCode string) error

@@ -77,8 +77,11 @@ func (s *PostgresStore) GetSessionByCode(ctx context.Context, sessionCode string
 }
 
 // StartSession atomically transitions a session to 'interviewing'.
-func (s *PostgresStore) StartSession(ctx context.Context, sessionCode string) (*Session, error) {
-	row, err := sqlgen.New(s.pool).StartSession(ctx, sessionCode)
+func (s *PostgresStore) StartSession(ctx context.Context, sessionCode, preferredLanguage string) (*Session, error) {
+	row, err := sqlgen.New(s.pool).StartSession(ctx, sqlgen.StartSessionParams{
+		SessionCode:       sessionCode,
+		PreferredLanguage: pgtype.Text{String: preferredLanguage, Valid: preferredLanguage != ""},
+	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, shared.ErrConflict
@@ -107,6 +110,9 @@ func sessionFromRow(row sqlgen.Session) *Session {
 	}
 	if row.Track.Valid {
 		s.Track = row.Track.String
+	}
+	if row.PreferredLanguage.Valid {
+		s.PreferredLanguage = row.PreferredLanguage.String
 	}
 	if row.InterviewLapsedUpdatedAt.Valid {
 		t := row.InterviewLapsedUpdatedAt.Time

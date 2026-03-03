@@ -19,11 +19,12 @@ var (
 
 // Session represents an active user session.
 type Session struct {
-	SessionCode string
-	PinHash     string
-	Track       string
-	Status      string
-	Role        string
+	SessionCode       string
+	PinHash           string
+	Track             string
+	PreferredLanguage string
+	Status            string
+	Role              string
 
 	// Interview time budget
 	InterviewBudgetSeconds    int

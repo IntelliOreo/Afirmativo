@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { NavHeader } from "@components/NavHeader";
 import { Footer } from "@components/Footer";
@@ -31,12 +31,37 @@ interface AnswerResponse {
   error?: string;
 }
 
+interface StartResponse {
+  question: Question;
+  timerRemainingS: number;
+  language: "es" | "en";
+  error?: string;
+}
+
+function getQuestionTextForLang(
+  q: Question | null | undefined,
+  language: "es" | "en",
+): string {
+  if (!q) return "";
+  if (language === "es") return q.textEs || q.textEn || "";
+  return q.textEn || q.textEs || "";
+}
+
 export default function InterviewPage() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const router = useRouter();
   const code = params.code as string;
+  const requestedLang = searchParams.get("lang");
 
-  const [lang, setLang] = useState<"es" | "en">("es");
+  const [lang, setLang] = useState<"es" | "en">(() => {
+    if (requestedLang === "en" || requestedLang === "es") return requestedLang;
+    if (typeof window !== "undefined") {
+      const stored = sessionStorage.getItem(`interview_lang_${code}`);
+      if (stored === "en" || stored === "es") return stored;
+    }
+    return "es";
+  });
   const [status, setStatus] = useState<InterviewStatus>("guard");
   const [question, setQuestion] = useState<Question | null>(null);
   const [textAnswer, setTextAnswer] = useState("");
@@ -49,8 +74,16 @@ export default function InterviewPage() {
   textAnswerRef.current = textAnswer;
   const questionRef = useRef(question);
   questionRef.current = question;
+  const langRef = useRef(lang);
+  langRef.current = lang;
   const statusRef = useRef(status);
   statusRef.current = status;
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem(`interview_lang_${code}`, lang);
+    }
+  }, [code, lang]);
 
   // Auto-submit at timer expiry: processes the final answer through AI, then redirects.
   const autoSubmit = useCallback(async () => {
@@ -65,7 +98,7 @@ export default function InterviewPage() {
           sessionCode: code,
           answerText: textAnswerRef.current.trim(),
           questionNumber: questionRef.current?.questionNumber ?? 0,
-          questionText: questionRef.current?.textEs ?? "",
+          questionText: getQuestionTextForLang(questionRef.current, langRef.current),
         },
         credentials: "include",
       });
@@ -111,14 +144,17 @@ export default function InterviewPage() {
     async function startInterview() {
       setStatus("loading");
       try {
-        const { ok, data } = await api<{ question: Question; timerRemainingS: number; error?: string }>("/api/interview/start", {
+        const { ok, data } = await api<StartResponse>("/api/interview/start", {
           method: "POST",
-          body: { sessionCode: code },
+          body: { sessionCode: code, language: langRef.current },
           credentials: "include",
         });
         if (!ok || !data) throw new Error(data?.error ?? "Failed to start");
         setQuestion(data.question);
         setSecondsLeft(data.timerRemainingS);
+        if (data.language === "en" || data.language === "es") {
+          setLang(data.language);
+        }
         setStatus("active");
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unknown error");
@@ -140,7 +176,7 @@ export default function InterviewPage() {
           sessionCode: code,
           answerText: textAnswer.trim(),
           questionNumber: question?.questionNumber ?? 0,
-          questionText: question?.textEs ?? "",
+          questionText: getQuestionTextForLang(question, lang),
         },
         credentials: "include",
       });
@@ -172,7 +208,7 @@ export default function InterviewPage() {
 
   return (
     <div className="flex flex-col min-h-screen">
-      <NavHeader lang={lang} onToggleLang={() => setLang(lang === "es" ? "en" : "es")} />
+      <NavHeader lang={lang} />
 
       {/* Timer bar */}
       <div
@@ -304,8 +340,8 @@ export default function InterviewPage() {
                   {lang === "es" ? "Su respuesta" : "Your answer"}
                   <span className="block text-sm font-normal text-gray-500">
                     {lang === "es"
-                      ? "Responda en español"
-                      : "Please answer in Spanish"}
+                      ? "Responda en su idioma seleccionado"
+                      : "Please answer in your selected language"}
                   </span>
                 </label>
                 <textarea

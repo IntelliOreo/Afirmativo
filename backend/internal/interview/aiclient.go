@@ -261,6 +261,12 @@ func validateAIResponse(result *AIResponse) error {
 func buildUserMessage(tc *AITurnContext) string {
 	criteriaJSON, _ := json.MarshalIndent(tc.CriteriaCoverage, "", "  ")
 	transcriptJSON, _ := json.MarshalIndent(tc.Transcript, "", "  ")
+	requiredLanguageCode := "es"
+	requiredLanguageLabel := "Spanish"
+	if strings.ToLower(strings.TrimSpace(tc.PreferredLanguage)) == "en" {
+		requiredLanguageCode = "en"
+		requiredLanguageLabel = "English"
+	}
 
 	return fmt.Sprintf(`CURRENT CRITERION:
 {
@@ -278,6 +284,7 @@ INTERVIEW PROGRESS:
 - Time remaining: %d seconds
 - Questions remaining: %d
 - Criteria remaining (including current): %d
+- Required next question language: %s (%s)
 
 CRITERIA COVERAGE:
 %s
@@ -285,7 +292,8 @@ CRITERIA COVERAGE:
 TRANSCRIPT:
 %s
 
-Please evaluate the candidate's most recent answer against the current criterion and generate the next question.`,
+Please evaluate the candidate's most recent answer against the current criterion and generate the next question.
+Return next_question strictly in the required next question language. Do not switch languages.`,
 		tc.CurrentAreaID,
 		tc.CurrentAreaLabel,
 		tc.Description,
@@ -296,6 +304,8 @@ Please evaluate the candidate's most recent answer against the current criterion
 		tc.TimeRemainingS,
 		tc.QuestionsRemaining,
 		tc.CriteriaRemaining,
+		requiredLanguageLabel,
+		requiredLanguageCode,
 		string(criteriaJSON),
 		string(transcriptJSON),
 	)

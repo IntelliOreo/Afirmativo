@@ -121,6 +121,7 @@ type APIUsage struct {
 
 // AITurnContext holds everything the AI client needs to build an API request.
 type AITurnContext struct {
+	PreferredLanguage  string
 	CurrentAreaSlug    string
 	CurrentAreaID      int
 	CurrentAreaIndex   int // position in the ordered area list (0-based)

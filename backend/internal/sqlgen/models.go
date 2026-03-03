@@ -63,6 +63,7 @@ type Session struct {
 	SessionCode               string             `json:"session_code"`
 	PinHash                   string             `json:"pin_hash"`
 	Track                     pgtype.Text        `json:"track"`
+	PreferredLanguage         pgtype.Text        `json:"preferred_language"`
 	Status                    string             `json:"status"`
 	Role                      string             `json:"role"`
 	EndedAt                   pgtype.Timestamptz `json:"ended_at"`
