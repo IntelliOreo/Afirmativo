@@ -242,6 +242,14 @@ function extractErrorCode(err: unknown): string {
   return typeof maybeCode === "string" ? maybeCode : "";
 }
 
+function isReloadRecoveryErrorCode(errorCode: string): boolean {
+  return errorCode === "TURN_CONFLICT" || errorCode === "IDEMPOTENCY_CONFLICT";
+}
+
+function shouldClearPendingAnswerOnError(errorCode: string): boolean {
+  return errorCode === "IDEMPOTENCY_CONFLICT";
+}
+
 function randomMessageIndex(currentIndex: number, total: number): number {
   if (total <= 1) return 0;
   let nextIndex = Math.floor(Math.random() * total);
@@ -487,7 +495,8 @@ function InterviewPageContent() {
     isCanceled: () => boolean = () => false,
   ): Promise<AnswerResponse> => {
     let current = pending;
-    if (!current.jobId) {
+    let jobId = current.jobId;
+    if (!jobId) {
       const { ok, data } = await api<AnswerAsyncAcceptedResponse>("/api/interview/answer-async", {
         method: "POST",
         body: {
@@ -506,10 +515,11 @@ function InterviewPageContent() {
         clientRequestId: data.clientRequestId,
         jobId: data.jobId,
       };
+      jobId = data.jobId;
       writePendingAnswerJob(code, current);
     }
 
-    return pollAsyncAnswerJob(current.jobId, isCanceled);
+    return pollAsyncAnswerJob(jobId, isCanceled);
   }, [code, pollAsyncAnswerJob]);
 
   const submitAnswer = useCallback(async (
@@ -543,8 +553,12 @@ function InterviewPageContent() {
         markInterviewDone("finished");
         return;
       }
+      const errCode = extractErrorCode(err);
+      if (shouldClearPendingAnswerOnError(errCode)) {
+        clearPendingAnswerJob(code);
+      }
       setError(err instanceof Error ? err.message : "Unknown error");
-      setErrorCode(extractErrorCode(err));
+      setErrorCode(errCode);
       setStatus("error");
     }
   }, [applyAnswerOutcome, code, markInterviewDone, submitPendingAnswerJob]);
@@ -640,8 +654,12 @@ function InterviewPageContent() {
             const resumedResult = await submitPendingAnswerJob(pending);
             applyAnswerOutcome(resumedResult);
           } catch (err) {
+            const errCode = extractErrorCode(err);
+            if (shouldClearPendingAnswerOnError(errCode)) {
+              clearPendingAnswerJob(code);
+            }
             setError(err instanceof Error ? err.message : "Unknown error");
-            setErrorCode(extractErrorCode(err));
+            setErrorCode(errCode);
             setStatus("error");
           } finally {
             restoringPendingRef.current = false;
@@ -688,7 +706,7 @@ function InterviewPageContent() {
     : 0;
   const showInterviewProgress = status === "active" || (status === "submitting" && !forceSubmit);
   const isSubmittingInQuestionFlow = status === "submitting" && !forceSubmit;
-  const isTurnConflictError = errorCode === "TURN_CONFLICT";
+  const isReloadRecoveryError = isReloadRecoveryErrorCode(errorCode);
   const waitStrings = WAITING_STATUS_STRINGS[lang];
   const startupWaitStatus = useRotatingStatus(waitStrings, status === "loading");
   const questionWaitStatus = useRotatingStatus(waitStrings, isSubmittingInQuestionFlow);
@@ -771,12 +789,12 @@ function InterviewPageContent() {
                 {lang === "es" ? "Error: " : "Error: "}
                 {error}
               </Alert>
-              {isTurnConflictError ? (
+              {isReloadRecoveryError ? (
                 <>
                   <p className="text-primary-darkest mb-4">
                     {lang === "es"
-                      ? "Esta sesión se desincronizó. Recargue esta página para obtener la pregunta y turno más recientes."
-                      : "This session got out of sync. Reload this page to fetch the latest question and turn token."}
+                      ? "Esta sesión se desincronizó. Recargue esta página para obtener el estado más reciente de la entrevista."
+                      : "This session got out of sync. Reload this page to fetch the latest interview state."}
                   </p>
                   <Button
                     fullWidth
