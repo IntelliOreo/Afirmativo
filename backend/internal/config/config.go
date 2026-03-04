@@ -26,19 +26,25 @@ type AreaConfig struct {
 // In local dev, values come from .env via godotenv.
 // In containers, values come from the runtime environment (e.g., Secret Manager).
 type Config struct {
-	Port               string
-	FrontendURL        string
-	DatabaseURL        string
-	SessionExpiryHours int
-	MockAPIURL         string // If non-empty, use this mock server instead of real AI APIs
-	LogLevel           string // "debug", "info", "warn", "error" — defaults to "debug"
-	HTTPReadTimeoutS   int    // HTTP server read timeout in seconds
-	HTTPWriteTimeoutS  int    // HTTP server write timeout in seconds
-	HTTPIdleTimeoutS   int    // HTTP server idle timeout in seconds
+	Port                     string
+	FrontendURL              string
+	DatabaseURL              string
+	SessionExpiryHours       int
+	JWTSecret                string
+	SessionAuthIssuer        string
+	SessionAuthAudience      string
+	SessionAuthCookieName    string
+	SessionAuthMaxTTLMinutes int
+	MockAPIURL               string // If non-empty, use this mock server instead of real AI APIs
+	LogLevel                 string // "debug", "info", "warn", "error" — defaults to "debug"
+	HTTPReadTimeoutS         int    // HTTP server read timeout in seconds
+	HTTPWriteTimeoutS        int    // HTTP server write timeout in seconds
+	HTTPIdleTimeoutS         int    // HTTP server idle timeout in seconds
 
 	// AI configuration — all AI instructions live here, not in Go code.
 	AIProvider                              string       // "claude" (default) or "ollama"
 	OllamaBaseURL                           string       // Base URL for Ollama OpenAI-compatible endpoint
+	OllamaTemperature                       float64      // Sampling temperature for Ollama chat completions
 	AISystemPrompt                          string       // Base system prompt sent to Claude/Ollama on every turn
 	UnstructuredInterviewOutputFormatPrompt string       // Prompt instructions for unstructured providers to return interview JSON
 	AIPromptLastQ                           string       // Appended when 1 follow-up remains OR time <= AILastQSeconds
@@ -123,11 +129,34 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("invalid HTTP_IDLE_TIMEOUT_SECONDS: %w", err10)
 	}
 
+	sessionAuthMaxTTLStr := envOr("SESSION_AUTH_MAX_TTL_MINUTES", "60")
+	sessionAuthMaxTTL, err11 := strconv.Atoi(sessionAuthMaxTTLStr)
+	if err11 != nil {
+		return Config{}, fmt.Errorf("invalid SESSION_AUTH_MAX_TTL_MINUTES: %w", err11)
+	}
+	if sessionAuthMaxTTL <= 0 {
+		return Config{}, fmt.Errorf("SESSION_AUTH_MAX_TTL_MINUTES must be > 0")
+	}
+
+	ollamaTempStr := envOr("OLLAMA_TEMPERATURE", "0.3")
+	ollamaTemp, err12 := strconv.ParseFloat(ollamaTempStr, 64)
+	if err12 != nil {
+		return Config{}, fmt.Errorf("invalid OLLAMA_TEMPERATURE: %w", err12)
+	}
+	if ollamaTemp < 0 || ollamaTemp > 2 {
+		return Config{}, fmt.Errorf("OLLAMA_TEMPERATURE must be between 0 and 2")
+	}
+
 	cfg := Config{
 		Port:                                    envOr("PORT", "8080"),
 		FrontendURL:                             envOr("FRONTEND_URL", "http://localhost:3000"),
 		DatabaseURL:                             os.Getenv("DATABASE_URL"),
 		SessionExpiryHours:                      expiry,
+		JWTSecret:                               envOr("JWT_SECRET", os.Getenv("SESSION_AUTH_SECRET")),
+		SessionAuthIssuer:                       envOr("SESSION_AUTH_ISSUER", "afirmativo-backend"),
+		SessionAuthAudience:                     envOr("SESSION_AUTH_AUDIENCE", "afirmativo-frontend"),
+		SessionAuthCookieName:                   envOr("SESSION_AUTH_COOKIE_NAME", "afirmativo_auth"),
+		SessionAuthMaxTTLMinutes:                sessionAuthMaxTTL,
 		MockAPIURL:                              os.Getenv("MOCK_API_URL"),
 		LogLevel:                                envOr("LOG_LEVEL", "debug"),
 		HTTPReadTimeoutS:                        httpReadTimeout,
@@ -135,6 +164,7 @@ func Load() (Config, error) {
 		HTTPIdleTimeoutS:                        httpIdleTimeout,
 		AIProvider:                              envOr("AI_PROVIDER", "claude"),
 		OllamaBaseURL:                           envOr("OLLAMA_BASE_URL", "http://localhost:11434"),
+		OllamaTemperature:                       ollamaTemp,
 		AISystemPrompt:                          os.Getenv("AI_SYSTEM_PROMPT"),
 		UnstructuredInterviewOutputFormatPrompt: os.Getenv("UNSTRUCTURED_INTERVIEW_OUTPUT_FORMAT_PROMPT"),
 		AIPromptLastQ:                           os.Getenv("AI_PROMPT_LAST_Q"),
@@ -157,6 +187,9 @@ func Load() (Config, error) {
 
 	if cfg.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("DATABASE_URL is required")
+	}
+	if cfg.JWTSecret == "" {
+		return Config{}, fmt.Errorf("JWT_SECRET is required")
 	}
 
 	if cfg.AIProvider != "claude" && cfg.AIProvider != "ollama" {
@@ -200,6 +233,11 @@ func (c Config) LogLoaded() {
 		"frontend_url", c.FrontendURL,
 		"database_url_set", c.DatabaseURL != "",
 		"session_expiry_hours", c.SessionExpiryHours,
+		"jwt_secret_set", c.JWTSecret != "",
+		"session_auth_issuer", c.SessionAuthIssuer,
+		"session_auth_audience", c.SessionAuthAudience,
+		"session_auth_cookie_name", c.SessionAuthCookieName,
+		"session_auth_max_ttl_minutes", c.SessionAuthMaxTTLMinutes,
 		"mock_api_url", c.MockAPIURL,
 		"log_level", c.LogLevel,
 		"http_read_timeout_seconds", c.HTTPReadTimeoutS,
@@ -209,6 +247,7 @@ func (c Config) LogLoaded() {
 	slog.Debug("AI config loaded",
 		"provider", c.AIProvider,
 		"ollama_base_url", c.OllamaBaseURL,
+		"ollama_temperature", c.OllamaTemperature,
 		"model", c.AIModel,
 		"max_tokens", c.AIMaxTokens,
 		"api_key_set", c.AIAPIKey != "",

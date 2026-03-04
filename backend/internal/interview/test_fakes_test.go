@@ -2,6 +2,9 @@ package interview
 
 import (
 	"context"
+	"time"
+
+	"github.com/afirmativo/backend/internal/session"
 )
 
 type fakeInterviewStore struct {
@@ -12,6 +15,12 @@ type fakeInterviewStore struct {
 	markAnswerJobFailedFn  func(ctx context.Context, params MarkAnswerJobFailedParams) error
 }
 
+type fakeInterviewSessionStore struct {
+	startSessionFn     func(ctx context.Context, sessionCode, preferredLanguage string) (*session.Session, error)
+	getSessionByCodeFn func(ctx context.Context, sessionCode string) (*session.Session, error)
+	completeSessionFn  func(ctx context.Context, sessionCode string) error
+}
+
 func (f *fakeInterviewStore) CreateQuestionArea(context.Context, string, string) (*QuestionArea, error) {
 	return nil, nil
 }
@@ -19,16 +28,28 @@ func (f *fakeInterviewStore) SetAreaInProgress(context.Context, string, string) 
 func (f *fakeInterviewStore) GetInProgressArea(context.Context, string) (*QuestionArea, error) {
 	return nil, nil
 }
-func (f *fakeInterviewStore) GetAreasBySession(context.Context, string) ([]QuestionArea, error) { return nil, nil }
-func (f *fakeInterviewStore) IncrementAreaQuestions(context.Context, string, string) error       { return nil }
-func (f *fakeInterviewStore) CompleteArea(context.Context, string, string) error                  { return nil }
-func (f *fakeInterviewStore) MarkAreaInsufficient(context.Context, string, string) error          { return nil }
-func (f *fakeInterviewStore) MarkAreaPreAddressed(context.Context, string, string, string) error  { return nil }
-func (f *fakeInterviewStore) MarkAreaNotAssessed(context.Context, string, string) error           { return nil }
-func (f *fakeInterviewStore) SaveAnswer(context.Context, SaveAnswerParams) (*Answer, error)       { return nil, nil }
-func (f *fakeInterviewStore) GetAnswersBySession(context.Context, string) ([]Answer, error)       { return nil, nil }
-func (f *fakeInterviewStore) GetAnswerCount(context.Context, string) (int, error)                 { return 0, nil }
-func (f *fakeInterviewStore) GetFlowState(context.Context, string) (*FlowState, error)            { return nil, nil }
+func (f *fakeInterviewStore) GetAreasBySession(context.Context, string) ([]QuestionArea, error) {
+	return nil, nil
+}
+func (f *fakeInterviewStore) IncrementAreaQuestions(context.Context, string, string) error {
+	return nil
+}
+func (f *fakeInterviewStore) CompleteArea(context.Context, string, string) error         { return nil }
+func (f *fakeInterviewStore) MarkAreaInsufficient(context.Context, string, string) error { return nil }
+func (f *fakeInterviewStore) MarkAreaPreAddressed(context.Context, string, string, string) error {
+	return nil
+}
+func (f *fakeInterviewStore) MarkAreaNotAssessed(context.Context, string, string) error { return nil }
+func (f *fakeInterviewStore) SaveAnswer(context.Context, SaveAnswerParams) (*Answer, error) {
+	return nil, nil
+}
+func (f *fakeInterviewStore) GetAnswersBySession(context.Context, string) ([]Answer, error) {
+	return nil, nil
+}
+func (f *fakeInterviewStore) GetAnswerCount(context.Context, string) (int, error) { return 0, nil }
+func (f *fakeInterviewStore) GetFlowState(context.Context, string) (*FlowState, error) {
+	return nil, nil
+}
 func (f *fakeInterviewStore) PrepareDisclaimerStep(context.Context, string, string) (*FlowState, error) {
 	return nil, nil
 }
@@ -76,5 +97,40 @@ func (f *fakeInterviewStore) MarkAnswerJobFailed(ctx context.Context, params Mar
 }
 
 func newInterviewServiceForAsyncTests(store Store) *Service {
-	return NewService(nil, nil, nil, store, nil, nil, "", "", "", "")
+	fakeSessions := &fakeInterviewSessionStore{}
+	return NewService(fakeSessions, fakeSessions, fakeSessions, store, nil, nil, "", "", "", "")
+}
+
+func (f *fakeInterviewSessionStore) StartSession(ctx context.Context, sessionCode, preferredLanguage string) (*session.Session, error) {
+	if f.startSessionFn != nil {
+		return f.startSessionFn(ctx, sessionCode, preferredLanguage)
+	}
+	now := time.Now().UTC()
+	return &session.Session{
+		SessionCode:               sessionCode,
+		PreferredLanguage:         preferredLanguage,
+		Status:                    "interviewing",
+		InterviewBudgetSeconds:    3600,
+		InterviewLapsedSeconds:    0,
+		CurrentInterviewStartedAt: &now,
+		ExpiresAt:                 now.Add(24 * time.Hour),
+	}, nil
+}
+
+func (f *fakeInterviewSessionStore) GetSessionByCode(ctx context.Context, sessionCode string) (*session.Session, error) {
+	if f.getSessionByCodeFn != nil {
+		return f.getSessionByCodeFn(ctx, sessionCode)
+	}
+	return &session.Session{
+		SessionCode: sessionCode,
+		Status:      "interviewing",
+		ExpiresAt:   time.Now().UTC().Add(24 * time.Hour),
+	}, nil
+}
+
+func (f *fakeInterviewSessionStore) CompleteSession(ctx context.Context, sessionCode string) error {
+	if f.completeSessionFn != nil {
+		return f.completeSessionFn(ctx, sessionCode)
+	}
+	return nil
 }

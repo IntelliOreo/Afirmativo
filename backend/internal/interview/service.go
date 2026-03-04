@@ -94,6 +94,15 @@ func (s *Service) StartInterview(ctx context.Context, sessionCode, preferredLang
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
+	existing, err := s.sessionGetter.GetSessionByCode(dbCtx, sessionCode)
+	if err != nil {
+		return nil, err
+	}
+	if time.Now().After(existing.ExpiresAt) {
+		slog.Debug("start interview rejected: session expired", "session_code", sessionCode)
+		return nil, session.ErrSessionExpired
+	}
+
 	sess, err := s.sessionStarter.StartSession(dbCtx, sessionCode, preferredLanguage)
 	if err != nil {
 		return nil, err
@@ -196,6 +205,15 @@ type answerJobQuestionShape struct {
 func (s *Service) SubmitAnswerAsync(ctx context.Context, sessionCode, answerText, questionText, turnID, clientRequestID string) (*SubmitAnswerAsyncResult, error) {
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
+
+	sess, err := s.sessionGetter.GetSessionByCode(dbCtx, sessionCode)
+	if err != nil {
+		return nil, fmt.Errorf("get session: %w", err)
+	}
+	if time.Now().After(sess.ExpiresAt) {
+		slog.Debug("submit answer async rejected: session expired", "session_code", sessionCode)
+		return nil, session.ErrSessionExpired
+	}
 
 	job, err := s.store.UpsertAnswerJob(dbCtx, UpsertAnswerJobParams{
 		SessionCode:     sessionCode,
@@ -451,6 +469,10 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 	sess, err := s.sessionGetter.GetSessionByCode(dbCtx, sessionCode)
 	if err != nil {
 		return nil, fmt.Errorf("get session: %w", err)
+	}
+	if time.Now().After(sess.ExpiresAt) {
+		slog.Debug("submit answer rejected: session expired", "session_code", sessionCode)
+		return nil, session.ErrSessionExpired
 	}
 	flowState, err := s.store.GetFlowState(dbCtx, sessionCode)
 	if err != nil {

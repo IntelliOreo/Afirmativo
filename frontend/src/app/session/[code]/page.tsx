@@ -77,37 +77,18 @@ function SessionPageContent() {
       const storedPin = sessionStorage.getItem(`pin_${code}`);
       if (storedPin) {
         sessionStorage.removeItem(`pin_${code}`);
-        document.cookie = `session_${code}=${storedPin}; path=/; max-age=86400; SameSite=Lax`;
-        setDisplayPin(storedPin);
-        setView("hub");
-        return;
-      }
-
-      // 2. Check for existing session cookie
-      const cookiePin = document.cookie
-        .split("; ")
-        .find((row) => row.startsWith(`session_${code}=`))
-        ?.split("=")[1];
-
-      if (!cookiePin) {
-        setView("recovery");
-        return;
-      }
-
-      // 3. Verify cookie with backend
-      try {
-        const result = await verifySession(code, cookiePin);
-        if (result.ok) {
-          setDisplayPin(cookiePin);
-          // Auto-redirect if interview already started
-          if (result.session.interview_started_at) {
-            goToInterview(lang, true);
+        try {
+          const result = await verifySession(code, storedPin);
+          if (result.ok) {
+            setDisplayPin(storedPin);
+            if (result.session.interview_started_at) {
+              goToInterview(lang, true);
+              return;
+            }
+            setView("hub");
             return;
           }
-          setView("hub");
-        } else {
-          // Session invalid/expired — clear cookie, show recovery
-          document.cookie = `session_${code}=; path=/; max-age=0`;
+
           setError(
             result.status === 410
               ? lang === "es"
@@ -116,12 +97,20 @@ function SessionPageContent() {
               : ""
           );
           setView("recovery");
+          return;
+        } catch {
+          setError(
+            lang === "es"
+              ? "Error de conexión. Intente de nuevo. / Connection error. Please try again."
+              : "Connection error. Please try again. / Error de conexión."
+          );
+          setView("recovery");
+          return;
         }
-      } catch {
-        // Network error — show hub with cached cookie (graceful degradation)
-        setDisplayPin(cookiePin);
-        setView("hub");
       }
+
+      // 2. No local PIN available — show recovery form.
+      setView("recovery");
     }
     init();
   }, [code, verifySession, goToInterview, lang]);
@@ -163,7 +152,6 @@ function SessionPageContent() {
     try {
       const result = await verifySession(code, pin.trim());
       if (result.ok) {
-        document.cookie = `session_${code}=${pin.trim()}; path=/; max-age=86400; SameSite=Lax`;
         if (result.session.interview_started_at) {
           goToInterview(lang, true);
           return;

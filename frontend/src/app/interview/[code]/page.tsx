@@ -594,19 +594,9 @@ function InterviewPageContent() {
     return () => clearInterval(interval);
   }, [status, secondsLeft <= 0, autoSubmit]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Session guard: check for session cookie before starting.
+  // Session guard: start interview only if backend auth cookie is valid.
   useEffect(() => {
     if (!langInitialized) return;
-
-    const cookiePin = document.cookie
-      .split("; ")
-      .find((row) => row.startsWith(`session_${code}=`))
-      ?.split("=")[1];
-
-    if (!cookiePin) {
-      setStatus("guard");
-      return;
-    }
 
     async function startInterview() {
       setStatus("loading");
@@ -622,6 +612,14 @@ function InterviewPageContent() {
 
         if (!ok || !data) {
           const errorMessage = data?.error ?? "Failed to start";
+          const unauthorized =
+            httpStatus === 401
+            || data?.code === "UNAUTHORIZED"
+            || data?.code === "SESSION_MISMATCH";
+          if (unauthorized) {
+            setStatus("guard");
+            return;
+          }
           const completed =
             httpStatus === 409
             || data?.code === "INTERVIEW_COMPLETED"

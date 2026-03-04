@@ -45,8 +45,19 @@ func hashPIN(t *testing.T, pin string) string {
 	return string(h)
 }
 
-func newHandlerForTest(store Store) *Handler {
-	return NewHandler(NewService(store, 24))
+func newHandlerForTest(t *testing.T, store Store) *Handler {
+	t.Helper()
+	auth, err := shared.NewSessionAuthManager(shared.SessionAuthConfig{
+		Secret:       "test-session-auth-secret-32-bytes-minimum",
+		CookieName:   "test_session_auth",
+		Issuer:       "afirmativo-test",
+		Audience:     "afirmativo-test-ui",
+		CookieSecure: false,
+	})
+	if err != nil {
+		t.Fatalf("NewSessionAuthManager() error = %v", err)
+	}
+	return NewHandler(NewService(store, 24), auth, time.Hour)
 }
 
 func decodeJSONBody(t *testing.T, rr *httptest.ResponseRecorder, dst any) {
@@ -59,7 +70,7 @@ func decodeJSONBody(t *testing.T, rr *httptest.ResponseRecorder, dst any) {
 func TestHandleValidateCoupon_MapsCouponInvalid(t *testing.T) {
 	t.Parallel()
 
-	h := newHandlerForTest(&fakeStore{
+	h := newHandlerForTest(t, &fakeStore{
 		claimCouponAndCreateSessionFn: func(context.Context, string, string, string, time.Time) (*Session, error) {
 			return nil, shared.ErrCouponInvalid
 		},
@@ -97,7 +108,7 @@ func TestHandleValidateCoupon_SuccessContract(t *testing.T) {
 	var capturedPinHash string
 	start := time.Now()
 
-	h := newHandlerForTest(&fakeStore{
+	h := newHandlerForTest(t, &fakeStore{
 		claimCouponAndCreateSessionFn: func(_ context.Context, _ string, sessionCode, pinHash string, expiresAt time.Time) (*Session, error) {
 			capturedSessionCode = sessionCode
 			capturedPinHash = pinHash
@@ -200,7 +211,7 @@ func TestHandleVerifySession_ErrorMappings(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			h := newHandlerForTest(tc.store)
+			h := newHandlerForTest(t, tc.store)
 			req := httptest.NewRequest(http.MethodPost, "/api/session/verify", strings.NewReader(tc.body))
 			rr := httptest.NewRecorder()
 			h.HandleVerifySession(rr, req)
@@ -225,7 +236,7 @@ func TestHandleVerifySession_SuccessContract(t *testing.T) {
 	createdAt := now.Add(-10 * time.Minute).Truncate(time.Second)
 	expiresAt := now.Add(24 * time.Hour).Truncate(time.Second)
 
-	h := newHandlerForTest(&fakeStore{
+	h := newHandlerForTest(t, &fakeStore{
 		getSessionByCodeFn: func(context.Context, string) (*Session, error) {
 			return &Session{
 				SessionCode:            "AP-7K9X-M2NF",
@@ -247,6 +258,16 @@ func TestHandleVerifySession_SuccessContract(t *testing.T) {
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	foundAuthCookie := false
+	for _, cookie := range rr.Result().Cookies() {
+		if cookie.Name == "test_session_auth" && cookie.Value != "" {
+			foundAuthCookie = true
+			break
+		}
+	}
+	if !foundAuthCookie {
+		t.Fatalf("expected test_session_auth cookie to be set")
 	}
 
 	var got struct {

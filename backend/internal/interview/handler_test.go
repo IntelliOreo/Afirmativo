@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/afirmativo/backend/internal/shared"
 )
 
 func decodeInterviewJSON(t *testing.T, rr *httptest.ResponseRecorder, dst any) {
@@ -14,6 +16,11 @@ func decodeInterviewJSON(t *testing.T, rr *httptest.ResponseRecorder, dst any) {
 	if err := json.Unmarshal(rr.Body.Bytes(), dst); err != nil {
 		t.Fatalf("json.Unmarshal() error = %v; body=%s", err, rr.Body.String())
 	}
+}
+
+func withSessionAuthContextForTest(req *http.Request, sessionCode string) *http.Request {
+	claims := &shared.SessionAuthClaims{SessionCode: sessionCode}
+	return req.WithContext(shared.WithSessionAuthClaims(req.Context(), claims))
 }
 
 func newInterviewHandlerForTest(store Store) *Handler {
@@ -118,6 +125,7 @@ func TestHandleAnswerAsync_ValidationAndIdempotencyErrors(t *testing.T) {
 			"turnId":"turn-1",
 			"clientRequestId":"req-1"
 		}`))
+		req = withSessionAuthContextForTest(req, "AP-7K9X-M2NF")
 		rr := httptest.NewRecorder()
 
 		h.HandleAnswerAsync(rr, req)
@@ -170,6 +178,7 @@ func TestHandleAnswerJobStatus_ValidationAndContract(t *testing.T) {
 		})
 		req := httptest.NewRequest(http.MethodGet, "/api/interview/answer-jobs/job-1?sessionCode=AP-7K9X-M2NF", nil)
 		req.SetPathValue("jobId", "job-1")
+		req = withSessionAuthContextForTest(req, "AP-7K9X-M2NF")
 		rr := httptest.NewRecorder()
 
 		h.HandleAnswerJobStatus(rr, req)
@@ -214,6 +223,7 @@ func TestHandleAnswerJobStatus_ValidationAndContract(t *testing.T) {
 		})
 		req := httptest.NewRequest(http.MethodGet, "/api/interview/answer-jobs/job-1?sessionCode=AP-7K9X-M2NF", nil)
 		req.SetPathValue("jobId", "job-1")
+		req = withSessionAuthContextForTest(req, "AP-7K9X-M2NF")
 		rr := httptest.NewRecorder()
 
 		h.HandleAnswerJobStatus(rr, req)

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/afirmativo/backend/internal/session"
 	"github.com/afirmativo/backend/internal/shared"
 )
 
@@ -64,6 +65,9 @@ func (h *Handler) HandleStart(w http.ResponseWriter, r *http.Request) {
 		shared.WriteError(w, shared.ErrBadRequest, "language must be es or en", "BAD_REQUEST")
 		return
 	}
+	if !shared.RequireSessionCodeMatch(w, r, req.SessionCode) {
+		return
+	}
 
 	slog.Debug("interview/start payload", "body", req)
 
@@ -74,6 +78,8 @@ func (h *Handler) HandleStart(w http.ResponseWriter, r *http.Request) {
 			shared.WriteError(w, shared.ErrConflict, "Interview already completed", "INTERVIEW_COMPLETED")
 		case errors.Is(err, shared.ErrNotFound):
 			shared.WriteError(w, shared.ErrNotFound, "Session not found", "SESSION_NOT_FOUND")
+		case errors.Is(err, session.ErrSessionExpired):
+			shared.WriteError(w, shared.ErrGone, "Session expired", "SESSION_EXPIRED")
 		default:
 			slog.Error("interview start failed", "error", err)
 			shared.WriteError(w, shared.ErrInternal, "Internal server error", "INTERNAL_ERROR")
@@ -156,6 +162,9 @@ func (h *Handler) HandleAnswerAsync(w http.ResponseWriter, r *http.Request) {
 		shared.WriteError(w, shared.ErrBadRequest, "clientRequestId is required", "BAD_REQUEST")
 		return
 	}
+	if !shared.RequireSessionCodeMatch(w, r, req.SessionCode) {
+		return
+	}
 
 	// Match sync-style payload logging for local debugging at DEBUG level.
 	slog.Debug("interview/answer-async payload", "body", req)
@@ -177,6 +186,8 @@ func (h *Handler) HandleAnswerAsync(w http.ResponseWriter, r *http.Request) {
 				"turn_id", req.TurnID,
 			)
 			shared.WriteError(w, shared.ErrConflict, "clientRequestId cannot be reused with a different payload", "IDEMPOTENCY_CONFLICT")
+		case errors.Is(err, session.ErrSessionExpired):
+			shared.WriteError(w, shared.ErrGone, "Session expired", "SESSION_EXPIRED")
 		default:
 			slog.Error("answer async submission failed",
 				"session_code", req.SessionCode,
@@ -213,6 +224,9 @@ func (h *Handler) HandleAnswerJobStatus(w http.ResponseWriter, r *http.Request) 
 	}
 	if sessionCode == "" {
 		shared.WriteError(w, shared.ErrBadRequest, "sessionCode is required", "BAD_REQUEST")
+		return
+	}
+	if !shared.RequireSessionCodeMatch(w, r, sessionCode) {
 		return
 	}
 

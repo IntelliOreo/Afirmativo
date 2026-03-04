@@ -70,7 +70,25 @@ func main() {
 	// Wire dependencies.
 	sessionStore := session.NewPostgresStore(pool)
 	sessionSvc := session.NewService(sessionStore, cfg.SessionExpiryHours)
-	sessionHandler := session.NewHandler(sessionSvc)
+
+	useSecureAuthCookie := strings.HasPrefix(strings.ToLower(cfg.FrontendURL), "https://")
+	sessionAuth, err := shared.NewSessionAuthManager(shared.SessionAuthConfig{
+		Secret:       cfg.JWTSecret,
+		CookieName:   cfg.SessionAuthCookieName,
+		Issuer:       cfg.SessionAuthIssuer,
+		Audience:     cfg.SessionAuthAudience,
+		CookieSecure: useSecureAuthCookie,
+	})
+	if err != nil {
+		slog.Error("failed to initialize session auth manager", "error", err)
+		os.Exit(1)
+	}
+	slog.Debug("session auth configured",
+		"cookie_name", sessionAuth.CookieName(),
+		"cookie_secure", useSecureAuthCookie,
+		"max_ttl_minutes", cfg.SessionAuthMaxTTLMinutes,
+	)
+	sessionHandler := session.NewHandler(sessionSvc, sessionAuth, time.Duration(cfg.SessionAuthMaxTTLMinutes)*time.Minute)
 
 	interviewStore := interview.NewPostgresStore(pool)
 
@@ -84,6 +102,8 @@ func main() {
 		aiClient = interview.NewOllamaAIClient(interview.OllamaAIClientConfig{
 			BaseURL:            cfg.OllamaBaseURL,
 			Model:              cfg.AIModel,
+			MaxTokens:          cfg.AIMaxTokens,
+			Temperature:        cfg.OllamaTemperature,
 			SystemPrompt:       cfg.AISystemPrompt,
 			OutputFormatPrompt: cfg.UnstructuredInterviewOutputFormatPrompt,
 			PromptLastQ:        cfg.AIPromptLastQ,
@@ -97,6 +117,8 @@ func main() {
 		reportAIClient = report.NewOllamaReportAIClient(report.OllamaReportAIClientConfig{
 			BaseURL:            cfg.OllamaBaseURL,
 			Model:              cfg.AIModel,
+			MaxTokens:          cfg.AIReportMaxTokens,
+			Temperature:        cfg.OllamaTemperature,
 			TimeoutSeconds:     cfg.AITimeoutSeconds,
 			ReportPrompt:       cfg.AIReportPrompt,
 			OutputFormatPrompt: cfg.UnstructuredReportOutputFormatPrompt,
@@ -165,11 +187,11 @@ func main() {
 	mux.HandleFunc("GET /api/health", shared.HandleHealth(pool))
 	mux.HandleFunc("POST /api/coupon/validate", sessionHandler.HandleValidateCoupon)
 	mux.HandleFunc("POST /api/session/verify", sessionHandler.HandleVerifySession)
-	mux.HandleFunc("POST /api/interview/start", interviewHandler.HandleStart)
-	mux.HandleFunc("POST /api/interview/answer-async", interviewHandler.HandleAnswerAsync)
-	mux.HandleFunc("GET /api/interview/answer-jobs/{jobId}", interviewHandler.HandleAnswerJobStatus)
-	mux.HandleFunc("GET /api/report/{code}", reportHandler.HandleGetReport)
-	mux.HandleFunc("GET /api/report/{code}/pdf", reportHandler.HandleGetReportPDF)
+	mux.HandleFunc("POST /api/interview/start", shared.RequireSessionAuth(sessionAuth, interviewHandler.HandleStart))
+	mux.HandleFunc("POST /api/interview/answer-async", shared.RequireSessionAuth(sessionAuth, interviewHandler.HandleAnswerAsync))
+	mux.HandleFunc("GET /api/interview/answer-jobs/{jobId}", shared.RequireSessionAuth(sessionAuth, interviewHandler.HandleAnswerJobStatus))
+	mux.HandleFunc("GET /api/report/{code}", shared.RequireSessionAuth(sessionAuth, reportHandler.HandleGetReport))
+	mux.HandleFunc("GET /api/report/{code}/pdf", shared.RequireSessionAuth(sessionAuth, reportHandler.HandleGetReportPDF))
 	mux.HandleFunc("POST /api/admin/clean-up-db", adminHandler.HandleCleanUpDB)
 
 	// Apply middleware.

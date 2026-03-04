@@ -43,7 +43,6 @@ export default function LandingPage() {
       });
 
       if (ok) {
-        document.cookie = `session_${resumeCode.trim()}=${resumePin.trim()}; path=/; max-age=86400; SameSite=Lax`;
         router.push(withLang(`/session/${resumeCode.trim()}`, lang));
       } else if (status === 404) {
         setResumeError(

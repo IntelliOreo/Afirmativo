@@ -33,6 +33,9 @@ func (h *Handler) HandleGetReport(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if !shared.RequireSessionCodeMatch(w, r, code) {
+		return
+	}
 
 	report, err := h.svc.GetOrGenerateReport(r.Context(), code)
 	if err != nil {
@@ -91,6 +94,9 @@ func (h *Handler) HandleGetReport(w http.ResponseWriter, r *http.Request) {
 // HandleGetReportPDF serves the report as a PDF download.
 // Deferred — returns 501 Not Implemented for now.
 func (h *Handler) HandleGetReportPDF(w http.ResponseWriter, r *http.Request) {
+	if !shared.RequireSessionCodeMatch(w, r, r.PathValue("code")) {
+		return
+	}
 	shared.WriteJSON(w, http.StatusNotImplemented, shared.ErrorResponse{
 		Error: "PDF generation not implemented yet",
 		Code:  "NOT_IMPLEMENTED",

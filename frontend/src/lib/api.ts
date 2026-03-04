@@ -29,7 +29,7 @@ export async function api<T = unknown>(
     method,
     headers: opts.body != null ? { "Content-Type": "application/json" } : undefined,
     body: opts.body != null ? JSON.stringify(opts.body) : undefined,
-    credentials: opts.credentials,
+    credentials: opts.credentials ?? "include",
   });
 
   const elapsed = Math.round(performance.now() - start);

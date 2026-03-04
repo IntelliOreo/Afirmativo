@@ -8,18 +8,28 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/afirmativo/backend/internal/shared"
 )
 
 // Handler holds session HTTP handlers.
 type Handler struct {
-	svc *Service
+	svc        *Service
+	auth       *shared.SessionAuthManager
+	authMaxTTL time.Duration
 }
 
 // NewHandler creates a Handler backed by the given Service.
-func NewHandler(svc *Service) *Handler {
-	return &Handler{svc: svc}
+func NewHandler(svc *Service, auth *shared.SessionAuthManager, authMaxTTL time.Duration) *Handler {
+	if authMaxTTL <= 0 {
+		authMaxTTL = time.Hour
+	}
+	return &Handler{
+		svc:        svc,
+		auth:       auth,
+		authMaxTTL: authMaxTTL,
+	}
 }
 
 // validateRequest is the JSON body for POST /api/coupon/validate.
@@ -99,12 +109,19 @@ func (h *Handler) HandleVerifySession(w http.ResponseWriter, r *http.Request) {
 
 	sess, err := h.svc.VerifySession(r.Context(), req.SessionCode, req.PIN)
 	if err != nil {
+		if h.auth != nil {
+			h.auth.ClearCookie(w)
+			slog.Debug("cleared auth cookie after failed verify", "session_code", req.SessionCode)
+		}
 		switch {
 		case errors.Is(err, shared.ErrNotFound):
+			slog.Debug("session verify failed: session not found", "session_code", req.SessionCode)
 			shared.WriteError(w, shared.ErrNotFound, "Session not found", "SESSION_NOT_FOUND")
 		case errors.Is(err, ErrPINIncorrect):
+			slog.Debug("session verify failed: incorrect PIN", "session_code", req.SessionCode)
 			shared.WriteError(w, shared.ErrUnauthorized, "PIN incorrect", "PIN_INCORRECT")
 		case errors.Is(err, ErrSessionExpired):
+			slog.Debug("session verify failed: session expired", "session_code", req.SessionCode)
 			shared.WriteError(w, shared.ErrGone, "Session expired", "SESSION_EXPIRED")
 		default:
 			slog.Error("session verify failed", "error", err)
@@ -112,6 +129,33 @@ func (h *Handler) HandleVerifySession(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+
+	if h.auth == nil {
+		slog.Error("session auth manager not configured")
+		shared.WriteError(w, shared.ErrInternal, "Internal server error", "INTERNAL_ERROR")
+		return
+	}
+
+	now := time.Now().UTC()
+	tokenExpiresAt := sess.ExpiresAt.UTC()
+	maxTokenExpiresAt := now.Add(h.authMaxTTL)
+	if tokenExpiresAt.After(maxTokenExpiresAt) {
+		tokenExpiresAt = maxTokenExpiresAt
+	}
+
+	token, err := h.auth.MintToken(sess.SessionCode, tokenExpiresAt)
+	if err != nil {
+		slog.Error("failed to mint session auth token", "session_code", sess.SessionCode, "error", err)
+		shared.WriteError(w, shared.ErrInternal, "Internal server error", "INTERNAL_ERROR")
+		return
+	}
+	h.auth.SetCookie(w, token, tokenExpiresAt)
+	slog.Debug("session verified and auth cookie issued",
+		"session_code", sess.SessionCode,
+		"token_expires_at", tokenExpiresAt,
+		"session_expires_at", sess.ExpiresAt.UTC(),
+		"auth_ttl_seconds", int(tokenExpiresAt.Sub(now).Seconds()),
+	)
 
 	shared.WriteJSON(w, http.StatusOK, map[string]any{
 		"session": map[string]any{
