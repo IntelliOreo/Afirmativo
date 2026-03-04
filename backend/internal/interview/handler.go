@@ -1,7 +1,6 @@
 // HTTP handlers for interview endpoints:
 //
 //	POST /api/interview/start  — HandleStart
-//	POST /api/interview/answer — HandleAnswer
 package interview
 
 import (
@@ -45,12 +44,6 @@ type startResponse struct {
 	TimerRemainingS int              `json:"timerRemainingS"`
 	Resuming        bool             `json:"resuming"`
 	Language        string           `json:"language"`
-}
-
-type answerResponse struct {
-	Done            bool              `json:"done"`
-	NextQuestion    *questionResponse `json:"nextQuestion"`
-	TimerRemainingS int               `json:"timerRemainingS"`
 }
 
 // HandleStart transitions a session to interviewing and returns the first question.
@@ -107,13 +100,6 @@ func (h *Handler) HandleStart(w http.ResponseWriter, r *http.Request) {
 
 const maxAnswerBody = 10 * 1024 // 10KB per spec
 
-type answerRequest struct {
-	SessionCode  string `json:"sessionCode"`
-	AnswerText   string `json:"answerText"`
-	QuestionText string `json:"questionText"` // echoed back from frontend
-	TurnID       string `json:"turnId"`
-}
-
 type answerAsyncRequest struct {
 	SessionCode     string `json:"sessionCode"`
 	AnswerText      string `json:"answerText"`
@@ -137,60 +123,6 @@ type answerJobStatusResponse struct {
 	TimerRemainingS int               `json:"timerRemainingS"`
 	ErrorCode       string            `json:"errorCode,omitempty"`
 	ErrorMessage    string            `json:"errorMessage,omitempty"`
-}
-
-// HandleAnswer accepts a text answer, calls the AI API for the next question, and returns it.
-func (h *Handler) HandleAnswer(w http.ResponseWriter, r *http.Request) {
-	var req answerRequest
-	if err := shared.DecodeJSON(r, &req, maxAnswerBody); err != nil {
-		shared.WriteError(w, shared.ErrBadRequest, "Invalid request body", "BAD_REQUEST")
-		return
-	}
-
-	if req.SessionCode == "" {
-		shared.WriteError(w, shared.ErrBadRequest, "sessionCode is required", "BAD_REQUEST")
-		return
-	}
-	if strings.TrimSpace(req.TurnID) == "" {
-		shared.WriteError(w, shared.ErrBadRequest, "turnId is required", "BAD_REQUEST")
-		return
-	}
-
-	slog.Debug("interview/answer payload", "body", req)
-
-	result, err := h.svc.SubmitAnswer(r.Context(), req.SessionCode, req.AnswerText, req.QuestionText, req.TurnID)
-	if err != nil {
-		switch {
-		case errors.Is(err, ErrTurnConflict):
-			shared.WriteError(w, shared.ErrConflict, "Turn is stale or out of order", "TURN_CONFLICT")
-		case errors.Is(err, ErrInvalidFlow):
-			shared.WriteError(w, shared.ErrConflict, "Interview flow is not in a valid state", "FLOW_INVALID")
-		default:
-			slog.Error("answer submission failed", "error", err)
-			shared.WriteError(w, shared.ErrInternal, "Internal server error", "INTERNAL_ERROR")
-		}
-		return
-	}
-
-	if result.Done {
-		shared.WriteJSON(w, http.StatusOK, answerResponse{Done: true, TimerRemainingS: result.TimerRemainingS})
-		return
-	}
-
-	q := result.NextQuestion
-	shared.WriteJSON(w, http.StatusOK, answerResponse{
-		Done: false,
-		NextQuestion: &questionResponse{
-			TextEs:         q.TextEs,
-			TextEn:         q.TextEn,
-			Area:           q.Area,
-			Kind:           string(q.Kind),
-			TurnID:         q.TurnID,
-			QuestionNumber: q.QuestionNumber,
-			TotalQuestions: q.TotalQuestions,
-		},
-		TimerRemainingS: result.TimerRemainingS,
-	})
 }
 
 func normalizeRequestLanguage(language string) (string, bool) {
@@ -225,6 +157,9 @@ func (h *Handler) HandleAnswerAsync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Match sync-style payload logging for local debugging at DEBUG level.
+	slog.Debug("interview/answer-async payload", "body", req)
+
 	result, err := h.svc.SubmitAnswerAsync(
 		r.Context(),
 		req.SessionCode,
@@ -236,13 +171,30 @@ func (h *Handler) HandleAnswerAsync(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrIdempotencyConflict):
+			slog.Warn("answer async idempotency conflict",
+				"session_code", req.SessionCode,
+				"client_request_id", req.ClientRequestID,
+				"turn_id", req.TurnID,
+			)
 			shared.WriteError(w, shared.ErrConflict, "clientRequestId cannot be reused with a different payload", "IDEMPOTENCY_CONFLICT")
 		default:
-			slog.Error("answer async submission failed", "error", err)
+			slog.Error("answer async submission failed",
+				"session_code", req.SessionCode,
+				"client_request_id", req.ClientRequestID,
+				"turn_id", req.TurnID,
+				"error", err,
+			)
 			shared.WriteError(w, shared.ErrInternal, "Internal server error", "INTERNAL_ERROR")
 		}
 		return
 	}
+
+	slog.Info("answer async accepted",
+		"session_code", req.SessionCode,
+		"client_request_id", result.ClientRequestID,
+		"job_id", result.JobID,
+		"status", result.Status,
+	)
 
 	shared.WriteJSON(w, http.StatusAccepted, answerAsyncAcceptedResponse{
 		JobID:           result.JobID,
@@ -264,16 +216,48 @@ func (h *Handler) HandleAnswerJobStatus(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	slog.Debug("interview/answer-job-status request",
+		"session_code", sessionCode,
+		"job_id", jobID,
+	)
+
 	result, err := h.svc.GetAnswerJobResult(r.Context(), sessionCode, jobID)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrAsyncJobNotFound):
+			slog.Warn("answer job status lookup not found",
+				"session_code", sessionCode,
+				"job_id", jobID,
+			)
 			shared.WriteError(w, shared.ErrNotFound, "Async answer job not found", "ASYNC_JOB_NOT_FOUND")
 		default:
-			slog.Error("answer job status lookup failed", "error", err)
+			slog.Error("answer job status lookup failed",
+				"session_code", sessionCode,
+				"job_id", jobID,
+				"error", err,
+			)
 			shared.WriteError(w, shared.ErrInternal, "Internal server error", "INTERNAL_ERROR")
 		}
 		return
+	}
+
+	switch result.Status {
+	case AsyncAnswerJobSucceeded, AsyncAnswerJobFailed, AsyncAnswerJobConflict, AsyncAnswerJobCanceled:
+		slog.Info("answer job terminal status",
+			"session_code", sessionCode,
+			"job_id", result.JobID,
+			"client_request_id", result.ClientRequestID,
+			"status", result.Status,
+			"done", result.Done,
+			"error_code", result.ErrorCode,
+		)
+	default:
+		slog.Debug("answer job in-progress status",
+			"session_code", sessionCode,
+			"job_id", result.JobID,
+			"client_request_id", result.ClientRequestID,
+			"status", result.Status,
+		)
 	}
 
 	var nextQuestion *questionResponse
