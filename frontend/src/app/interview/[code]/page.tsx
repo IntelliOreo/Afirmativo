@@ -16,42 +16,43 @@ const AUTOSUBMIT_SECONDS = 10; // auto-submit countdown threshold
 const WARNING_AT_SECONDS = 45 * 60; // orange bar at 45 min remaining
 const WRAPUP_AT_SECONDS = 5 * 60; // red bar + alert at 5 min remaining
 const ASYNC_POLL_BACKOFF_MS = [1000, 2000, 3000, 5000, 8000, 15000, 20000, 30000] as const;
-const ROTATING_STATUS_MS = 2000;
+const ROTATING_STATUS_MS = 4000;
+const ROTATING_STATUS_INITIAL_DELAY_MS = 2000;
 
 const WAITING_STATUS_STRINGS: Record<"es" | "en", string[]> = {
   en: [
-    "The interviewer is flipping through your case files. It's a lot of reading. They're doing their best.",
-    "Your response is being carefully considered. Good answers have a habit of complicating things — in the best way.",
-    "The interviewer reaches for their water. It's their third glass. Hydration is a lifestyle.",
-    "Your file is being reviewed, page by page. Whoever put it together really committed to the details.",
-    "The interviewer scribbles a note. Their handwriting is truly something. Only they know what it says.",
-    "A brief pause to double-check a few things. The interviewer has a reputation for catching the small stuff.",
-    "The interviewer leans back, stares at the ceiling for a moment, and thinks. It's part of their process.",
-    "Somewhere nearby, a printer is whirring. More documents incoming. There are always more documents.",
-    "Your response landed and now the gears are turning. Good things take a moment to process.",
-    "The interviewer takes a slow sip of water and exhales. This is their thinking ritual. It usually works.",
-    "Case files, sticky notes, and a coffee that went cold an hour ago. The interviewer's desk has seen things.",
-    "A quiet moment in the room. The interviewer doesn't mind the silence. You might find it a little awkward.",
-    "The interviewer flips back a page. Something caught their eye — probably nothing. Probably.",
-    "They've heard a lot of stories in this room. Yours is one of the more interesting ones. That's not nothing.",
-    "Almost time for the next question. The interviewer is just finishing a thought — and possibly that glass of water.",
+    "The interviewer is flipping through your case files... It's a lot of reading... They're doing their best...",
+    "Your response is being carefully considered... Good answers have a habit of complicating things — in the best way...",
+    "The interviewer reaches for their water... It's their third glass... Hydration is a lifestyle...",
+    "Your file is being reviewed, page by page... Whoever put it together really committed to the details...",
+    "The interviewer scribbles a note... Their handwriting is truly something... Only they know what it says...",
+    "A brief pause to double-check a few things... The interviewer has a reputation for catching the small stuff...",
+    "The interviewer leans back, stares at the ceiling for a moment, and thinks... It's part of their process...",
+    "Somewhere nearby, a printer is whirring... More documents incoming... There are always more documents...",
+    "Your response landed and now the gears are turning... Good things take a moment to process...",
+    "The interviewer takes a slow sip of water and exhales... This is their thinking ritual... It usually works...",
+    "Case files, sticky notes, and a coffee that went cold an hour ago... The interviewer's desk has seen things...",
+    "A quiet moment in the room... The interviewer doesn't mind the silence... You might find it a little awkward...",
+    "The interviewer flips back a page... Something caught their eye — probably nothing... Probably...",
+    "They've heard a lot of stories in this room... Yours is one of the more interesting ones... That's not nothing...",
+    "Almost time for the next question... The interviewer is just finishing a thought — and possibly that glass of water...",
   ],
   es: [
-    "El entrevistador está revisando tu expediente. Hay mucho que leer. Está haciendo su mejor esfuerzo.",
-    "Tu respuesta está siendo considerada con cuidado. Las buenas respuestas tienen la costumbre de complicar las cosas — de la mejor manera.",
-    "El entrevistador toma su vaso de agua. Es el tercero. La hidratación es un estilo de vida.",
-    "Tu expediente está siendo revisado, página por página. Quien lo preparó realmente se comprometió con los detalles.",
-    "El entrevistador garabatea una nota. Su letra es toda una obra. Solo él sabe lo que dice.",
-    "Una breve pausa para verificar algunas cosas. El entrevistador tiene fama de notar los pequeños detalles.",
-    "El entrevistador se recuesta, mira el techo un momento y piensa. Es parte de su proceso.",
-    "En algún lugar cercano, una impresora zumba. Más documentos en camino. Siempre hay más documentos.",
-    "Tu respuesta fue recibida y los engranajes están girando. Las cosas buenas toman un momento para procesarse.",
-    "El entrevistador da un lento sorbo de agua y exhala. Es su ritual para pensar. Generalmente funciona.",
-    "Expedientes, notas adhesivas y un café que se enfrió hace una hora. El escritorio del entrevistador ha visto cosas.",
-    "Un momento de silencio en la sala. Al entrevistador no le molesta el silencio. A ti quizás sí un poco.",
-    "El entrevistador regresa una página. Algo llamó su atención — probablemente nada. Probablemente.",
-    "Han escuchado muchas historias en esta sala. La tuya es una de las más interesantes. Eso no es poco.",
-    "Casi es momento para la siguiente pregunta. El entrevistador está terminando un pensamiento — y posiblemente ese vaso de agua.",
+    "El entrevistador está revisando tu expediente... Hay mucho que leer... Está haciendo su mejor esfuerzo...",
+    "Tu respuesta está siendo considerada con cuidado... Las buenas respuestas tienen la costumbre de complicar las cosas — de la mejor manera...",
+    "El entrevistador toma su vaso de agua... Es el tercero... La hidratación es un estilo de vida...",
+    "Tu expediente está siendo revisado, página por página... Quien lo preparó realmente se comprometió con los detalles...",
+    "El entrevistador garabatea una nota... Su letra es toda una obra... Solo él sabe lo que dice...",
+    "Una breve pausa para verificar algunas cosas... El entrevistador tiene fama de notar los pequeños detalles...",
+    "El entrevistador se recuesta, mira el techo un momento y piensa... Es parte de su proceso...",
+    "En algún lugar cercano, una impresora zumba... Más documentos en camino... Siempre hay más documentos...",
+    "Tu respuesta fue recibida y los engranajes están girando... Las cosas buenas toman un momento para procesarse...",
+    "El entrevistador da un lento sorbo de agua y exhala... Es su ritual para pensar... Generalmente funciona...",
+    "Expedientes, notas adhesivas y un café que se enfrió hace una hora... El escritorio del entrevistador ha visto cosas...",
+    "Un momento de silencio en la sala... Al entrevistador no le molesta el silencio... A ti quizás sí un poco...",
+    "El entrevistador regresa una página... Algo llamó su atención — probablemente nada... Probablemente...",
+    "Han escuchado muchas historias en esta sala... La tuya es una de las más interesantes... Eso no es poco...",
+    "Casi es momento para la siguiente pregunta... El entrevistador está terminando un pensamiento — y posiblemente ese vaso de agua...",
   ],
 };
 
@@ -223,23 +224,52 @@ function clearPendingAnswerJob(sessionCode: string): void {
   localStorage.removeItem(pendingJobStorageKey(sessionCode));
 }
 
-function useRotatingStatus(messages: string[], active: boolean, intervalMs = ROTATING_STATUS_MS): string {
+function randomMessageIndex(currentIndex: number, total: number): number {
+  if (total <= 1) return 0;
+  let nextIndex = Math.floor(Math.random() * total);
+  while (nextIndex === currentIndex) {
+    nextIndex = Math.floor(Math.random() * total);
+  }
+  return nextIndex;
+}
+
+function useRotatingStatus(
+  messages: string[],
+  active: boolean,
+  intervalMs = ROTATING_STATUS_MS,
+  initialDelayMs = ROTATING_STATUS_INITIAL_DELAY_MS,
+): string {
   const [index, setIndex] = useState(0);
+  const [visible, setVisible] = useState(false);
 
   useEffect(() => {
     if (!active || messages.length === 0) {
       setIndex(0);
+      setVisible(false);
       return;
     }
 
-    const interval = window.setInterval(() => {
-      setIndex((currentIndex) => (currentIndex + 1) % messages.length);
-    }, intervalMs);
+    setIndex(0);
+    setVisible(false);
 
-    return () => window.clearInterval(interval);
-  }, [active, intervalMs, messages]);
+    let interval: number | undefined;
+    const delay = window.setTimeout(() => {
+      setIndex(() => randomMessageIndex(-1, messages.length));
+      setVisible(true);
+      interval = window.setInterval(() => {
+        setIndex((currentIndex) => randomMessageIndex(currentIndex, messages.length));
+      }, intervalMs);
+    }, initialDelayMs);
 
-  return messages[index] ?? "";
+    return () => {
+      window.clearTimeout(delay);
+      if (interval !== undefined) {
+        window.clearInterval(interval);
+      }
+    };
+  }, [active, initialDelayMs, intervalMs, messages]);
+
+  return visible ? (messages[index] ?? "") : "";
 }
 
 function InterviewPageContent() {
@@ -629,9 +659,10 @@ function InterviewPageContent() {
     ? (question.questionNumber / question.totalQuestions) * 100
     : 0;
   const showInterviewProgress = status === "active" || (status === "submitting" && !forceSubmit);
+  const isSubmittingInQuestionFlow = status === "submitting" && !forceSubmit;
   const waitStrings = WAITING_STATUS_STRINGS[lang];
   const startupWaitStatus = useRotatingStatus(waitStrings, status === "loading");
-  const questionWaitStatus = useRotatingStatus(waitStrings, status === "submitting" && !forceSubmit);
+  const questionWaitStatus = useRotatingStatus(waitStrings, isSubmittingInQuestionFlow);
   const finalSubmitWaitStatus = useRotatingStatus(waitStrings, status === "submitting" && forceSubmit);
   const reportWaitStatus = useRotatingStatus(
     waitStrings,
@@ -699,7 +730,9 @@ function InterviewPageContent() {
               <p className="text-primary-darkest mb-3">
                 {lang === "es" ? "Cargando..." : "Loading..."}
               </p>
-              <p className="text-sm text-primary-dark">{startupWaitStatus}</p>
+              {startupWaitStatus && (
+                <p className="text-base sm:text-lg text-primary-dark leading-snug">{startupWaitStatus}</p>
+              )}
             </Card>
           )}
 
@@ -749,7 +782,11 @@ function InterviewPageContent() {
                     <p className="text-primary-darkest mb-2">
                       {lang === "es" ? "Cargando reporte..." : "Loading report..."}
                     </p>
-                    <p className="text-sm text-primary-dark">{reportWaitStatus}</p>
+                    {reportWaitStatus && (
+                      <p className="text-base sm:text-lg text-primary-dark leading-snug">
+                        {reportWaitStatus}
+                      </p>
+                    )}
                   </>
                 )}
 
@@ -760,7 +797,11 @@ function InterviewPageContent() {
                         ? "Su reporte se está generando. Esto puede tomar unos momentos."
                         : "Your report is being generated. This may take a few moments."}
                     </p>
-                    <p className="text-sm text-primary-dark mb-4">{reportWaitStatus}</p>
+                    {reportWaitStatus && (
+                      <p className="text-base sm:text-lg text-primary-dark leading-snug mb-4">
+                        {reportWaitStatus}
+                      </p>
+                    )}
                     <Button fullWidth onClick={loadReport}>
                       {lang === "es" ? "Verificar de nuevo" : "Check again"}
                     </Button>
@@ -874,7 +915,11 @@ function InterviewPageContent() {
                   ? "Enviando su última respuesta para evaluación..."
                   : "Submitting your final answer for evaluation..."}
               </p>
-              <p className="text-sm text-primary-dark mb-6">{finalSubmitWaitStatus}</p>
+              {finalSubmitWaitStatus && (
+                <p className="text-base sm:text-lg text-primary-dark leading-snug mb-6">
+                  {finalSubmitWaitStatus}
+                </p>
+              )}
               <div className="inline-block h-8 w-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
             </Card>
           )}
@@ -927,7 +972,19 @@ function InterviewPageContent() {
                 )}
               </Card>
 
-              {isConsentQuestion ? (
+              {isSubmittingInQuestionFlow ? (
+                <Card className="mb-6 text-center py-10 px-4">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-primary">
+                    {lang === "es" ? "Procesando respuesta" : "Processing answer"}
+                  </p>
+                  {questionWaitStatus && (
+                    <p className="mt-3 text-base sm:text-lg text-primary-dark leading-snug">
+                      {questionWaitStatus}
+                    </p>
+                  )}
+                  <div className="mt-6 inline-block h-8 w-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+                </Card>
+              ) : isConsentQuestion ? (
                 <>
                   <Alert variant="warning" className="mb-6">
                     {beforeYouStartContent[lang].warningAlert}
@@ -943,20 +1000,11 @@ function InterviewPageContent() {
 
                   <Button
                     fullWidth
-                    disabled={status === "submitting" || !hasReachedDisclaimerBottom}
+                    disabled={!hasReachedDisclaimerBottom}
                     onClick={handleAgreeAndContinue}
                   >
-                    {status === "submitting"
-                      ? lang === "es"
-                        ? "Enviando..."
-                        : "Submitting..."
-                      : lang === "es"
-                        ? "Entiendo"
-                        : "I understand"}
+                    {lang === "es" ? "Entiendo" : "I understand"}
                   </Button>
-                  {status === "submitting" && (
-                    <p className="mt-3 text-sm text-primary-dark">{questionWaitStatus}</p>
-                  )}
                 </>
               ) : (
                 <>
@@ -973,7 +1021,6 @@ function InterviewPageContent() {
                       value={textAnswer}
                       onChange={(e) => setTextAnswer(e.target.value)}
                       rows={6}
-                      disabled={status === "submitting"}
                       className="w-full px-3 py-3 text-base border border-base-lighter rounded focus:outline-none focus:ring-2 focus:ring-primary resize-none"
                       placeholder={
                         lang === "es"
@@ -985,20 +1032,11 @@ function InterviewPageContent() {
 
                   <Button
                     fullWidth
-                    disabled={status === "submitting" || !textAnswer.trim()}
+                    disabled={!textAnswer.trim()}
                     onClick={handleSubmitAnswer}
                   >
-                    {status === "submitting"
-                      ? lang === "es"
-                        ? "Enviando..."
-                        : "Submitting..."
-                      : lang === "es"
-                        ? "Enviar respuesta"
-                        : "Submit answer"}
+                    {lang === "es" ? "Enviar respuesta" : "Submit answer"}
                   </Button>
-                  {status === "submitting" && (
-                    <p className="mt-3 text-sm text-primary-dark">{questionWaitStatus}</p>
-                  )}
                 </>
               )}
             </>

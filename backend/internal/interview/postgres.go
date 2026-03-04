@@ -297,8 +297,7 @@ func (s *PostgresStore) AdvanceNonCriterionStep(ctx context.Context, params Adva
 	updateRow := tx.QueryRow(ctx,
 		`UPDATE sessions
 		 SET flow_step = $2,
-		     expected_turn_id = $3,
-		     display_question_number = display_question_number + 1
+		     expected_turn_id = $3
 		 WHERE session_code = $1
 		 RETURNING flow_step, COALESCE(expected_turn_id, ''), display_question_number`,
 		params.SessionCode,
@@ -526,6 +525,206 @@ func (s *PostgresStore) MarkFlowDone(ctx context.Context, sessionCode string) er
 		return fmt.Errorf("mark flow done: %w", err)
 	}
 	return nil
+}
+
+// UpsertAnswerJob creates or returns an existing async answer job by idempotency key.
+func (s *PostgresStore) UpsertAnswerJob(ctx context.Context, params UpsertAnswerJobParams) (*AnswerJob, error) {
+	row := s.pool.QueryRow(ctx,
+		`INSERT INTO interview_answer_jobs (
+		     session_code,
+		     client_request_id,
+		     turn_id,
+		     question_text,
+		     answer_text,
+		     status
+		 )
+		 VALUES ($1, $2, $3, $4, $5, 'queued')
+		 ON CONFLICT (session_code, client_request_id)
+		 DO UPDATE SET updated_at = now()
+		 RETURNING id, session_code, client_request_id, turn_id, question_text, answer_text, status,
+		           result_payload, error_code, error_message, attempts, started_at, completed_at, created_at, updated_at`,
+		params.SessionCode,
+		params.ClientRequestID,
+		params.TurnID,
+		nullIfEmpty(params.QuestionText),
+		params.AnswerText,
+	)
+
+	job, err := scanAnswerJob(row)
+	if err != nil {
+		return nil, fmt.Errorf("upsert answer job: %w", err)
+	}
+	return job, nil
+}
+
+// ClaimQueuedAnswerJob moves a queued job to running atomically.
+// Returns nil,nil when the job is already claimed or in terminal state.
+func (s *PostgresStore) ClaimQueuedAnswerJob(ctx context.Context, jobID string) (*AnswerJob, error) {
+	row := s.pool.QueryRow(ctx,
+		`UPDATE interview_answer_jobs
+		 SET status = 'running',
+		     attempts = attempts + 1,
+		     started_at = COALESCE(started_at, now()),
+		     updated_at = now()
+		 WHERE id = $1::uuid
+		   AND status = 'queued'
+		 RETURNING id, session_code, client_request_id, turn_id, question_text, answer_text, status,
+		           result_payload, error_code, error_message, attempts, started_at, completed_at, created_at, updated_at`,
+		jobID,
+	)
+
+	job, err := scanAnswerJob(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("claim answer job: %w", err)
+	}
+	return job, nil
+}
+
+// GetAnswerJob returns a polling job by session and job ID.
+func (s *PostgresStore) GetAnswerJob(ctx context.Context, sessionCode, jobID string) (*AnswerJob, error) {
+	row := s.pool.QueryRow(ctx,
+		`SELECT id, session_code, client_request_id, turn_id, question_text, answer_text, status,
+		        result_payload, error_code, error_message, attempts, started_at, completed_at, created_at, updated_at
+		   FROM interview_answer_jobs
+		  WHERE session_code = $1
+		    AND id = $2::uuid`,
+		sessionCode,
+		jobID,
+	)
+
+	job, err := scanAnswerJob(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrAsyncJobNotFound
+		}
+		return nil, fmt.Errorf("get answer job: %w", err)
+	}
+	return job, nil
+}
+
+// MarkAnswerJobSucceeded stores terminal success state and result payload.
+func (s *PostgresStore) MarkAnswerJobSucceeded(ctx context.Context, jobID string, resultPayload []byte) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE interview_answer_jobs
+		 SET status = 'succeeded',
+		     result_payload = $2,
+		     error_code = NULL,
+		     error_message = NULL,
+		     completed_at = now(),
+		     updated_at = now()
+		 WHERE id = $1::uuid`,
+		jobID,
+		resultPayload,
+	)
+	if err != nil {
+		return fmt.Errorf("mark answer job succeeded: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrAsyncJobNotFound
+	}
+	return nil
+}
+
+// MarkAnswerJobFailed stores terminal failure/conflict state.
+func (s *PostgresStore) MarkAnswerJobFailed(ctx context.Context, params MarkAnswerJobFailedParams) error {
+	status := params.Status
+	if status != AsyncAnswerJobFailed && status != AsyncAnswerJobConflict && status != AsyncAnswerJobCanceled {
+		status = AsyncAnswerJobFailed
+	}
+
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE interview_answer_jobs
+		 SET status = $2,
+		     error_code = $3,
+		     error_message = $4,
+		     completed_at = now(),
+		     updated_at = now()
+		 WHERE id = $1::uuid`,
+		params.JobID,
+		string(status),
+		nullIfEmpty(params.ErrorCode),
+		nullIfEmpty(params.ErrorMessage),
+	)
+	if err != nil {
+		return fmt.Errorf("mark answer job failed: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrAsyncJobNotFound
+	}
+	return nil
+}
+
+func scanAnswerJob(row pgx.Row) (*AnswerJob, error) {
+	var id pgtype.UUID
+	var sessionCode string
+	var clientRequestID string
+	var turnID string
+	var questionText pgtype.Text
+	var answerText string
+	var status string
+	var resultPayload []byte
+	var errorCode pgtype.Text
+	var errorMessage pgtype.Text
+	var attempts int32
+	var startedAt pgtype.Timestamptz
+	var completedAt pgtype.Timestamptz
+	var createdAt pgtype.Timestamptz
+	var updatedAt pgtype.Timestamptz
+
+	if err := row.Scan(
+		&id,
+		&sessionCode,
+		&clientRequestID,
+		&turnID,
+		&questionText,
+		&answerText,
+		&status,
+		&resultPayload,
+		&errorCode,
+		&errorMessage,
+		&attempts,
+		&startedAt,
+		&completedAt,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		return nil, err
+	}
+
+	job := &AnswerJob{
+		ID:              uuidToString(id),
+		SessionCode:     sessionCode,
+		ClientRequestID: clientRequestID,
+		TurnID:          turnID,
+		AnswerText:      answerText,
+		Status:          AsyncAnswerJobStatus(status),
+		ResultPayload:   resultPayload,
+		Attempts:        int(attempts),
+		CreatedAt:       createdAt.Time,
+		UpdatedAt:       updatedAt.Time,
+	}
+	if questionText.Valid {
+		job.QuestionText = questionText.String
+	}
+	if errorCode.Valid {
+		job.ErrorCode = errorCode.String
+	}
+	if errorMessage.Valid {
+		job.ErrorMessage = errorMessage.String
+	}
+	if startedAt.Valid {
+		t := startedAt.Time
+		job.StartedAt = &t
+	}
+	if completedAt.Valid {
+		t := completedAt.Time
+		job.CompletedAt = &t
+	}
+
+	return job, nil
 }
 
 func nullIfEmpty(v string) any {
