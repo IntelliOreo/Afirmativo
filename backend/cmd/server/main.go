@@ -167,6 +167,8 @@ func main() {
 	mux.HandleFunc("POST /api/session/verify", sessionHandler.HandleVerifySession)
 	mux.HandleFunc("POST /api/interview/start", interviewHandler.HandleStart)
 	mux.HandleFunc("POST /api/interview/answer", interviewHandler.HandleAnswer)
+	mux.HandleFunc("POST /api/interview/answer-async", interviewHandler.HandleAnswerAsync)
+	mux.HandleFunc("GET /api/interview/answer-jobs/{jobId}", interviewHandler.HandleAnswerJobStatus)
 	mux.HandleFunc("GET /api/report/{code}", reportHandler.HandleGetReport)
 	mux.HandleFunc("GET /api/report/{code}/pdf", reportHandler.HandleGetReportPDF)
 	mux.HandleFunc("POST /api/admin/clean-up-db", adminHandler.HandleCleanUpDB)

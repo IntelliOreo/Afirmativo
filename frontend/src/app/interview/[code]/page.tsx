@@ -124,6 +124,8 @@ interface PendingAnswerJob {
   createdAt: number;
 }
 
+type CodedError = Error & { code?: string };
+
 interface Report {
   session_code: string;
   status: string;
@@ -224,6 +226,22 @@ function clearPendingAnswerJob(sessionCode: string): void {
   localStorage.removeItem(pendingJobStorageKey(sessionCode));
 }
 
+function buildCodedError(message: string, code?: string): CodedError {
+  const err = new Error(message) as CodedError;
+  if (code) {
+    err.code = code;
+  }
+  return err;
+}
+
+function extractErrorCode(err: unknown): string {
+  if (!err || typeof err !== "object" || !("code" in err)) {
+    return "";
+  }
+  const maybeCode = (err as { code?: unknown }).code;
+  return typeof maybeCode === "string" ? maybeCode : "";
+}
+
 function randomMessageIndex(currentIndex: number, total: number): number {
   if (total <= 1) return 0;
   let nextIndex = Math.floor(Math.random() * total);
@@ -285,6 +303,7 @@ function InterviewPageContent() {
   const [textAnswer, setTextAnswer] = useState("");
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [error, setError] = useState("");
+  const [errorCode, setErrorCode] = useState("");
   const [completionSource, setCompletionSource] = useState<CompletionSource>("finished");
   const [reportStatus, setReportStatus] = useState<ReportStatus>("idle");
   const [report, setReport] = useState<Report | null>(null);
@@ -318,6 +337,7 @@ function InterviewPageContent() {
     setSecondsLeft(0);
     setForceSubmit(false);
     setError("");
+    setErrorCode("");
     resetReportState();
   }, [resetReportState]);
 
@@ -432,7 +452,10 @@ function InterviewPageContent() {
         { credentials: "include" },
       );
       if (!ok || !data) {
-        throw new Error(data?.error ?? (httpStatus === 404 ? "Async answer job not found" : "Failed to poll answer status"));
+        throw buildCodedError(
+          data?.error ?? (httpStatus === 404 ? "Async answer job not found" : "Failed to poll answer status"),
+          data?.code,
+        );
       }
 
       if (data.status === "queued" || data.status === "running") {
@@ -453,9 +476,9 @@ function InterviewPageContent() {
 
       clearPendingAnswerJob(code);
       if (data.status === "conflict") {
-        throw new Error(data.errorMessage || "Turn is stale or out of order");
+        throw buildCodedError(data.errorMessage || "Turn is stale or out of order", data.errorCode || "TURN_CONFLICT");
       }
-      throw new Error(data.errorMessage || data.errorCode || "Failed to process answer");
+      throw buildCodedError(data.errorMessage || data.errorCode || "Failed to process answer", data.errorCode);
     }
   }, [code]);
 
@@ -476,7 +499,7 @@ function InterviewPageContent() {
         },
         credentials: "include",
       });
-      if (!ok || !data) throw new Error(data?.error ?? "Failed to queue answer");
+      if (!ok || !data) throw buildCodedError(data?.error ?? "Failed to queue answer", data?.code);
 
       current = {
         ...current,
@@ -508,6 +531,7 @@ function InterviewPageContent() {
 
     setStatus("submitting");
     setError("");
+    setErrorCode("");
     writePendingAnswerJob(code, pending);
 
     try {
@@ -520,6 +544,7 @@ function InterviewPageContent() {
         return;
       }
       setError(err instanceof Error ? err.message : "Unknown error");
+      setErrorCode(extractErrorCode(err));
       setStatus("error");
     }
   }, [applyAnswerOutcome, code, markInterviewDone, submitPendingAnswerJob]);
@@ -572,6 +597,7 @@ function InterviewPageContent() {
     async function startInterview() {
       setStatus("loading");
       setError("");
+      setErrorCode("");
 
       try {
         const { ok, status: httpStatus, data } = await api<StartResponse>("/api/interview/start", {
@@ -615,6 +641,7 @@ function InterviewPageContent() {
             applyAnswerOutcome(resumedResult);
           } catch (err) {
             setError(err instanceof Error ? err.message : "Unknown error");
+            setErrorCode(extractErrorCode(err));
             setStatus("error");
           } finally {
             restoringPendingRef.current = false;
@@ -625,6 +652,7 @@ function InterviewPageContent() {
         setStatus("active");
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unknown error");
+        setErrorCode(extractErrorCode(err));
         setStatus("error");
       }
     }
@@ -660,6 +688,7 @@ function InterviewPageContent() {
     : 0;
   const showInterviewProgress = status === "active" || (status === "submitting" && !forceSubmit);
   const isSubmittingInQuestionFlow = status === "submitting" && !forceSubmit;
+  const isTurnConflictError = errorCode === "TURN_CONFLICT";
   const waitStrings = WAITING_STATUS_STRINGS[lang];
   const startupWaitStatus = useRotatingStatus(waitStrings, status === "loading");
   const questionWaitStatus = useRotatingStatus(waitStrings, isSubmittingInQuestionFlow);
@@ -742,11 +771,30 @@ function InterviewPageContent() {
                 {lang === "es" ? "Error: " : "Error: "}
                 {error}
               </Alert>
-              <Link href={`/session/${code}`}>
-                <Button fullWidth className="mb-3">
-                  {lang === "es" ? "Recuperar sesión con PIN" : "Recover session with PIN"}
-                </Button>
-              </Link>
+              {isTurnConflictError ? (
+                <>
+                  <p className="text-primary-darkest mb-4">
+                    {lang === "es"
+                      ? "Esta sesión se desincronizó. Recargue esta página para obtener la pregunta y turno más recientes."
+                      : "This session got out of sync. Reload this page to fetch the latest question and turn token."}
+                  </p>
+                  <Button
+                    fullWidth
+                    className="mb-3"
+                    onClick={() => {
+                      if (typeof window !== "undefined") window.location.reload();
+                    }}
+                  >
+                    {lang === "es" ? "Recargar página" : "Reload page"}
+                  </Button>
+                </>
+              ) : (
+                <Link href={`/session/${code}`}>
+                  <Button fullWidth className="mb-3">
+                    {lang === "es" ? "Recuperar sesión con PIN" : "Recover session with PIN"}
+                  </Button>
+                </Link>
+              )}
               <Link href="/">
                 <Button fullWidth variant="secondary">
                   {lang === "es" ? "Volver al inicio" : "Back to home"}

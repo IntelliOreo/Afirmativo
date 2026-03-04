@@ -56,6 +56,21 @@ type Store interface {
 
 	// MarkFlowDone clears expected turn and marks flow as done.
 	MarkFlowDone(ctx context.Context, sessionCode string) error
+
+	// UpsertAnswerJob creates an async answer job or returns the existing one for an idempotency key.
+	UpsertAnswerJob(ctx context.Context, params UpsertAnswerJobParams) (*AnswerJob, error)
+
+	// ClaimQueuedAnswerJob marks a queued job as running and returns it. Returns nil,nil if already claimed/terminal.
+	ClaimQueuedAnswerJob(ctx context.Context, jobID string) (*AnswerJob, error)
+
+	// GetAnswerJob returns a polling job by session+job id.
+	GetAnswerJob(ctx context.Context, sessionCode, jobID string) (*AnswerJob, error)
+
+	// MarkAnswerJobSucceeded stores terminal success state and result payload.
+	MarkAnswerJobSucceeded(ctx context.Context, jobID string, resultPayload []byte) error
+
+	// MarkAnswerJobFailed stores terminal failure or conflict state.
+	MarkAnswerJobFailed(ctx context.Context, params MarkAnswerJobFailedParams) error
 }
 
 // SaveAnswerParams holds the inputs for saving an answer.
@@ -103,4 +118,19 @@ type ProcessCriterionTurnResult struct {
 	NextArea       string
 	QuestionNumber int
 	NewCount       int
+}
+
+type UpsertAnswerJobParams struct {
+	SessionCode     string
+	ClientRequestID string
+	TurnID          string
+	QuestionText    string
+	AnswerText      string
+}
+
+type MarkAnswerJobFailedParams struct {
+	JobID        string
+	Status       AsyncAnswerJobStatus
+	ErrorCode    string
+	ErrorMessage string
 }

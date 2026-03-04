@@ -6,6 +6,7 @@ package interview
 import (
 	"errors"
 	"strings"
+	"time"
 )
 
 // ── Area status constants ──────────────────────────────────────────
@@ -52,8 +53,21 @@ const (
 )
 
 var (
-	ErrTurnConflict = errors.New("turn conflict")
-	ErrInvalidFlow  = errors.New("invalid flow state")
+	ErrTurnConflict        = errors.New("turn conflict")
+	ErrInvalidFlow         = errors.New("invalid flow state")
+	ErrAsyncJobNotFound    = errors.New("async answer job not found")
+	ErrIdempotencyConflict = errors.New("idempotency key reused with different payload")
+)
+
+type AsyncAnswerJobStatus string
+
+const (
+	AsyncAnswerJobQueued    AsyncAnswerJobStatus = "queued"
+	AsyncAnswerJobRunning   AsyncAnswerJobStatus = "running"
+	AsyncAnswerJobSucceeded AsyncAnswerJobStatus = "succeeded"
+	AsyncAnswerJobFailed    AsyncAnswerJobStatus = "failed"
+	AsyncAnswerJobConflict  AsyncAnswerJobStatus = "conflict"
+	AsyncAnswerJobCanceled  AsyncAnswerJobStatus = "canceled"
 )
 
 // ── Domain types ───────────────────────────────────────────────────
@@ -205,6 +219,25 @@ type Answer struct {
 	TranscriptEn string
 	AiEvaluation string
 	Sufficiency  string
+}
+
+// AnswerJob is the durable async submit record used by polling.
+type AnswerJob struct {
+	ID              string
+	SessionCode     string
+	ClientRequestID string
+	TurnID          string
+	QuestionText    string
+	AnswerText      string
+	Status          AsyncAnswerJobStatus
+	ResultPayload   []byte
+	ErrorCode       string
+	ErrorMessage    string
+	Attempts        int
+	StartedAt       *time.Time
+	CompletedAt     *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // ── Static questions ───────────────────────────────────────────────

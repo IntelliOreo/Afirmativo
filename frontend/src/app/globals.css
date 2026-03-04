@@ -37,3 +37,21 @@
     color: #1a4480;
   }
 }
+
+@media print {
+  .interview-page header,
+  .interview-page footer,
+  .interview-page .print-hidden {
+    display: none !important;
+  }
+
+  .interview-page main {
+    background: #ffffff !important;
+  }
+
+  .interview-page .print-report-area .shadow-sm {
+    box-shadow: none !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}
