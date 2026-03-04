@@ -1,0 +1,279 @@
+package session
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/afirmativo/backend/internal/shared"
+	"golang.org/x/crypto/bcrypt"
+)
+
+type fakeStore struct {
+	claimCouponAndCreateSessionFn func(ctx context.Context, couponCode, sessionCode, pinHash string, expiresAt time.Time) (*Session, error)
+	getSessionByCodeFn            func(ctx context.Context, sessionCode string) (*Session, error)
+}
+
+func (f *fakeStore) ClaimCouponAndCreateSession(ctx context.Context, couponCode, sessionCode, pinHash string, expiresAt time.Time) (*Session, error) {
+	if f.claimCouponAndCreateSessionFn != nil {
+		return f.claimCouponAndCreateSessionFn(ctx, couponCode, sessionCode, pinHash, expiresAt)
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) GetSessionByCode(ctx context.Context, sessionCode string) (*Session, error) {
+	if f.getSessionByCodeFn != nil {
+		return f.getSessionByCodeFn(ctx, sessionCode)
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) StartSession(context.Context, string, string) (*Session, error) { return nil, nil }
+func (f *fakeStore) CompleteSession(context.Context, string) error                  { return nil }
+
+func hashPIN(t *testing.T, pin string) string {
+	t.Helper()
+	h, err := bcrypt.GenerateFromPassword([]byte(pin), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("bcrypt.GenerateFromPassword() error = %v", err)
+	}
+	return string(h)
+}
+
+func newHandlerForTest(store Store) *Handler {
+	return NewHandler(NewService(store, 24))
+}
+
+func decodeJSONBody(t *testing.T, rr *httptest.ResponseRecorder, dst any) {
+	t.Helper()
+	if err := json.Unmarshal(rr.Body.Bytes(), dst); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v; body=%s", err, rr.Body.String())
+	}
+}
+
+func TestHandleValidateCoupon_MapsCouponInvalid(t *testing.T) {
+	t.Parallel()
+
+	h := newHandlerForTest(&fakeStore{
+		claimCouponAndCreateSessionFn: func(context.Context, string, string, string, time.Time) (*Session, error) {
+			return nil, shared.ErrCouponInvalid
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/coupon/validate", strings.NewReader(`{"code":"BETA-0001"}`))
+	rr := httptest.NewRecorder()
+
+	h.HandleValidateCoupon(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadRequest)
+	}
+
+	var got struct {
+		Valid bool   `json:"valid"`
+		Error string `json:"error"`
+		Code  string `json:"code"`
+	}
+	decodeJSONBody(t, rr, &got)
+
+	if got.Valid {
+		t.Fatalf("valid = %v, want false", got.Valid)
+	}
+	if got.Code != "COUPON_INVALID" {
+		t.Fatalf("code = %q, want COUPON_INVALID", got.Code)
+	}
+}
+
+func TestHandleValidateCoupon_SuccessContract(t *testing.T) {
+	t.Parallel()
+
+	var capturedExpiry time.Time
+	var capturedSessionCode string
+	var capturedPinHash string
+	start := time.Now()
+
+	h := newHandlerForTest(&fakeStore{
+		claimCouponAndCreateSessionFn: func(_ context.Context, _ string, sessionCode, pinHash string, expiresAt time.Time) (*Session, error) {
+			capturedSessionCode = sessionCode
+			capturedPinHash = pinHash
+			capturedExpiry = expiresAt
+			return &Session{SessionCode: sessionCode}, nil
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/coupon/validate", strings.NewReader(`{"code":"BETA-0001"}`))
+	rr := httptest.NewRecorder()
+	h.HandleValidateCoupon(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var got struct {
+		Valid       bool   `json:"valid"`
+		SessionCode string `json:"session_code"`
+		PIN         string `json:"pin"`
+	}
+	decodeJSONBody(t, rr, &got)
+
+	if !got.Valid {
+		t.Fatalf("valid = %v, want true", got.Valid)
+	}
+	codeRe := regexp.MustCompile(`^AP-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$`)
+	if !codeRe.MatchString(got.SessionCode) {
+		t.Fatalf("session_code = %q, want AP-XXXX-XXXX", got.SessionCode)
+	}
+	pinRe := regexp.MustCompile(`^[0-9]{6}$`)
+	if !pinRe.MatchString(got.PIN) {
+		t.Fatalf("pin = %q, want 6 digits", got.PIN)
+	}
+	if capturedSessionCode != got.SessionCode {
+		t.Fatalf("store session_code = %q, response session_code = %q", capturedSessionCode, got.SessionCode)
+	}
+	if capturedPinHash == got.PIN {
+		t.Fatalf("store pin hash should not equal plaintext pin")
+	}
+
+	after := time.Now()
+	min := start.Add(23*time.Hour + 59*time.Minute)
+	max := after.Add(24*time.Hour + time.Minute)
+	if capturedExpiry.Before(min) || capturedExpiry.After(max) {
+		t.Fatalf("expiresAt = %s, want close to now+24h (between %s and %s)", capturedExpiry, min, max)
+	}
+}
+
+func TestHandleVerifySession_ErrorMappings(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	validPINHash := hashPIN(t, "482917")
+
+	tests := []struct {
+		name       string
+		store      *fakeStore
+		body       string
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			name: "session_not_found",
+			store: &fakeStore{
+				getSessionByCodeFn: func(context.Context, string) (*Session, error) {
+					return nil, shared.ErrNotFound
+				},
+			},
+			body:       `{"sessionCode":"AP-AAAA-BBBB","pin":"482917"}`,
+			wantStatus: http.StatusNotFound,
+			wantCode:   "SESSION_NOT_FOUND",
+		},
+		{
+			name: "incorrect_pin",
+			store: &fakeStore{
+				getSessionByCodeFn: func(context.Context, string) (*Session, error) {
+					return &Session{SessionCode: "AP-AAAA-BBBB", PinHash: validPINHash, ExpiresAt: now.Add(2 * time.Hour)}, nil
+				},
+			},
+			body:       `{"sessionCode":"AP-AAAA-BBBB","pin":"000000"}`,
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   "PIN_INCORRECT",
+		},
+		{
+			name: "expired",
+			store: &fakeStore{
+				getSessionByCodeFn: func(context.Context, string) (*Session, error) {
+					return &Session{SessionCode: "AP-AAAA-BBBB", PinHash: validPINHash, ExpiresAt: now.Add(-time.Minute)}, nil
+				},
+			},
+			body:       `{"sessionCode":"AP-AAAA-BBBB","pin":"482917"}`,
+			wantStatus: http.StatusGone,
+			wantCode:   "SESSION_EXPIRED",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			h := newHandlerForTest(tc.store)
+			req := httptest.NewRequest(http.MethodPost, "/api/session/verify", strings.NewReader(tc.body))
+			rr := httptest.NewRecorder()
+			h.HandleVerifySession(rr, req)
+
+			if rr.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d", rr.Code, tc.wantStatus)
+			}
+			var got shared.ErrorResponse
+			decodeJSONBody(t, rr, &got)
+			if got.Code != tc.wantCode {
+				t.Fatalf("code = %q, want %q", got.Code, tc.wantCode)
+			}
+		})
+	}
+}
+
+func TestHandleVerifySession_SuccessContract(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	startedAt := now.Add(-5 * time.Minute).Truncate(time.Second)
+	createdAt := now.Add(-10 * time.Minute).Truncate(time.Second)
+	expiresAt := now.Add(24 * time.Hour).Truncate(time.Second)
+
+	h := newHandlerForTest(&fakeStore{
+		getSessionByCodeFn: func(context.Context, string) (*Session, error) {
+			return &Session{
+				SessionCode:            "AP-7K9X-M2NF",
+				PinHash:                hashPIN(t, "482917"),
+				Status:                 "interviewing",
+				Track:                  "A",
+				InterviewBudgetSeconds: 3600,
+				InterviewLapsedSeconds: 0,
+				InterviewStartedAt:     &startedAt,
+				CreatedAt:              createdAt,
+				ExpiresAt:              expiresAt,
+			}, nil
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/session/verify", strings.NewReader(`{"sessionCode":"AP-7K9X-M2NF","pin":"482917"}`))
+	rr := httptest.NewRecorder()
+	h.HandleVerifySession(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	var got struct {
+		Session struct {
+			SessionCode            string     `json:"session_code"`
+			Status                 string     `json:"status"`
+			Track                  string     `json:"track"`
+			InterviewBudgetSeconds int        `json:"interview_budget_seconds"`
+			InterviewLapsedSeconds int        `json:"interview_lapsed_seconds"`
+			InterviewStartedAt     *time.Time `json:"interview_started_at"`
+		} `json:"session"`
+	}
+	decodeJSONBody(t, rr, &got)
+
+	if got.Session.SessionCode != "AP-7K9X-M2NF" {
+		t.Fatalf("session_code = %q, want AP-7K9X-M2NF", got.Session.SessionCode)
+	}
+	if got.Session.Status != "interviewing" {
+		t.Fatalf("status = %q, want interviewing", got.Session.Status)
+	}
+	if got.Session.Track != "A" {
+		t.Fatalf("track = %q, want A", got.Session.Track)
+	}
+	if got.Session.InterviewBudgetSeconds != 3600 {
+		t.Fatalf("interview_budget_seconds = %d, want 3600", got.Session.InterviewBudgetSeconds)
+	}
+	if got.Session.InterviewStartedAt == nil || !got.Session.InterviewStartedAt.Equal(startedAt) {
+		t.Fatalf("interview_started_at = %v, want %v", got.Session.InterviewStartedAt, startedAt)
+	}
+}

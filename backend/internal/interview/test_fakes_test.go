@@ -1,0 +1,80 @@
+package interview
+
+import (
+	"context"
+)
+
+type fakeInterviewStore struct {
+	upsertAnswerJobFn      func(ctx context.Context, params UpsertAnswerJobParams) (*AnswerJob, error)
+	getAnswerJobFn         func(ctx context.Context, sessionCode, jobID string) (*AnswerJob, error)
+	claimQueuedAnswerJobFn func(ctx context.Context, jobID string) (*AnswerJob, error)
+	markAnswerJobOKFn      func(ctx context.Context, jobID string, resultPayload []byte) error
+	markAnswerJobFailedFn  func(ctx context.Context, params MarkAnswerJobFailedParams) error
+}
+
+func (f *fakeInterviewStore) CreateQuestionArea(context.Context, string, string) (*QuestionArea, error) {
+	return nil, nil
+}
+func (f *fakeInterviewStore) SetAreaInProgress(context.Context, string, string) error { return nil }
+func (f *fakeInterviewStore) GetInProgressArea(context.Context, string) (*QuestionArea, error) {
+	return nil, nil
+}
+func (f *fakeInterviewStore) GetAreasBySession(context.Context, string) ([]QuestionArea, error) { return nil, nil }
+func (f *fakeInterviewStore) IncrementAreaQuestions(context.Context, string, string) error       { return nil }
+func (f *fakeInterviewStore) CompleteArea(context.Context, string, string) error                  { return nil }
+func (f *fakeInterviewStore) MarkAreaInsufficient(context.Context, string, string) error          { return nil }
+func (f *fakeInterviewStore) MarkAreaPreAddressed(context.Context, string, string, string) error  { return nil }
+func (f *fakeInterviewStore) MarkAreaNotAssessed(context.Context, string, string) error           { return nil }
+func (f *fakeInterviewStore) SaveAnswer(context.Context, SaveAnswerParams) (*Answer, error)       { return nil, nil }
+func (f *fakeInterviewStore) GetAnswersBySession(context.Context, string) ([]Answer, error)       { return nil, nil }
+func (f *fakeInterviewStore) GetAnswerCount(context.Context, string) (int, error)                 { return 0, nil }
+func (f *fakeInterviewStore) GetFlowState(context.Context, string) (*FlowState, error)            { return nil, nil }
+func (f *fakeInterviewStore) PrepareDisclaimerStep(context.Context, string, string) (*FlowState, error) {
+	return nil, nil
+}
+func (f *fakeInterviewStore) AdvanceNonCriterionStep(context.Context, AdvanceNonCriterionStepParams) (*FlowState, error) {
+	return nil, nil
+}
+func (f *fakeInterviewStore) ProcessCriterionTurn(context.Context, ProcessCriterionTurnParams) (*ProcessCriterionTurnResult, error) {
+	return nil, nil
+}
+func (f *fakeInterviewStore) MarkFlowDone(context.Context, string) error { return nil }
+
+func (f *fakeInterviewStore) UpsertAnswerJob(ctx context.Context, params UpsertAnswerJobParams) (*AnswerJob, error) {
+	if f.upsertAnswerJobFn != nil {
+		return f.upsertAnswerJobFn(ctx, params)
+	}
+	return nil, nil
+}
+
+func (f *fakeInterviewStore) ClaimQueuedAnswerJob(ctx context.Context, jobID string) (*AnswerJob, error) {
+	if f.claimQueuedAnswerJobFn != nil {
+		return f.claimQueuedAnswerJobFn(ctx, jobID)
+	}
+	return nil, nil
+}
+
+func (f *fakeInterviewStore) GetAnswerJob(ctx context.Context, sessionCode, jobID string) (*AnswerJob, error) {
+	if f.getAnswerJobFn != nil {
+		return f.getAnswerJobFn(ctx, sessionCode, jobID)
+	}
+	return nil, nil
+}
+
+func (f *fakeInterviewStore) MarkAnswerJobSucceeded(ctx context.Context, jobID string, resultPayload []byte) error {
+	if f.markAnswerJobOKFn != nil {
+		return f.markAnswerJobOKFn(ctx, jobID, resultPayload)
+	}
+	return nil
+}
+
+func (f *fakeInterviewStore) MarkAnswerJobFailed(ctx context.Context, params MarkAnswerJobFailedParams) error {
+	if f.markAnswerJobFailedFn != nil {
+		return f.markAnswerJobFailedFn(ctx, params)
+	}
+	return nil
+}
+
+func newInterviewServiceForAsyncTests(store Store) *Service {
+	return NewService(nil, nil, nil, store, nil, nil, "", "", "", "")
+}
