@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -18,6 +19,7 @@ import (
 )
 
 const dbTimeout = 5 * time.Second
+const asyncAnswerJobTimeout = 3 * time.Minute
 
 // SessionStarter transitions a session to 'interviewing'.
 type SessionStarter interface {
@@ -155,6 +157,209 @@ type AnswerResult struct {
 	TimerRemainingS int
 }
 
+// SubmitAnswerAsyncResult is returned when an async answer job is accepted.
+type SubmitAnswerAsyncResult struct {
+	JobID           string
+	ClientRequestID string
+	Status          AsyncAnswerJobStatus
+}
+
+// AnswerJobStatusResult is returned by polling for async answer job state.
+type AnswerJobStatusResult struct {
+	JobID           string
+	ClientRequestID string
+	Status          AsyncAnswerJobStatus
+	Done            bool
+	NextQuestion    *Question
+	TimerRemainingS int
+	ErrorCode       string
+	ErrorMessage    string
+}
+
+type answerJobPayload struct {
+	Done            bool                    `json:"done"`
+	NextQuestion    *answerJobQuestionShape `json:"nextQuestion"`
+	TimerRemainingS int                     `json:"timerRemainingS"`
+}
+
+type answerJobQuestionShape struct {
+	TextEs         string `json:"textEs"`
+	TextEn         string `json:"textEn"`
+	Area           string `json:"area"`
+	Kind           string `json:"kind"`
+	TurnID         string `json:"turnId"`
+	QuestionNumber int    `json:"questionNumber"`
+	TotalQuestions int    `json:"totalQuestions"`
+}
+
+// SubmitAnswerAsync queues one async answer job and starts background processing.
+func (s *Service) SubmitAnswerAsync(ctx context.Context, sessionCode, answerText, questionText, turnID, clientRequestID string) (*SubmitAnswerAsyncResult, error) {
+	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
+	defer dbCancel()
+
+	job, err := s.store.UpsertAnswerJob(dbCtx, UpsertAnswerJobParams{
+		SessionCode:     sessionCode,
+		ClientRequestID: clientRequestID,
+		TurnID:          turnID,
+		QuestionText:    questionText,
+		AnswerText:      answerText,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("upsert async answer job: %w", err)
+	}
+
+	// Idempotency key must map to the same semantic request payload.
+	if strings.TrimSpace(job.TurnID) != strings.TrimSpace(turnID) ||
+		strings.TrimSpace(job.AnswerText) != strings.TrimSpace(answerText) ||
+		strings.TrimSpace(job.QuestionText) != strings.TrimSpace(questionText) {
+		return nil, ErrIdempotencyConflict
+	}
+
+	if job.Status == AsyncAnswerJobQueued {
+		s.triggerAnswerJob(job.ID)
+	}
+
+	return &SubmitAnswerAsyncResult{
+		JobID:           job.ID,
+		ClientRequestID: job.ClientRequestID,
+		Status:          job.Status,
+	}, nil
+}
+
+// GetAnswerJobResult returns current async job status and, when available, the computed next question payload.
+func (s *Service) GetAnswerJobResult(ctx context.Context, sessionCode, jobID string) (*AnswerJobStatusResult, error) {
+	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
+	defer dbCancel()
+
+	job, err := s.store.GetAnswerJob(dbCtx, sessionCode, jobID)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &AnswerJobStatusResult{
+		JobID:           job.ID,
+		ClientRequestID: job.ClientRequestID,
+		Status:          job.Status,
+		ErrorCode:       job.ErrorCode,
+		ErrorMessage:    job.ErrorMessage,
+	}
+
+	if job.Status != AsyncAnswerJobSucceeded || len(job.ResultPayload) == 0 {
+		return result, nil
+	}
+
+	var payload answerJobPayload
+	if err := json.Unmarshal(job.ResultPayload, &payload); err != nil {
+		return nil, fmt.Errorf("decode answer job payload: %w", err)
+	}
+
+	result.Done = payload.Done
+	result.TimerRemainingS = payload.TimerRemainingS
+	if payload.NextQuestion != nil {
+		result.NextQuestion = &Question{
+			TextEs:         payload.NextQuestion.TextEs,
+			TextEn:         payload.NextQuestion.TextEn,
+			Area:           payload.NextQuestion.Area,
+			Kind:           QuestionKind(payload.NextQuestion.Kind),
+			TurnID:         payload.NextQuestion.TurnID,
+			QuestionNumber: payload.NextQuestion.QuestionNumber,
+			TotalQuestions: payload.NextQuestion.TotalQuestions,
+		}
+	}
+
+	return result, nil
+}
+
+func (s *Service) triggerAnswerJob(jobID string) {
+	go func() {
+		processCtx, cancel := context.WithTimeout(context.Background(), asyncAnswerJobTimeout)
+		defer cancel()
+		s.processAnswerJob(processCtx, jobID)
+	}()
+}
+
+func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
+	claimCtx, claimCancel := context.WithTimeout(ctx, dbTimeout)
+	job, err := s.store.ClaimQueuedAnswerJob(claimCtx, jobID)
+	claimCancel()
+	if err != nil {
+		slog.Error("failed to claim async answer job", "job_id", jobID, "error", err)
+		return
+	}
+	if job == nil {
+		return
+	}
+
+	answerResult, err := s.SubmitAnswer(ctx, job.SessionCode, job.AnswerText, job.QuestionText, job.TurnID)
+	if err != nil {
+		status := AsyncAnswerJobFailed
+		errorCode := "INTERNAL_ERROR"
+		errorMessage := "Internal server error"
+		if errors.Is(err, ErrTurnConflict) {
+			status = AsyncAnswerJobConflict
+			errorCode = "TURN_CONFLICT"
+			errorMessage = "Turn is stale or out of order"
+		} else if errors.Is(err, ErrInvalidFlow) {
+			errorCode = "FLOW_INVALID"
+			errorMessage = "Interview flow is not in a valid state"
+		}
+
+		failCtx, failCancel := context.WithTimeout(ctx, dbTimeout)
+		markErr := s.store.MarkAnswerJobFailed(failCtx, MarkAnswerJobFailedParams{
+			JobID:        job.ID,
+			Status:       status,
+			ErrorCode:    errorCode,
+			ErrorMessage: errorMessage,
+		})
+		failCancel()
+		if markErr != nil {
+			slog.Error("failed to mark async answer job as failed", "job_id", job.ID, "error", markErr)
+		}
+		return
+	}
+
+	payload, err := json.Marshal(toAnswerJobPayload(answerResult))
+	if err != nil {
+		failCtx, failCancel := context.WithTimeout(ctx, dbTimeout)
+		markErr := s.store.MarkAnswerJobFailed(failCtx, MarkAnswerJobFailedParams{
+			JobID:        job.ID,
+			Status:       AsyncAnswerJobFailed,
+			ErrorCode:    "SERIALIZATION_ERROR",
+			ErrorMessage: "Failed to serialize async job result",
+		})
+		failCancel()
+		if markErr != nil {
+			slog.Error("failed to mark async answer job serialization failure", "job_id", job.ID, "error", markErr)
+		}
+		return
+	}
+
+	successCtx, successCancel := context.WithTimeout(ctx, dbTimeout)
+	if err := s.store.MarkAnswerJobSucceeded(successCtx, job.ID, payload); err != nil {
+		slog.Error("failed to mark async answer job as succeeded", "job_id", job.ID, "error", err)
+	}
+	successCancel()
+}
+
+func toAnswerJobPayload(result *AnswerResult) *answerJobPayload {
+	payload := &answerJobPayload{
+		Done:            result.Done,
+		TimerRemainingS: result.TimerRemainingS,
+	}
+	if result.NextQuestion != nil {
+		payload.NextQuestion = &answerJobQuestionShape{
+			TextEs:         result.NextQuestion.TextEs,
+			TextEn:         result.NextQuestion.TextEn,
+			Area:           result.NextQuestion.Area,
+			Kind:           string(result.NextQuestion.Kind),
+			TurnID:         result.NextQuestion.TurnID,
+			QuestionNumber: result.NextQuestion.QuestionNumber,
+			TotalQuestions: result.NextQuestion.TotalQuestions,
+		}
+	}
+	return payload
+}
+
 // SubmitAnswer processes one answer according to the explicit flow step.
 func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, questionText, turnID string) (*AnswerResult, error) {
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
@@ -218,12 +423,22 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 			return nil, fmt.Errorf("advance disclaimer step: %w", err)
 		}
 
+		readinessTextEs := s.readinessTextEs
+		readinessTextEn := s.readinessTextEn
+		// If question number is already beyond the first turn, this disclaimer
+		// is part of a resumed interview path. Use explicit resume wording.
+		if flowState.QuestionNumber > 1 {
+			resumeQuestion := ResumeQuestion(currentArea.Area)
+			readinessTextEs = resumeQuestion.TextEs
+			readinessTextEn = resumeQuestion.TextEn
+		}
+
 		return &AnswerResult{
 			Done: false,
 			NextQuestion: ReadinessQuestion(
 				currentArea.Area,
-				s.readinessTextEs,
-				s.readinessTextEn,
+				readinessTextEs,
+				readinessTextEn,
 				nextFlow.QuestionNumber,
 				nextTurnID,
 			),
