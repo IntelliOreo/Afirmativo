@@ -18,6 +18,8 @@ import (
 type OllamaAIClientConfig struct {
 	BaseURL            string
 	Model              string
+	MaxTokens          int
+	Temperature        float64
 	SystemPrompt       string
 	OutputFormatPrompt string
 	PromptLastQ        string
@@ -33,6 +35,8 @@ type OllamaAIClientConfig struct {
 type OllamaAIClient struct {
 	baseURL            string
 	model              string
+	maxTokens          int
+	temperature        float64
 	systemPrompt       string
 	outputFormatPrompt string
 	promptLastQ        string
@@ -50,6 +54,8 @@ func NewOllamaAIClient(cfg OllamaAIClientConfig) *OllamaAIClient {
 	return &OllamaAIClient{
 		baseURL:            cfg.BaseURL,
 		model:              cfg.Model,
+		maxTokens:          cfg.MaxTokens,
+		temperature:        cfg.Temperature,
 		systemPrompt:       cfg.SystemPrompt,
 		outputFormatPrompt: cfg.OutputFormatPrompt,
 		promptLastQ:        cfg.PromptLastQ,
@@ -79,12 +85,13 @@ func (c *OllamaAIClient) CallAI(ctx context.Context, turnCtx *AITurnContext) (*A
 	}
 
 	requestBody := map[string]interface{}{
-		"model": c.model,
+		"model":      c.model,
+		"max_tokens": c.maxTokens,
 		"messages": []map[string]interface{}{
 			{"role": "system", "content": systemPrompt},
 			{"role": "user", "content": userContent},
 		},
-		"temperature":     0.3,
+		"temperature":     c.temperature,
 		"response_format": map[string]interface{}{"type": "json_object"},
 	}
 

@@ -17,6 +17,8 @@ import (
 type OllamaReportAIClientConfig struct {
 	BaseURL            string
 	Model              string
+	MaxTokens          int
+	Temperature        float64
 	TimeoutSeconds     int
 	ReportPrompt       string
 	OutputFormatPrompt string
@@ -26,6 +28,8 @@ type OllamaReportAIClientConfig struct {
 type OllamaReportAIClient struct {
 	baseURL            string
 	model              string
+	maxTokens          int
+	temperature        float64
 	reportPrompt       string
 	outputFormatPrompt string
 	client             *http.Client
@@ -36,6 +40,8 @@ func NewOllamaReportAIClient(cfg OllamaReportAIClientConfig) *OllamaReportAIClie
 	return &OllamaReportAIClient{
 		baseURL:            cfg.BaseURL,
 		model:              cfg.Model,
+		maxTokens:          cfg.MaxTokens,
+		temperature:        cfg.Temperature,
 		reportPrompt:       cfg.ReportPrompt,
 		outputFormatPrompt: cfg.OutputFormatPrompt,
 		client:             &http.Client{Timeout: time.Duration(cfg.TimeoutSeconds) * time.Second},
@@ -51,12 +57,13 @@ func (c *OllamaReportAIClient) GenerateReport(ctx context.Context, areaSummaries
 	}
 
 	requestBody := map[string]interface{}{
-		"model": c.model,
+		"model":      c.model,
+		"max_tokens": c.maxTokens,
 		"messages": []map[string]interface{}{
 			{"role": "system", "content": systemPrompt},
 			{"role": "user", "content": userContent},
 		},
-		"temperature":     0.3,
+		"temperature":     c.temperature,
 		"response_format": map[string]interface{}{"type": "json_object"},
 	}
 
