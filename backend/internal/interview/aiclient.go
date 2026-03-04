@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/afirmativo/backend/internal/config"
@@ -257,16 +258,103 @@ func validateAIResponse(result *AIResponse) error {
 	return nil
 }
 
+type interviewUserPromptData struct {
+	CurrentAreaID         int
+	CurrentAreaLabel      string
+	Description           string
+	SufficiencyReqs       string
+	AreaStatus            string
+	IsPreAddressed        bool
+	FollowUpsRemaining    int
+	TimeRemainingS        int
+	QuestionsRemaining    int
+	CriteriaRemaining     int
+	RequiredLanguageLabel string
+	RequiredLanguageCode  string
+	CriteriaCoverage      []CriteriaCoverage
+	Transcript            []TranscriptEntry
+	IsOpeningTurn         bool
+}
+
+var interviewUserMessageTemplate = template.Must(
+	template.New("interview_user_message").
+		Funcs(template.FuncMap{
+			"json": func(v interface{}) string {
+				b, err := json.MarshalIndent(v, "", "  ")
+				if err != nil {
+					return "[]"
+				}
+				return string(b)
+			},
+		}).
+		Parse(`CURRENT CRITERION:
+{
+  "id": {{.CurrentAreaID}},
+  "name": "{{.CurrentAreaLabel}}",
+  "description": "{{.Description}}",
+  "sufficiency_requirements": "{{.SufficiencyReqs}}"
+}
+
+CRITERION STATUS: {{.AreaStatus}}
+IS PRE-ADDRESSED: {{.IsPreAddressed}}
+FOLLOW-UPS REMAINING FOR THIS CRITERION: {{.FollowUpsRemaining}}
+
+INTERVIEW PROGRESS:
+- Time remaining: {{.TimeRemainingS}} seconds
+- Questions remaining: {{.QuestionsRemaining}}
+- Criteria remaining (including current): {{.CriteriaRemaining}}
+- Required next question language: {{.RequiredLanguageLabel}} ({{.RequiredLanguageCode}})
+
+CRITERIA COVERAGE:
+{{json .CriteriaCoverage}}
+
+TRANSCRIPT:
+{{json .Transcript}}
+
+Please evaluate the candidate's most recent answer against the current criterion and generate the next question.
+Return next_question strictly in the required next question language. Do not switch languages.{{if .IsOpeningTurn}}
+
+This is an opening turn for the current criterion. There is no answer to evaluate for this criterion in this turn. Set evaluation to null and generate an opening question for the current criterion.{{end}}`),
+)
+
 // buildUserMessage constructs the user prompt with all interview context.
 func buildUserMessage(tc *AITurnContext) string {
-	criteriaJSON, _ := json.MarshalIndent(tc.CriteriaCoverage, "", "  ")
-	transcriptJSON, _ := json.MarshalIndent(tc.Transcript, "", "  ")
 	requiredLanguageCode := "es"
 	requiredLanguageLabel := "Spanish"
 	if strings.ToLower(strings.TrimSpace(tc.PreferredLanguage)) == "en" {
 		requiredLanguageCode = "en"
 		requiredLanguageLabel = "English"
 	}
+
+	data := interviewUserPromptData{
+		CurrentAreaID:         tc.CurrentAreaID,
+		CurrentAreaLabel:      tc.CurrentAreaLabel,
+		Description:           tc.Description,
+		SufficiencyReqs:       tc.SufficiencyReqs,
+		AreaStatus:            tc.AreaStatus,
+		IsPreAddressed:        tc.IsPreAddressed,
+		FollowUpsRemaining:    tc.FollowUpsRemaining,
+		TimeRemainingS:        tc.TimeRemainingS,
+		QuestionsRemaining:    tc.QuestionsRemaining,
+		CriteriaRemaining:     tc.CriteriaRemaining,
+		RequiredLanguageLabel: requiredLanguageLabel,
+		RequiredLanguageCode:  requiredLanguageCode,
+		CriteriaCoverage:      tc.CriteriaCoverage,
+		Transcript:            tc.Transcript,
+		IsOpeningTurn:         tc.IsOpeningTurn,
+	}
+
+	var b bytes.Buffer
+	if err := interviewUserMessageTemplate.Execute(&b, data); err != nil {
+		slog.Warn("failed to render interview user prompt template; using fallback", "error", err)
+		return buildUserMessageFallback(tc, requiredLanguageLabel, requiredLanguageCode)
+	}
+	return b.String()
+}
+
+func buildUserMessageFallback(tc *AITurnContext, requiredLanguageLabel, requiredLanguageCode string) string {
+	criteriaJSON, _ := json.MarshalIndent(tc.CriteriaCoverage, "", "  ")
+	transcriptJSON, _ := json.MarshalIndent(tc.Transcript, "", "  ")
 	openingTurnInstruction := ""
 	if tc.IsOpeningTurn {
 		openingTurnInstruction = "\n\nThis is an opening turn for the current criterion. There is no answer to evaluate for this criterion in this turn. Set evaluation to null and generate an opening question for the current criterion."

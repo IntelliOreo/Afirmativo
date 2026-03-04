@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"text/template"
 	"time"
 
 	"github.com/afirmativo/backend/internal/shared"
@@ -147,8 +148,46 @@ func (c *HTTPReportAIClient) GenerateReport(ctx context.Context, areaSummaries [
 	return &result, nil
 }
 
+type reportUserPromptData struct {
+	Summaries           []AreaSummary
+	OpenFloorTranscript string
+}
+
+var reportUserMessageTemplate = template.Must(
+	template.New("report_user_message").
+		Funcs(template.FuncMap{
+			"json": func(v interface{}) string {
+				b, err := json.MarshalIndent(v, "", "  ")
+				if err != nil {
+					return "[]"
+				}
+				return string(b)
+			},
+		}).
+		Parse(`AREA EVALUATIONS:
+{{json .Summaries}}
+
+OPEN FLOOR TRANSCRIPT (applicant's own words, in Spanish):
+{{.OpenFloorTranscript}}
+
+Please generate the assessment report based on the area evaluations above. If the open floor transcript addresses gaps in any insufficient areas, note that in your assessment.`),
+)
+
 // buildReportUserMessage constructs the user prompt with area summaries and open floor text.
 func buildReportUserMessage(summaries []AreaSummary, openFloorTranscript string) string {
+	data := reportUserPromptData{
+		Summaries:           summaries,
+		OpenFloorTranscript: openFloorTranscript,
+	}
+	var b bytes.Buffer
+	if err := reportUserMessageTemplate.Execute(&b, data); err != nil {
+		slog.Warn("failed to render report user prompt template; using fallback", "error", err)
+		return buildReportUserMessageFallback(summaries, openFloorTranscript)
+	}
+	return b.String()
+}
+
+func buildReportUserMessageFallback(summaries []AreaSummary, openFloorTranscript string) string {
 	summariesJSON, _ := json.MarshalIndent(summaries, "", "  ")
 
 	return fmt.Sprintf(`AREA EVALUATIONS:
@@ -173,25 +212,25 @@ func buildReportOutputSchema() map[string]interface{} {
 				"properties": map[string]interface{}{
 					"content_en": map[string]interface{}{
 						"type":        "string",
-						"description": "Full assessment report in English. Cover each area's result, overall case strength, and specific recommendations.",
+						"description": "Full preparation feedback summary in English. Focus only on whether the applicant has practiced articulating the relevant elements clearly. Cover each area's result and specific recommendations.",
 					},
 					"content_es": map[string]interface{}{
 						"type":        "string",
-						"description": "Full assessment report in Spanish. Same content as content_en but translated to Spanish.",
+						"description": "Full preparation feedback summary in Spanish. Same content as content_en but translated to Spanish.",
 					},
 					"strengths": map[string]interface{}{
 						"type":        "array",
 						"items":       map[string]interface{}{"type": "string"},
-						"description": "Array of strength bullet points (in English). Each should be a specific, actionable observation.",
+						"description": "Array of 'areas of clarity' bullet points (in English). Each should be a specific, actionable observation.",
 					},
 					"weaknesses": map[string]interface{}{
 						"type":        "array",
 						"items":       map[string]interface{}{"type": "string"},
-						"description": "Array of weakness/improvement bullet points (in English). Each should identify a gap and suggest how to address it.",
+						"description": "Array of 'areas to articulate more clearly' bullet points (in English). Each should identify a gap and suggest how to address it.",
 					},
 					"recommendation": map[string]interface{}{
 						"type":        "string",
-						"description": "Overall recommendation (in English). Should state whether the case appears strong, needs work, or has significant gaps.",
+						"description": "Overall recommendation (in English). Focus on preparation quality and whether key elements were articulated clearly.",
 					},
 				},
 				"required":             []string{"content_en", "content_es", "strengths", "weaknesses", "recommendation"},

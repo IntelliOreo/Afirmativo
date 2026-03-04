@@ -843,35 +843,27 @@ function InterviewPageContent() {
                   </Button>
                 )}
 
-                {reportStatus === "loading" && (
-                  <>
-                    <p className="text-primary-darkest mb-2">
-                      {lang === "es" ? "Cargando reporte..." : "Loading report..."}
+                {(reportStatus === "loading" || reportStatus === "generating") && (
+                  <Card className="mb-4 text-center py-10 px-4">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-primary">
+                      {reportStatus === "loading"
+                        ? (lang === "es" ? "Cargando reporte" : "Loading report")
+                        : (lang === "es" ? "Generando reporte" : "Generating report")}
                     </p>
                     {reportWaitStatus && (
-                      <p className="text-base sm:text-lg text-primary-dark leading-snug">
+                      <p className="mt-3 text-base sm:text-lg text-primary-dark leading-snug">
                         {reportWaitStatus}
                       </p>
                     )}
-                  </>
-                )}
-
-                {reportStatus === "generating" && (
-                  <>
-                    <p className="text-primary-darkest mb-4">
-                      {lang === "es"
-                        ? "Su reporte se está generando. Esto puede tomar unos momentos."
-                        : "Your report is being generated. This may take a few moments."}
-                    </p>
-                    {reportWaitStatus && (
-                      <p className="text-base sm:text-lg text-primary-dark leading-snug mb-4">
-                        {reportWaitStatus}
-                      </p>
+                    <div className="mt-6 inline-block h-8 w-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+                    {reportStatus === "generating" && (
+                      <div className="mt-6">
+                        <Button fullWidth onClick={loadReport}>
+                          {lang === "es" ? "Verificar de nuevo" : "Check again"}
+                        </Button>
+                      </div>
                     )}
-                    <Button fullWidth onClick={loadReport}>
-                      {lang === "es" ? "Verificar de nuevo" : "Check again"}
-                    </Button>
-                  </>
+                  </Card>
                 )}
 
                 {reportStatus === "error" && (
@@ -902,7 +894,7 @@ function InterviewPageContent() {
 
                   <section className="print-report-area">
                     <h2 className="text-2xl sm:text-3xl font-bold text-primary-dark mb-2">
-                      {lang === "es" ? "Reporte de Evaluación" : "Assessment Report"}
+                      {lang === "es" ? "Resumen de retroalimentación para preparación" : "Preparation feedback summary"}
                     </h2>
                     <p className="text-sm text-gray-600 mb-6">
                       {lang === "es"
@@ -912,7 +904,7 @@ function InterviewPageContent() {
 
                     <Card className="mb-6">
                       <h3 className="text-xl font-bold text-primary-dark mb-3">
-                        {lang === "es" ? "Fortalezas" : "Strengths"}
+                        {lang === "es" ? "Áreas de claridad" : "Areas of clarity"}
                       </h3>
                       {report.strengths.length > 0 ? (
                         <ul className="list-disc list-inside space-y-1 text-primary-darkest">
@@ -929,7 +921,7 @@ function InterviewPageContent() {
 
                     <Card className="mb-6">
                       <h3 className="text-xl font-bold text-primary-dark mb-3">
-                        {lang === "es" ? "Áreas de mejora" : "Areas for improvement"}
+                        {lang === "es" ? "Áreas para desarrollar más" : "Areas to develop further"}
                       </h3>
                       {report.weaknesses.length > 0 ? (
                         <ul className="list-disc list-inside space-y-1 text-primary-darkest">
