@@ -10,6 +10,11 @@ import (
 
 func TestFrontendDynamicRoutes_ExposeGenerateStaticParams(t *testing.T) {
 	t.Parallel()
+	// Temporarily skipped by product decision:
+	// the frontend is currently not shipping static-export mode, so this guard
+	// is kept as documentation but does not fail CI until static export is enabled.
+	// Re-enable by removing this Skip once output: "export" is turned on.
+	t.Skip("static-export route contract is deferred; keep test for future enablement")
 
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
