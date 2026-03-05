@@ -8,6 +8,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/afirmativo/backend/internal/shared"
@@ -15,9 +17,10 @@ import (
 
 // Handler holds session HTTP handlers.
 type Handler struct {
-	svc        *Service
-	auth       *shared.SessionAuthManager
-	authMaxTTL time.Duration
+	svc                  *Service
+	auth                 *shared.SessionAuthManager
+	authMaxTTL           time.Duration
+	verifyAttemptLimiter *shared.FailedAttemptLockoutLimiter
 }
 
 // NewHandler creates a Handler backed by the given Service.
@@ -30,6 +33,11 @@ func NewHandler(svc *Service, auth *shared.SessionAuthManager, authMaxTTL time.D
 		auth:       auth,
 		authMaxTTL: authMaxTTL,
 	}
+}
+
+// SetVerifyAttemptLimiter configures per-session+IP failed-attempt lockout.
+func (h *Handler) SetVerifyAttemptLimiter(limiter *shared.FailedAttemptLockoutLimiter) {
+	h.verifyAttemptLimiter = limiter
 }
 
 // validateRequest is the JSON body for POST /api/coupon/validate.
@@ -122,12 +130,35 @@ func (h *Handler) HandleVerifySession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	verifyAttemptKey := sessionVerifyAttemptKey(r, req.SessionCode)
+	if h.verifyAttemptLimiter != nil {
+		allowed, retryAfter := h.verifyAttemptLimiter.Allow(verifyAttemptKey, time.Now().UTC())
+		if !allowed {
+			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+			shared.WriteError(w, shared.ErrRateLimited, "Too many attempts. Try again later.", "VERIFY_RATE_LIMITED")
+			return
+		}
+	}
+
 	sess, err := h.svc.VerifySession(r.Context(), req.SessionCode, req.PIN)
 	if err != nil {
 		if h.auth != nil {
 			h.auth.ClearCookie(w)
 			slog.Debug("cleared auth cookie after failed verify", "session_code", req.SessionCode)
 		}
+
+		if h.verifyAttemptLimiter != nil {
+			switch {
+			case errors.Is(err, ErrPINIncorrect), errors.Is(err, shared.ErrNotFound):
+				locked, retryAfter := h.verifyAttemptLimiter.RegisterFailure(verifyAttemptKey, time.Now().UTC())
+				if locked {
+					w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+					shared.WriteError(w, shared.ErrRateLimited, "Too many attempts. Try again later.", "VERIFY_RATE_LIMITED")
+					return
+				}
+			}
+		}
+
 		switch {
 		case errors.Is(err, shared.ErrNotFound):
 			slog.Debug("session verify failed: session not found", "session_code", req.SessionCode)
@@ -143,6 +174,10 @@ func (h *Handler) HandleVerifySession(w http.ResponseWriter, r *http.Request) {
 			shared.WriteError(w, shared.ErrInternal, "Internal server error", "INTERNAL_ERROR")
 		}
 		return
+	}
+
+	if h.verifyAttemptLimiter != nil {
+		h.verifyAttemptLimiter.Reset(verifyAttemptKey)
 	}
 
 	if h.auth == nil {
@@ -184,4 +219,13 @@ func (h *Handler) HandleVerifySession(w http.ResponseWriter, r *http.Request) {
 			ExpiresAt:              sess.ExpiresAt,
 		},
 	})
+}
+
+func sessionVerifyAttemptKey(r *http.Request, sessionCode string) string {
+	code := strings.ToUpper(strings.TrimSpace(sessionCode))
+	ip := strings.TrimSpace(shared.ClientIPFromRequest(r))
+	if code == "" || ip == "" {
+		return ""
+	}
+	return code + "|" + ip
 }

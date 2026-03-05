@@ -298,3 +298,101 @@ func TestHandleVerifySession_SuccessContract(t *testing.T) {
 		t.Fatalf("interview_started_at = %v, want %v", got.Session.InterviewStartedAt, startedAt)
 	}
 }
+
+func TestHandleVerifySession_LocksOutAfterTooManyFailures(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	h := newHandlerForTest(t, &fakeStore{
+		getSessionByCodeFn: func(context.Context, string) (*Session, error) {
+			return &Session{
+				SessionCode: "AP-AAAA-BBBB",
+				PinHash:     hashPIN(t, "482917"),
+				ExpiresAt:   now.Add(2 * time.Hour),
+			}, nil
+		},
+	})
+	h.SetVerifyAttemptLimiter(shared.NewFailedAttemptLockoutLimiter(shared.FailedAttemptLockoutConfig{
+		Name:        "test_verify_lockout",
+		MaxFailures: 2,
+		Window:      10 * time.Minute,
+		Lockout:     15 * time.Minute,
+	}))
+
+	firstReq := httptest.NewRequest(http.MethodPost, "/api/session/verify", strings.NewReader(`{"sessionCode":"AP-AAAA-BBBB","pin":"000000"}`))
+	firstReq.RemoteAddr = "203.0.113.10:1234"
+	firstRR := httptest.NewRecorder()
+	h.HandleVerifySession(firstRR, firstReq)
+	if firstRR.Code != http.StatusUnauthorized {
+		t.Fatalf("first status = %d, want %d", firstRR.Code, http.StatusUnauthorized)
+	}
+
+	secondReq := httptest.NewRequest(http.MethodPost, "/api/session/verify", strings.NewReader(`{"sessionCode":"AP-AAAA-BBBB","pin":"000000"}`))
+	secondReq.RemoteAddr = "203.0.113.10:1234"
+	secondRR := httptest.NewRecorder()
+	h.HandleVerifySession(secondRR, secondReq)
+	if secondRR.Code != http.StatusTooManyRequests {
+		t.Fatalf("second status = %d, want %d", secondRR.Code, http.StatusTooManyRequests)
+	}
+	if retry := secondRR.Header().Get("Retry-After"); retry == "" {
+		t.Fatalf("expected Retry-After header on lockout response")
+	}
+	var secondErr shared.ErrorResponse
+	decodeJSONBody(t, secondRR, &secondErr)
+	if secondErr.Code != "VERIFY_RATE_LIMITED" {
+		t.Fatalf("second code = %q, want VERIFY_RATE_LIMITED", secondErr.Code)
+	}
+
+	thirdReq := httptest.NewRequest(http.MethodPost, "/api/session/verify", strings.NewReader(`{"sessionCode":"AP-AAAA-BBBB","pin":"482917"}`))
+	thirdReq.RemoteAddr = "203.0.113.10:1234"
+	thirdRR := httptest.NewRecorder()
+	h.HandleVerifySession(thirdRR, thirdReq)
+	if thirdRR.Code != http.StatusTooManyRequests {
+		t.Fatalf("third status = %d, want %d", thirdRR.Code, http.StatusTooManyRequests)
+	}
+}
+
+func TestHandleVerifySession_SuccessResetsFailureCount(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	h := newHandlerForTest(t, &fakeStore{
+		getSessionByCodeFn: func(context.Context, string) (*Session, error) {
+			return &Session{
+				SessionCode: "AP-AAAA-BBBB",
+				PinHash:     hashPIN(t, "482917"),
+				ExpiresAt:   now.Add(2 * time.Hour),
+			}, nil
+		},
+	})
+	h.SetVerifyAttemptLimiter(shared.NewFailedAttemptLockoutLimiter(shared.FailedAttemptLockoutConfig{
+		Name:        "test_verify_reset",
+		MaxFailures: 2,
+		Window:      10 * time.Minute,
+		Lockout:     15 * time.Minute,
+	}))
+
+	badReq := httptest.NewRequest(http.MethodPost, "/api/session/verify", strings.NewReader(`{"sessionCode":"AP-AAAA-BBBB","pin":"000000"}`))
+	badReq.RemoteAddr = "203.0.113.11:1234"
+	badRR := httptest.NewRecorder()
+	h.HandleVerifySession(badRR, badReq)
+	if badRR.Code != http.StatusUnauthorized {
+		t.Fatalf("bad status = %d, want %d", badRR.Code, http.StatusUnauthorized)
+	}
+
+	goodReq := httptest.NewRequest(http.MethodPost, "/api/session/verify", strings.NewReader(`{"sessionCode":"AP-AAAA-BBBB","pin":"482917"}`))
+	goodReq.RemoteAddr = "203.0.113.11:1234"
+	goodRR := httptest.NewRecorder()
+	h.HandleVerifySession(goodRR, goodReq)
+	if goodRR.Code != http.StatusOK {
+		t.Fatalf("good status = %d, want %d", goodRR.Code, http.StatusOK)
+	}
+
+	badAgainReq := httptest.NewRequest(http.MethodPost, "/api/session/verify", strings.NewReader(`{"sessionCode":"AP-AAAA-BBBB","pin":"000000"}`))
+	badAgainReq.RemoteAddr = "203.0.113.11:1234"
+	badAgainRR := httptest.NewRecorder()
+	h.HandleVerifySession(badAgainRR, badAgainReq)
+	if badAgainRR.Code != http.StatusUnauthorized {
+		t.Fatalf("bad-again status = %d, want %d", badAgainRR.Code, http.StatusUnauthorized)
+	}
+}

@@ -90,6 +90,12 @@ func main() {
 		"max_ttl_minutes", cfg.SessionAuthMaxTTLMinutes,
 	)
 	sessionHandler := session.NewHandler(sessionSvc, sessionAuth, time.Duration(cfg.SessionAuthMaxTTLMinutes)*time.Minute)
+	sessionHandler.SetVerifyAttemptLimiter(shared.NewFailedAttemptLockoutLimiter(shared.FailedAttemptLockoutConfig{
+		Name:        "session_verify_fail_lockout",
+		MaxFailures: cfg.VerifyFailMaxAttempts,
+		Window:      time.Duration(cfg.VerifyFailWindowS) * time.Second,
+		Lockout:     time.Duration(cfg.VerifyFailLockoutS) * time.Second,
+	}))
 
 	interviewStore := interview.NewPostgresStore(pool)
 
@@ -205,17 +211,23 @@ func main() {
 		os.Exit(1)
 	}
 	voiceHandler := voice.NewHandler(voiceClient, cfg.VoiceAITokenTimeoutSeconds)
-	sessionVerifyLimiter := shared.NewFixedWindowRateLimiter(shared.FixedWindowRateLimiterConfig{
-		Name:        "session_verify",
-		MaxRequests: cfg.VerifyRateLimitMax,
-		Window:      time.Duration(cfg.VerifyRateLimitWindowS) * time.Second,
-		KeyFunc:     shared.ClientIPRateLimitKey,
+	sessionVerifyIPLimiter := shared.NewTokenBucketRateLimiter(shared.TokenBucketRateLimiterConfig{
+		Name:              "session_verify_ip",
+		RequestsPerMinute: cfg.VerifyIPRatePerMinute,
+		Burst:             cfg.VerifyIPBurst,
+		KeyFunc:           shared.ClientIPRateLimitKey,
 	})
-	voiceTokenLimiter := shared.NewFixedWindowRateLimiter(shared.FixedWindowRateLimiterConfig{
-		Name:        "voice_token",
-		MaxRequests: cfg.VoiceRateLimitMax,
-		Window:      time.Duration(cfg.VoiceRateLimitWindowS) * time.Second,
-		KeyFunc:     shared.ClientIPRateLimitKey,
+	voiceTokenIPLimiter := shared.NewTokenBucketRateLimiter(shared.TokenBucketRateLimiterConfig{
+		Name:              "voice_token_ip",
+		RequestsPerMinute: cfg.VoiceIPRatePerMinute,
+		Burst:             cfg.VoiceIPBurst,
+		KeyFunc:           shared.ClientIPRateLimitKey,
+	})
+	voiceTokenSessionLimiter := shared.NewTokenBucketRateLimiter(shared.TokenBucketRateLimiterConfig{
+		Name:              "voice_token_session",
+		RequestsPerMinute: cfg.VoiceSessionRatePerMin,
+		Burst:             cfg.VoiceSessionBurst,
+		KeyFunc:           shared.SessionCodeRateLimitKey,
 	})
 
 	// Register routes.
@@ -223,11 +235,14 @@ func main() {
 
 	mux.HandleFunc("GET /api/health", shared.HandleHealth(pool))
 	mux.HandleFunc("POST /api/coupon/validate", sessionHandler.HandleValidateCoupon)
-	mux.HandleFunc("POST /api/session/verify", sessionVerifyLimiter.Wrap(sessionHandler.HandleVerifySession))
+	mux.HandleFunc("POST /api/session/verify", sessionVerifyIPLimiter.Wrap(sessionHandler.HandleVerifySession))
 	mux.HandleFunc("POST /api/interview/start", shared.RequireSessionAuth(sessionAuth, interviewHandler.HandleStart))
 	mux.HandleFunc("POST /api/interview/answer-async", shared.RequireSessionAuth(sessionAuth, interviewHandler.HandleAnswerAsync))
 	mux.HandleFunc("GET /api/interview/answer-jobs/{jobId}", shared.RequireSessionAuth(sessionAuth, interviewHandler.HandleAnswerJobStatus))
-	mux.HandleFunc("POST /api/deepgram/token", shared.RequireSessionAuth(sessionAuth, voiceTokenLimiter.Wrap(voiceHandler.HandleMintToken)))
+	mux.HandleFunc(
+		"POST /api/deepgram/token",
+		shared.RequireSessionAuth(sessionAuth, voiceTokenIPLimiter.Wrap(voiceTokenSessionLimiter.Wrap(voiceHandler.HandleMintToken))),
+	)
 	mux.HandleFunc("GET /api/report/{code}", shared.RequireSessionAuth(sessionAuth, reportHandler.HandleGetReport))
 	mux.HandleFunc("GET /api/report/{code}/pdf", shared.RequireSessionAuth(sessionAuth, reportHandler.HandleGetReportPDF))
 	mux.HandleFunc("POST /api/admin/clean-up-db", adminHandler.HandleCleanUpDB)

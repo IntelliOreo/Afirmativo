@@ -45,10 +45,15 @@ type Config struct {
 	AsyncAnswerRecoveryBatch int    // Max queued jobs fetched per recovery cycle
 	AsyncAnswerRecoveryEvery int    // Recovery loop interval in seconds
 	AsyncAnswerStaleAfterS   int    // Running job stale threshold in seconds
-	VerifyRateLimitMax       int    // Max /api/session/verify requests per window per IP
-	VerifyRateLimitWindowS   int    // /api/session/verify window in seconds
-	VoiceRateLimitMax        int    // Max /api/deepgram/token requests per window per IP
-	VoiceRateLimitWindowS    int    // /api/deepgram/token window in seconds
+	VerifyIPRatePerMinute    int    // Max average /api/session/verify requests per minute per IP
+	VerifyIPBurst            int    // Burst size for /api/session/verify per-IP token bucket
+	VerifyFailMaxAttempts    int    // Max verify failures before lockout per session+IP
+	VerifyFailWindowS        int    // Window in seconds for counting verify failures
+	VerifyFailLockoutS       int    // Lockout duration in seconds after verify failures threshold
+	VoiceIPRatePerMinute     int    // Max average /api/deepgram/token requests per minute per IP
+	VoiceIPBurst             int    // Burst size for /api/deepgram/token per-IP token bucket
+	VoiceSessionRatePerMin   int    // Max average /api/deepgram/token requests per minute per session
+	VoiceSessionBurst        int    // Burst size for /api/deepgram/token per-session token bucket
 
 	// AI configuration — all AI instructions live here, not in Go code.
 	AIProvider                              string       // "claude" (default) or "ollama"
@@ -211,36 +216,76 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("ASYNC_ANSWER_STALE_AFTER_SECONDS must be > 0")
 	}
 
-	verifyRateLimitMax, err := strconv.Atoi(envOr("VERIFY_RATE_LIMIT_MAX", "5"))
+	verifyIPRatePerMinute, err := strconv.Atoi(envOr("VERIFY_IP_RATE_LIMIT_PER_MINUTE", "60"))
 	if err != nil {
-		return Config{}, fmt.Errorf("invalid VERIFY_RATE_LIMIT_MAX: %w", err)
+		return Config{}, fmt.Errorf("invalid VERIFY_IP_RATE_LIMIT_PER_MINUTE: %w", err)
 	}
-	if verifyRateLimitMax <= 0 {
-		return Config{}, fmt.Errorf("VERIFY_RATE_LIMIT_MAX must be > 0")
+	if verifyIPRatePerMinute <= 0 {
+		return Config{}, fmt.Errorf("VERIFY_IP_RATE_LIMIT_PER_MINUTE must be > 0")
 	}
 
-	verifyRateLimitWindowS, err := strconv.Atoi(envOr("VERIFY_RATE_LIMIT_WINDOW_SECONDS", "600"))
+	verifyIPBurst, err := strconv.Atoi(envOr("VERIFY_IP_RATE_LIMIT_BURST", "10"))
 	if err != nil {
-		return Config{}, fmt.Errorf("invalid VERIFY_RATE_LIMIT_WINDOW_SECONDS: %w", err)
+		return Config{}, fmt.Errorf("invalid VERIFY_IP_RATE_LIMIT_BURST: %w", err)
 	}
-	if verifyRateLimitWindowS <= 0 {
-		return Config{}, fmt.Errorf("VERIFY_RATE_LIMIT_WINDOW_SECONDS must be > 0")
+	if verifyIPBurst <= 0 {
+		return Config{}, fmt.Errorf("VERIFY_IP_RATE_LIMIT_BURST must be > 0")
 	}
 
-	voiceRateLimitMax, err := strconv.Atoi(envOr("VOICE_TOKEN_RATE_LIMIT_MAX", "30"))
+	verifyFailMaxAttempts, err := strconv.Atoi(envOr("VERIFY_FAIL_MAX_ATTEMPTS", "5"))
 	if err != nil {
-		return Config{}, fmt.Errorf("invalid VOICE_TOKEN_RATE_LIMIT_MAX: %w", err)
+		return Config{}, fmt.Errorf("invalid VERIFY_FAIL_MAX_ATTEMPTS: %w", err)
 	}
-	if voiceRateLimitMax <= 0 {
-		return Config{}, fmt.Errorf("VOICE_TOKEN_RATE_LIMIT_MAX must be > 0")
+	if verifyFailMaxAttempts <= 0 {
+		return Config{}, fmt.Errorf("VERIFY_FAIL_MAX_ATTEMPTS must be > 0")
 	}
 
-	voiceRateLimitWindowS, err := strconv.Atoi(envOr("VOICE_TOKEN_RATE_LIMIT_WINDOW_SECONDS", "60"))
+	verifyFailWindowS, err := strconv.Atoi(envOr("VERIFY_FAIL_WINDOW_SECONDS", "600"))
 	if err != nil {
-		return Config{}, fmt.Errorf("invalid VOICE_TOKEN_RATE_LIMIT_WINDOW_SECONDS: %w", err)
+		return Config{}, fmt.Errorf("invalid VERIFY_FAIL_WINDOW_SECONDS: %w", err)
 	}
-	if voiceRateLimitWindowS <= 0 {
-		return Config{}, fmt.Errorf("VOICE_TOKEN_RATE_LIMIT_WINDOW_SECONDS must be > 0")
+	if verifyFailWindowS <= 0 {
+		return Config{}, fmt.Errorf("VERIFY_FAIL_WINDOW_SECONDS must be > 0")
+	}
+
+	verifyFailLockoutS, err := strconv.Atoi(envOr("VERIFY_FAIL_LOCKOUT_SECONDS", "900"))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid VERIFY_FAIL_LOCKOUT_SECONDS: %w", err)
+	}
+	if verifyFailLockoutS <= 0 {
+		return Config{}, fmt.Errorf("VERIFY_FAIL_LOCKOUT_SECONDS must be > 0")
+	}
+
+	voiceIPRatePerMinute, err := strconv.Atoi(envOr("VOICE_TOKEN_IP_RATE_LIMIT_PER_MINUTE", "30"))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid VOICE_TOKEN_IP_RATE_LIMIT_PER_MINUTE: %w", err)
+	}
+	if voiceIPRatePerMinute <= 0 {
+		return Config{}, fmt.Errorf("VOICE_TOKEN_IP_RATE_LIMIT_PER_MINUTE must be > 0")
+	}
+
+	voiceIPBurst, err := strconv.Atoi(envOr("VOICE_TOKEN_IP_RATE_LIMIT_BURST", "6"))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid VOICE_TOKEN_IP_RATE_LIMIT_BURST: %w", err)
+	}
+	if voiceIPBurst <= 0 {
+		return Config{}, fmt.Errorf("VOICE_TOKEN_IP_RATE_LIMIT_BURST must be > 0")
+	}
+
+	voiceSessionRatePerMin, err := strconv.Atoi(envOr("VOICE_TOKEN_SESSION_RATE_LIMIT_PER_MINUTE", "6"))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid VOICE_TOKEN_SESSION_RATE_LIMIT_PER_MINUTE: %w", err)
+	}
+	if voiceSessionRatePerMin <= 0 {
+		return Config{}, fmt.Errorf("VOICE_TOKEN_SESSION_RATE_LIMIT_PER_MINUTE must be > 0")
+	}
+
+	voiceSessionBurst, err := strconv.Atoi(envOr("VOICE_TOKEN_SESSION_RATE_LIMIT_BURST", "2"))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid VOICE_TOKEN_SESSION_RATE_LIMIT_BURST: %w", err)
+	}
+	if voiceSessionBurst <= 0 {
+		return Config{}, fmt.Errorf("VOICE_TOKEN_SESSION_RATE_LIMIT_BURST must be > 0")
 	}
 
 	cfg := Config{
@@ -263,10 +308,15 @@ func Load() (Config, error) {
 		AsyncAnswerRecoveryBatch:                asyncRecoveryBatch,
 		AsyncAnswerRecoveryEvery:                asyncRecoveryEveryS,
 		AsyncAnswerStaleAfterS:                  asyncStaleAfterS,
-		VerifyRateLimitMax:                      verifyRateLimitMax,
-		VerifyRateLimitWindowS:                  verifyRateLimitWindowS,
-		VoiceRateLimitMax:                       voiceRateLimitMax,
-		VoiceRateLimitWindowS:                   voiceRateLimitWindowS,
+		VerifyIPRatePerMinute:                   verifyIPRatePerMinute,
+		VerifyIPBurst:                           verifyIPBurst,
+		VerifyFailMaxAttempts:                   verifyFailMaxAttempts,
+		VerifyFailWindowS:                       verifyFailWindowS,
+		VerifyFailLockoutS:                      verifyFailLockoutS,
+		VoiceIPRatePerMinute:                    voiceIPRatePerMinute,
+		VoiceIPBurst:                            voiceIPBurst,
+		VoiceSessionRatePerMin:                  voiceSessionRatePerMin,
+		VoiceSessionBurst:                       voiceSessionBurst,
 		AIProvider:                              envOr("AI_PROVIDER", "claude"),
 		OllamaBaseURL:                           envOr("OLLAMA_BASE_URL", "http://localhost:11434"),
 		OllamaTemperature:                       ollamaTemp,
@@ -357,10 +407,15 @@ func (c Config) LogLoaded() {
 		"async_answer_recovery_batch", c.AsyncAnswerRecoveryBatch,
 		"async_answer_recovery_every_seconds", c.AsyncAnswerRecoveryEvery,
 		"async_answer_stale_after_seconds", c.AsyncAnswerStaleAfterS,
-		"verify_rate_limit_max", c.VerifyRateLimitMax,
-		"verify_rate_limit_window_seconds", c.VerifyRateLimitWindowS,
-		"voice_token_rate_limit_max", c.VoiceRateLimitMax,
-		"voice_token_rate_limit_window_seconds", c.VoiceRateLimitWindowS,
+		"verify_ip_rate_limit_per_minute", c.VerifyIPRatePerMinute,
+		"verify_ip_rate_limit_burst", c.VerifyIPBurst,
+		"verify_fail_max_attempts", c.VerifyFailMaxAttempts,
+		"verify_fail_window_seconds", c.VerifyFailWindowS,
+		"verify_fail_lockout_seconds", c.VerifyFailLockoutS,
+		"voice_token_ip_rate_limit_per_minute", c.VoiceIPRatePerMinute,
+		"voice_token_ip_rate_limit_burst", c.VoiceIPBurst,
+		"voice_token_session_rate_limit_per_minute", c.VoiceSessionRatePerMin,
+		"voice_token_session_rate_limit_burst", c.VoiceSessionBurst,
 	)
 	slog.Debug("AI config loaded",
 		"provider", c.AIProvider,
