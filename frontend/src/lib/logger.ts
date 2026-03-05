@@ -2,7 +2,7 @@ const LEVELS = { debug: 0, info: 1, warn: 2, error: 3 } as const;
 type Level = keyof typeof LEVELS;
 
 const currentLevel: Level =
-  (process.env.NEXT_PUBLIC_LOG_LEVEL as Level) || "debug";
+  (process.env.NEXT_PUBLIC_LOG_LEVEL as Level) || "info";
 
 function shouldLog(level: Level): boolean {
   return LEVELS[level] >= LEVELS[currentLevel];

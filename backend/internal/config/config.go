@@ -36,7 +36,8 @@ type Config struct {
 	SessionAuthCookieName    string
 	SessionAuthMaxTTLMinutes int
 	MockAPIURL               string // If non-empty, use this mock server instead of real AI APIs
-	LogLevel                 string // "debug", "info", "warn", "error" — defaults to "debug"
+	LogLevel                 string // "debug", "info", "warn", "error" — defaults to "info"
+	AllowSensitiveDebugLogs  bool   // Allows sensitive fields in DEBUG payload logs when true
 	HTTPReadTimeoutS         int    // HTTP server read timeout in seconds
 	HTTPWriteTimeoutS        int    // HTTP server write timeout in seconds
 	HTTPIdleTimeoutS         int    // HTTP server idle timeout in seconds
@@ -186,6 +187,12 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("invalid ADMIN_CLEANUP_ENABLED: %w", err14)
 	}
 
+	allowSensitiveDebugLogsStr := envOr("ALLOW_SENSITIVE_DEBUG_LOGS", "false")
+	allowSensitiveDebugLogs, err15 := strconv.ParseBool(allowSensitiveDebugLogsStr)
+	if err15 != nil {
+		return Config{}, fmt.Errorf("invalid ALLOW_SENSITIVE_DEBUG_LOGS: %w", err15)
+	}
+
 	asyncWorkers, err := strconv.Atoi(envOr("ASYNC_ANSWER_WORKERS", "4"))
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid ASYNC_ANSWER_WORKERS: %w", err)
@@ -317,7 +324,8 @@ func Load() (Config, error) {
 		SessionAuthCookieName:                   envOr("SESSION_AUTH_COOKIE_NAME", "afirmativo_auth"),
 		SessionAuthMaxTTLMinutes:                sessionAuthMaxTTL,
 		MockAPIURL:                              os.Getenv("MOCK_API_URL"),
-		LogLevel:                                envOr("LOG_LEVEL", "debug"),
+		LogLevel:                                envOr("LOG_LEVEL", "info"),
+		AllowSensitiveDebugLogs:                 allowSensitiveDebugLogs,
 		HTTPReadTimeoutS:                        httpReadTimeout,
 		HTTPWriteTimeoutS:                       httpWriteTimeout,
 		HTTPIdleTimeoutS:                        httpIdleTimeout,
@@ -419,6 +427,7 @@ func (c Config) LogLoaded() {
 		"session_auth_max_ttl_minutes", c.SessionAuthMaxTTLMinutes,
 		"mock_api_url", c.MockAPIURL,
 		"log_level", c.LogLevel,
+		"allow_sensitive_debug_logs", c.AllowSensitiveDebugLogs,
 		"http_read_timeout_seconds", c.HTTPReadTimeoutS,
 		"http_write_timeout_seconds", c.HTTPWriteTimeoutS,
 		"http_idle_timeout_seconds", c.HTTPIdleTimeoutS,

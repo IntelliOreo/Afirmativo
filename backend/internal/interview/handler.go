@@ -4,6 +4,7 @@
 package interview
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -17,12 +18,19 @@ const maxJSONBody = 64 * 1024
 
 // Handler holds interview HTTP handlers.
 type Handler struct {
-	svc *Service
+	svc                     *Service
+	allowSensitiveDebugLogs bool
 }
 
 // NewHandler creates a Handler with the given service.
 func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
+}
+
+// SetAllowSensitiveDebugLogs controls whether debug payload logs may include sensitive fields.
+// This should only be enabled for short-lived, controlled troubleshooting sessions.
+func (h *Handler) SetAllowSensitiveDebugLogs(enabled bool) {
+	h.allowSensitiveDebugLogs = enabled
 }
 
 type startRequest struct {
@@ -180,6 +188,13 @@ func redactSensitiveLogValue(value any) any {
 	}
 }
 
+func (h *Handler) debugLogPayload(value any) any {
+	if h.allowSensitiveDebugLogs && slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+		return value
+	}
+	return redactSensitiveLogValue(value)
+}
+
 // HandleAnswerAsync accepts a text answer and queues async interview processing.
 func (h *Handler) HandleAnswerAsync(w http.ResponseWriter, r *http.Request) {
 	var req answerAsyncRequest
@@ -213,7 +228,8 @@ func (h *Handler) HandleAnswerAsync(w http.ResponseWriter, r *http.Request) {
 		"clientRequestId": strings.TrimSpace(req.ClientRequestID),
 	}
 	slog.Debug("interview/answer-async request",
-		"payload", redactSensitiveLogValue(debugPayload),
+		"payload", h.debugLogPayload(debugPayload),
+		"sensitive_debug_logs_enabled", h.allowSensitiveDebugLogs,
 	)
 
 	result, err := h.svc.SubmitAnswerAsync(

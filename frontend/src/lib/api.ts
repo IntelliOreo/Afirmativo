@@ -20,6 +20,8 @@ function bodyKeys(body: unknown): string[] | undefined {
 }
 
 const SENSITIVE_KEY_RE = /(pin|token|authorization|cookie|secret|password|api[_-]?key|jwt|bearer|auth)/i;
+const allowSensitiveDebugLogs =
+  (process.env.NEXT_PUBLIC_ALLOW_SENSITIVE_DEBUG_LOGS ?? "").trim().toLowerCase() === "true";
 
 function sanitizeDebugValue(value: unknown, seen: WeakSet<object> = new WeakSet()): unknown {
   if (value == null) return value;
@@ -52,7 +54,8 @@ export async function api<T = unknown>(
   log.debug(`calling ${method} ${path}`, {
     has_body: opts.body != null,
     body_keys: bodyKeys(opts.body),
-    body: sanitizeDebugValue(opts.body),
+    body: allowSensitiveDebugLogs ? opts.body : sanitizeDebugValue(opts.body),
+    sensitive_debug_logs_enabled: allowSensitiveDebugLogs,
   });
 
   const start = performance.now();

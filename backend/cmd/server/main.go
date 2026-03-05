@@ -186,6 +186,7 @@ func main() {
 	interviewSvc.StartAsyncAnswerRuntime(asyncRuntimeCtx)
 
 	interviewHandler := interview.NewHandler(interviewSvc)
+	interviewHandler.SetAllowSensitiveDebugLogs(cfg.AllowSensitiveDebugLogs)
 
 	// Report dependencies.
 	reportSvc := report.NewService(
