@@ -20,6 +20,7 @@ import (
 	"github.com/afirmativo/backend/internal/report"
 	"github.com/afirmativo/backend/internal/session"
 	"github.com/afirmativo/backend/internal/shared"
+	"github.com/afirmativo/backend/internal/voice"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 )
@@ -181,6 +182,19 @@ func main() {
 	adminSvc := admin.NewService(adminStore)
 	adminHandler := admin.NewHandler(adminSvc)
 
+	voiceClient, err := voice.NewClient(voice.ClientConfig{
+		BaseURL:        cfg.VoiceAIBaseURL,
+		APIKey:         cfg.VoiceAIAPIKey,
+		Model:          cfg.VoiceAIModel,
+		Provider:       cfg.AIProvider,
+		TimeoutSeconds: cfg.AITimeoutSeconds,
+	})
+	if err != nil {
+		slog.Error("failed to initialize voice client", "error", err)
+		os.Exit(1)
+	}
+	voiceHandler := voice.NewHandler(voiceClient, cfg.VoiceAITokenTimeoutSeconds)
+
 	// Register routes.
 	mux := http.NewServeMux()
 
@@ -190,6 +204,7 @@ func main() {
 	mux.HandleFunc("POST /api/interview/start", shared.RequireSessionAuth(sessionAuth, interviewHandler.HandleStart))
 	mux.HandleFunc("POST /api/interview/answer-async", shared.RequireSessionAuth(sessionAuth, interviewHandler.HandleAnswerAsync))
 	mux.HandleFunc("GET /api/interview/answer-jobs/{jobId}", shared.RequireSessionAuth(sessionAuth, interviewHandler.HandleAnswerJobStatus))
+	mux.HandleFunc("POST /api/deepgram/token", shared.RequireSessionAuth(sessionAuth, voiceHandler.HandleMintToken))
 	mux.HandleFunc("GET /api/report/{code}", shared.RequireSessionAuth(sessionAuth, reportHandler.HandleGetReport))
 	mux.HandleFunc("GET /api/report/{code}/pdf", shared.RequireSessionAuth(sessionAuth, reportHandler.HandleGetReportPDF))
 	mux.HandleFunc("POST /api/admin/clean-up-db", adminHandler.HandleCleanUpDB)

@@ -9,7 +9,7 @@ import { Button } from "../../components/Button";
 import { Card } from "../../components/Card";
 import { Input } from "../../components/Input";
 import { api } from "@/lib/api";
-import { isDevEnv } from "@/lib/env";
+import { isAdminToolsEnabled } from "@/lib/env";
 import { resolveLang, withLang, writeStoredLang } from "@/lib/language";
 
 export default function LandingPage() {
@@ -104,7 +104,7 @@ export default function LandingPage() {
   };
 
   const t = content[lang];
-  const showAdminLink = isDevEnv();
+  const showAdminLink = isAdminToolsEnabled();
 
   return (
     <div className="flex flex-col min-h-screen">

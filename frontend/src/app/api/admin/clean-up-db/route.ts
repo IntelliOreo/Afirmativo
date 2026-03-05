@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { isDevEnv } from "@/lib/env";
+import { isAdminToolsEnabled } from "@/lib/env";
 
 type CleanUpRequest = {
   hours?: number;
@@ -12,7 +12,7 @@ function backendBaseURL(): string {
 }
 
 export async function POST(request: NextRequest) {
-  if (!isDevEnv()) {
+  if (!isAdminToolsEnabled()) {
     return NextResponse.json(
       { error: "Admin endpoint disabled outside dev env", code: "ADMIN_DISABLED" },
       { status: 404 },

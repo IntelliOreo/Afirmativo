@@ -11,292 +11,46 @@ import { Alert } from "@components/Alert";
 import { api } from "@/lib/api";
 import { parseLang, writeStoredLang } from "@/lib/language";
 import { beforeYouStartContent } from "../../../../content/beforeYouStart";
-
-const AUTOSUBMIT_SECONDS = 10; // auto-submit countdown threshold
-const WARNING_AT_SECONDS = 45 * 60; // orange bar at 45 min remaining
-const WRAPUP_AT_SECONDS = 5 * 60; // red bar + alert at 5 min remaining
-const ASYNC_POLL_BACKOFF_MS = [1000, 2000, 3000, 5000, 8000, 15000, 20000, 30000] as const;
-const ROTATING_STATUS_MS = 4000;
-const ROTATING_STATUS_INITIAL_DELAY_MS = 2000;
-
-const WAITING_STATUS_STRINGS: Record<"es" | "en", string[]> = {
-  en: [
-    "The interviewer is flipping through your case files... It's a lot of reading... They're doing their best...",
-    "Your response is being carefully considered... Good answers have a habit of complicating things — in the best way...",
-    "The interviewer reaches for their water... It's their third glass... Hydration is a lifestyle...",
-    "Your file is being reviewed, page by page... Whoever put it together really committed to the details...",
-    "The interviewer scribbles a note... Their handwriting is truly something... Only they know what it says...",
-    "A brief pause to double-check a few things... The interviewer has a reputation for catching the small stuff...",
-    "The interviewer leans back, stares at the ceiling for a moment, and thinks... It's part of their process...",
-    "Somewhere nearby, a printer is whirring... More documents incoming... There are always more documents...",
-    "Your response landed and now the gears are turning... Good things take a moment to process...",
-    "The interviewer takes a slow sip of water and exhales... This is their thinking ritual... It usually works...",
-    "Case files, sticky notes, and a coffee that went cold an hour ago... The interviewer's desk has seen things...",
-    "A quiet moment in the room... The interviewer doesn't mind the silence... You might find it a little awkward...",
-    "The interviewer flips back a page... Something caught their eye — probably nothing... Probably...",
-    "They've heard a lot of stories in this room... Yours is one of the more interesting ones... That's not nothing...",
-    "Almost time for the next question... The interviewer is just finishing a thought — and possibly that glass of water...",
-  ],
-  es: [
-    "El entrevistador está revisando tu expediente... Hay mucho que leer... Está haciendo su mejor esfuerzo...",
-    "Tu respuesta está siendo considerada con cuidado... Las buenas respuestas tienen la costumbre de complicar las cosas — de la mejor manera...",
-    "El entrevistador toma su vaso de agua... Es el tercero... La hidratación es un estilo de vida...",
-    "Tu expediente está siendo revisado, página por página... Quien lo preparó realmente se comprometió con los detalles...",
-    "El entrevistador garabatea una nota... Su letra es toda una obra... Solo él sabe lo que dice...",
-    "Una breve pausa para verificar algunas cosas... El entrevistador tiene fama de notar los pequeños detalles...",
-    "El entrevistador se recuesta, mira el techo un momento y piensa... Es parte de su proceso...",
-    "En algún lugar cercano, una impresora zumba... Más documentos en camino... Siempre hay más documentos...",
-    "Tu respuesta fue recibida y los engranajes están girando... Las cosas buenas toman un momento para procesarse...",
-    "El entrevistador da un lento sorbo de agua y exhala... Es su ritual para pensar... Generalmente funciona...",
-    "Expedientes, notas adhesivas y un café que se enfrió hace una hora... El escritorio del entrevistador ha visto cosas...",
-    "Un momento de silencio en la sala... Al entrevistador no le molesta el silencio... A ti quizás sí un poco...",
-    "El entrevistador regresa una página... Algo llamó su atención — probablemente nada... Probablemente...",
-    "Han escuchado muchas historias en esta sala... La tuya es una de las más interesantes... Eso no es poco...",
-    "Casi es momento para la siguiente pregunta... El entrevistador está terminando un pensamiento — y posiblemente ese vaso de agua...",
-  ],
-};
-
-type InterviewStatus = "guard" | "loading" | "active" | "submitting" | "done" | "error";
-type ReportStatus = "idle" | "loading" | "generating" | "ready" | "error";
-type CompletionSource = "finished" | "already_completed";
-
-interface Question {
-  textEs: string;
-  textEn: string;
-  area: string;
-  kind: "disclaimer" | "readiness" | "criterion";
-  turnId: string;
-  questionNumber: number;
-  totalQuestions: number;
-}
-
-interface AnswerResponse {
-  done: boolean;
-  nextQuestion?: Question;
-  timerRemainingS: number;
-  error?: string;
-  code?: string;
-}
-
-interface StartResponse {
-  question: Question;
-  timerRemainingS: number;
-  language: "es" | "en";
-  error?: string;
-  code?: string;
-}
-
-type AsyncAnswerJobStatus =
-  | "queued"
-  | "running"
-  | "succeeded"
-  | "failed"
-  | "conflict"
-  | "canceled";
-
-interface AnswerAsyncAcceptedResponse {
-  jobId: string;
-  clientRequestId: string;
-  status: AsyncAnswerJobStatus;
-  error?: string;
-  code?: string;
-}
-
-interface AnswerJobStatusResponse {
-  jobId: string;
-  clientRequestId: string;
-  status: AsyncAnswerJobStatus;
-  done: boolean;
-  nextQuestion?: Question;
-  timerRemainingS: number;
-  errorCode?: string;
-  errorMessage?: string;
-  error?: string;
-  code?: string;
-}
-
-interface PendingAnswerJob {
-  clientRequestId: string;
-  turnId: string;
-  answerText: string;
-  questionText: string;
-  jobId?: string;
-  createdAt: number;
-}
-
-type CodedError = Error & { code?: string };
-
-interface Report {
-  session_code: string;
-  status: string;
-  content_en: string;
-  content_es: string;
-  strengths: string[];
-  weaknesses: string[];
-  recommendation: string;
-  question_count: number;
-  duration_minutes: number;
-}
-
-type DisclaimerBlock =
-  | { type: "paragraph"; text: string }
-  | { type: "list"; items: string[] };
-
-function getQuestionTextForLang(
-  q: Question | null | undefined,
-  language: "es" | "en",
-): string {
-  if (!q) return "";
-  if (language === "es") return q.textEs || q.textEn || "";
-  return q.textEn || q.textEs || "";
-}
-
-function parseDisclaimerBlocks(rawText: string): DisclaimerBlock[] {
-  const lines = rawText.split("\n");
-  const blocks: DisclaimerBlock[] = [];
-  let currentListItems: string[] = [];
-
-  const flushCurrentList = () => {
-    if (currentListItems.length > 0) {
-      blocks.push({ type: "list", items: currentListItems });
-      currentListItems = [];
-    }
-  };
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      flushCurrentList();
-      continue;
-    }
-
-    if (trimmed.startsWith("- ") || trimmed.startsWith("• ")) {
-      currentListItems.push(trimmed.replace(/^[-•]\s+/, ""));
-      continue;
-    }
-
-    flushCurrentList();
-    blocks.push({ type: "paragraph", text: trimmed });
-  }
-
-  flushCurrentList();
-  return blocks;
-}
-
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function withJitter(ms: number): number {
-  const jitterFactor = 0.85 + Math.random() * 0.3;
-  return Math.max(250, Math.round(ms * jitterFactor));
-}
-
-function makeClientRequestId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function pendingJobStorageKey(sessionCode: string): string {
-  return `interview_pending_answer_job_${sessionCode}`;
-}
-
-function readPendingAnswerJob(sessionCode: string): PendingAnswerJob | null {
-  if (typeof window === "undefined") return null;
-  const raw = localStorage.getItem(pendingJobStorageKey(sessionCode));
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as PendingAnswerJob;
-    if (!parsed?.clientRequestId || !parsed?.turnId) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function writePendingAnswerJob(sessionCode: string, pending: PendingAnswerJob): void {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(pendingJobStorageKey(sessionCode), JSON.stringify(pending));
-}
-
-function clearPendingAnswerJob(sessionCode: string): void {
-  if (typeof window === "undefined") return;
-  localStorage.removeItem(pendingJobStorageKey(sessionCode));
-}
-
-function buildCodedError(message: string, code?: string): CodedError {
-  const err = new Error(message) as CodedError;
-  if (code) {
-    err.code = code;
-  }
-  return err;
-}
-
-function extractErrorCode(err: unknown): string {
-  if (!err || typeof err !== "object" || !("code" in err)) {
-    return "";
-  }
-  const maybeCode = (err as { code?: unknown }).code;
-  return typeof maybeCode === "string" ? maybeCode : "";
-}
-
-function isReloadRecoveryErrorCode(errorCode: string): boolean {
-  return errorCode === "TURN_CONFLICT" || errorCode === "IDEMPOTENCY_CONFLICT";
-}
-
-function shouldClearPendingAnswerOnError(errorCode: string): boolean {
-  return errorCode === "IDEMPOTENCY_CONFLICT";
-}
-
-function randomMessageIndex(currentIndex: number, total: number): number {
-  if (total <= 1) return 0;
-  let nextIndex = Math.floor(Math.random() * total);
-  while (nextIndex === currentIndex) {
-    nextIndex = Math.floor(Math.random() * total);
-  }
-  return nextIndex;
-}
-
-function useRotatingStatus(
-  messages: string[],
-  active: boolean,
-  intervalMs = ROTATING_STATUS_MS,
-  initialDelayMs = ROTATING_STATUS_INITIAL_DELAY_MS,
-): string {
-  const [index, setIndex] = useState(0);
-  const [visible, setVisible] = useState(false);
-
-  useEffect(() => {
-    if (!active || messages.length === 0) {
-      setIndex(0);
-      setVisible(false);
-      return;
-    }
-
-    setIndex(0);
-    setVisible(false);
-
-    let interval: number | undefined;
-    const delay = window.setTimeout(() => {
-      setIndex(() => randomMessageIndex(-1, messages.length));
-      setVisible(true);
-      interval = window.setInterval(() => {
-        setIndex((currentIndex) => randomMessageIndex(currentIndex, messages.length));
-      }, intervalMs);
-    }, initialDelayMs);
-
-    return () => {
-      window.clearTimeout(delay);
-      if (interval !== undefined) {
-        window.clearInterval(interval);
-      }
-    };
-  }, [active, initialDelayMs, intervalMs, messages]);
-
-  return visible ? (messages[index] ?? "") : "";
-}
+import {
+  AUTOSUBMIT_SECONDS,
+  ASYNC_POLL_BACKOFF_MS,
+  VOICE_MAX_SECONDS,
+  VOICE_WAVE_BARS,
+  WARNING_AT_SECONDS,
+  WRAPUP_AT_SECONDS,
+} from "./constants";
+import { useInterviewWaitingStatus } from "./hooks/useInterviewWaitingStatus";
+import { useVoiceRecorder } from "./hooks/useVoiceRecorder";
+import type {
+  AnswerAsyncAcceptedResponse,
+  AnswerJobStatusResponse,
+  AnswerResponse,
+  CompletionSource,
+  InputMode,
+  InterviewStatus,
+  Lang,
+  PendingAnswerJob,
+  Question,
+  Report,
+  ReportStatus,
+  StartResponse,
+} from "./types";
+import {
+  buildCodedError,
+  clearPendingAnswerJob,
+  extractErrorCode,
+  formatBytes,
+  formatClock,
+  getQuestionTextForLang,
+  isReloadRecoveryErrorCode,
+  makeClientRequestId,
+  parseDisclaimerBlocks,
+  readPendingAnswerJob,
+  shouldClearPendingAnswerOnError,
+  wait,
+  withJitter,
+  writePendingAnswerJob,
+} from "./utils";
 
 function InterviewPageContent() {
   const params = useParams();
@@ -304,7 +58,7 @@ function InterviewPageContent() {
   const code = params.code as string;
   const requestedLang = searchParams.get("lang");
 
-  const [lang, setLang] = useState<"es" | "en">("es");
+  const [lang, setLang] = useState<Lang>("es");
   const [langInitialized, setLangInitialized] = useState(false);
   const [status, setStatus] = useState<InterviewStatus>("guard");
   const [question, setQuestion] = useState<Question | null>(null);
@@ -318,6 +72,7 @@ function InterviewPageContent() {
   const [reportError, setReportError] = useState("");
   const [forceSubmit, setForceSubmit] = useState(false);
   const [hasReachedDisclaimerBottom, setHasReachedDisclaimerBottom] = useState(false);
+  const [inputMode, setInputMode] = useState<InputMode>("text");
   const disclaimerScrollRef = useRef<HTMLDivElement | null>(null);
 
   // Refs to access latest state values inside async callbacks.
@@ -337,7 +92,65 @@ function InterviewPageContent() {
     setReportError("");
   }, []);
 
+  const {
+    voiceRecorderState,
+    voiceDurationSeconds,
+    voiceWarningSeconds,
+    voiceBlob,
+    voicePreviewUrl,
+    isVoicePreviewPlaying,
+    voiceError,
+    voiceInfo,
+    isRecordingActive: voiceIsRecordingActive,
+    isRecordingPaused: voiceIsRecordingPaused,
+    startVoiceRecording,
+    completeVoiceRecording,
+    discardVoiceRecording,
+    toggleVoicePreviewPlayback,
+    sendVoiceRecording,
+    setVoiceErrorMessage,
+  } = useVoiceRecorder({
+    lang,
+    isActive: status === "active",
+  });
+
+  const handleInputModeSwitch = useCallback((nextMode: InputMode) => {
+    if (nextMode === inputMode) return;
+    if (
+      voiceRecorderState === "recording"
+      || voiceRecorderState === "paused"
+      || voiceRecorderState === "sending"
+    ) {
+      setVoiceErrorMessage(
+        langRef.current === "es"
+          ? "Detenga la grabación antes de cambiar de modo."
+          : "Stop recording before switching modes.",
+      );
+      return;
+    }
+
+    const hasUnsentText = inputMode === "text" && textAnswerRef.current.trim().length > 0;
+    const hasUnsentVoice = inputMode === "voice" && !!voiceBlob;
+    if ((hasUnsentText || hasUnsentVoice) && typeof window !== "undefined") {
+      const confirmed = window.confirm(
+        langRef.current === "es"
+          ? "Tiene una respuesta sin enviar. ¿Desea descartarla y cambiar de modo?"
+          : "You have an unsent answer. Discard it and switch modes?",
+      );
+      if (!confirmed) return;
+    }
+
+    if (inputMode === "voice") {
+      discardVoiceRecording();
+    } else {
+      setTextAnswer("");
+    }
+    setInputMode(nextMode);
+  }, [discardVoiceRecording, inputMode, setVoiceErrorMessage, voiceBlob, voiceRecorderState]);
+
   const markInterviewDone = useCallback((source: CompletionSource) => {
+    discardVoiceRecording();
+    setInputMode("text");
     setCompletionSource(source);
     setStatus("done");
     setQuestion(null);
@@ -347,7 +160,7 @@ function InterviewPageContent() {
     setError("");
     setErrorCode("");
     resetReportState();
-  }, [resetReportState]);
+  }, [discardVoiceRecording, resetReportState]);
 
   useEffect(() => {
     const langFromQuery = parseLang(requestedLang);
@@ -386,6 +199,11 @@ function InterviewPageContent() {
       setHasReachedDisclaimerBottom(false);
     }
   }, [question?.kind]);
+
+  useEffect(() => {
+    setInputMode("text");
+    discardVoiceRecording();
+  }, [discardVoiceRecording, question?.turnId]);
 
   const updateDisclaimerScrollState = useCallback(() => {
     const el = disclaimerScrollRef.current;
@@ -681,14 +499,18 @@ function InterviewPageContent() {
     await submitAnswer(textAnswer);
   }
 
+  async function handleSendVoiceAnswer() {
+    const transcript = await sendVoiceRecording(code);
+    if (!transcript) return;
+    await submitAnswer(transcript);
+  }
+
   async function handleAgreeAndContinue() {
     const agreementText = lang === "es" ? "Entiendo" : "I understand";
     await submitAnswer(agreementText);
   }
 
-  const minutes = Math.floor(secondsLeft / 60);
-  const seconds = secondsLeft % 60;
-  const timerLabel = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  const timerLabel = formatClock(secondsLeft);
   const isWarning = secondsLeft <= WARNING_AT_SECONDS;
   const isWrapup = secondsLeft <= WRAPUP_AT_SECONDS;
   const isBlinkingTimer = secondsLeft <= 30 && secondsLeft > 0;
@@ -705,14 +527,60 @@ function InterviewPageContent() {
   const showInterviewProgress = status === "active" || (status === "submitting" && !forceSubmit);
   const isSubmittingInQuestionFlow = status === "submitting" && !forceSubmit;
   const isReloadRecoveryError = isReloadRecoveryErrorCode(errorCode);
-  const waitStrings = WAITING_STATUS_STRINGS[lang];
-  const startupWaitStatus = useRotatingStatus(waitStrings, status === "loading");
-  const questionWaitStatus = useRotatingStatus(waitStrings, isSubmittingInQuestionFlow);
-  const finalSubmitWaitStatus = useRotatingStatus(waitStrings, status === "submitting" && forceSubmit);
-  const reportWaitStatus = useRotatingStatus(
-    waitStrings,
-    reportStatus === "loading" || reportStatus === "generating",
-  );
+  const isVoiceMode = inputMode === "voice" && !isConsentQuestion;
+  const voiceTimerLabel = formatClock(voiceDurationSeconds);
+  const voiceProgressPct = Math.min(100, (voiceDurationSeconds / VOICE_MAX_SECONDS) * 100);
+  const voiceWarningRemaining = voiceWarningSeconds == null
+    ? null
+    : Math.max(0, VOICE_MAX_SECONDS - voiceWarningSeconds);
+  const canSwitchModes =
+    !isSubmittingInQuestionFlow
+    && voiceRecorderState !== "recording"
+    && voiceRecorderState !== "paused"
+    && voiceRecorderState !== "sending";
+  const canToggleRecording =
+    status === "active"
+    && (
+      voiceRecorderState === "idle"
+      || voiceRecorderState === "recording"
+      || voiceRecorderState === "paused"
+    );
+  const canCompleteRecording =
+    status === "active"
+    && (voiceRecorderState === "recording" || voiceRecorderState === "paused");
+  const canDiscardRecording =
+    status === "active"
+    && (
+      voiceRecorderState === "recording"
+      || voiceRecorderState === "paused"
+      || voiceRecorderState === "stopped"
+    );
+  const canSendRecording =
+    status === "active"
+    && voiceRecorderState === "stopped"
+    && !!voiceBlob
+    && voiceBlob.size > 0;
+  const canPreviewRecording =
+    status === "active"
+    && (voiceRecorderState === "paused" || voiceRecorderState === "stopped")
+    && !!voicePreviewUrl;
+  const centerControlLabel = voiceRecorderState === "idle"
+    ? "Record"
+    : voiceRecorderState === "recording"
+      ? "Pause"
+      : "Resume";
+  const {
+    startupWaitStatus,
+    questionWaitStatus,
+    finalSubmitWaitStatus,
+    reportWaitStatus,
+  } = useInterviewWaitingStatus({
+    lang,
+    interviewStatus: status,
+    isSubmittingInQuestionFlow,
+    forceSubmit,
+    reportStatus,
+  });
 
   return (
     <div className="interview-page flex flex-col min-h-screen">
@@ -1064,35 +932,190 @@ function InterviewPageContent() {
                 </>
               ) : (
                 <>
-                  <div className="mb-4">
-                    <label className="block font-semibold text-primary-darkest mb-2">
-                      {lang === "es" ? "Su respuesta" : "Your answer"}
-                      <span className="block text-sm font-normal text-gray-500">
-                        {lang === "es"
-                          ? "Responda en su idioma seleccionado"
-                          : "Please answer in your selected language"}
-                      </span>
-                    </label>
-                    <textarea
-                      value={textAnswer}
-                      onChange={(e) => setTextAnswer(e.target.value)}
-                      rows={6}
-                      className="w-full px-3 py-3 text-base border border-base-lighter rounded focus:outline-none focus:ring-2 focus:ring-primary resize-none"
-                      placeholder={
-                        lang === "es"
-                          ? "Escriba su respuesta aquí..."
-                          : "Type your answer here..."
-                      }
-                    />
+                  <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <Button
+                      type="button"
+                      variant={inputMode === "text" ? "primary" : "secondary"}
+                      disabled={!canSwitchModes}
+                      onClick={() => handleInputModeSwitch("text")}
+                    >
+                      {lang === "es" ? "Entrada por texto" : "Text input"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={inputMode === "voice" ? "primary" : "secondary"}
+                      disabled={!canSwitchModes}
+                      onClick={() => handleInputModeSwitch("voice")}
+                    >
+                      {lang === "es" ? "Entrada por voz" : "Voice input"}
+                    </Button>
                   </div>
 
-                  <Button
-                    fullWidth
-                    disabled={!textAnswer.trim()}
-                    onClick={handleSubmitAnswer}
-                  >
-                    {lang === "es" ? "Enviar respuesta" : "Submit answer"}
-                  </Button>
+                  {!isVoiceMode ? (
+                    <>
+                      <div className="mb-4">
+                        <label className="block font-semibold text-primary-darkest mb-2">
+                          {lang === "es" ? "Su respuesta" : "Your answer"}
+                          <span className="block text-sm font-normal text-gray-500">
+                            {lang === "es"
+                              ? "Responda en su idioma seleccionado"
+                              : "Please answer in your selected language"}
+                          </span>
+                        </label>
+                        <textarea
+                          value={textAnswer}
+                          onChange={(e) => setTextAnswer(e.target.value)}
+                          rows={6}
+                          className="w-full px-3 py-3 text-base border border-base-lighter rounded focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+                          placeholder={
+                            lang === "es"
+                              ? "Escriba su respuesta aquí..."
+                              : "Type your answer here..."
+                          }
+                        />
+                      </div>
+
+                      <Button
+                        fullWidth
+                        disabled={!textAnswer.trim()}
+                        onClick={handleSubmitAnswer}
+                      >
+                        {lang === "es" ? "Enviar respuesta" : "Submit answer"}
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <Card className="mb-4">
+                        <div className="mb-4 flex items-center justify-center gap-3">
+                          <p className="text-center text-5xl font-bold tracking-wide text-primary">
+                            {voiceTimerLabel}
+                          </p>
+                          <button
+                            type="button"
+                            className="h-9 w-9 rounded-full border border-primary text-primary text-sm font-bold disabled:opacity-40 disabled:cursor-not-allowed"
+                            aria-label={lang === "es" ? "Reproducir audio grabado" : "Play recorded audio"}
+                            disabled={!canPreviewRecording}
+                            onClick={() => void toggleVoicePreviewPlayback()}
+                          >
+                            {isVoicePreviewPlaying ? "II" : ">"}
+                          </button>
+                        </div>
+                        <div className="mb-5 flex items-end justify-center gap-1 h-8">
+                          {VOICE_WAVE_BARS.map((bar, idx) => (
+                            <span
+                              // Decorative waveform bars for recorder dashboard.
+                              key={`voice-wave-${idx}`}
+                              className={`w-1.5 rounded-full transition-colors ${
+                                voiceIsRecordingActive ? "bg-primary-dark" : "bg-primary/50"
+                              }`}
+                              style={{ height: `${bar}px` }}
+                            />
+                          ))}
+                        </div>
+
+                        <div className="h-2 bg-base-lighter rounded mb-5">
+                          <div
+                            className="h-2 bg-primary rounded transition-all duration-200"
+                            style={{ width: `${voiceProgressPct}%` }}
+                          />
+                        </div>
+
+                        {voiceWarningRemaining !== null && (
+                          <Alert variant="warning" className="mb-4">
+                            {lang === "es"
+                              ? `Quedan ${voiceWarningRemaining}s para llegar al límite de 3 minutos.`
+                              : `${voiceWarningRemaining}s remain before the 3-minute limit.`}
+                          </Alert>
+                        )}
+
+                        {voiceError && (
+                          <Alert variant="error" className="mb-4">
+                            {voiceError}
+                          </Alert>
+                        )}
+
+                        {voiceInfo && (
+                          <Alert variant="warning" className="mb-4">
+                            {voiceInfo}
+                          </Alert>
+                        )}
+
+                        <p className="text-center text-sm text-primary-darkest mb-4">
+                          {voiceRecorderState === "idle"
+                            ? (lang === "es" ? "Pulse Record para empezar." : "Press Record to begin.")
+                            : voiceIsRecordingPaused
+                              ? (lang === "es" ? "Grabación en pausa." : "Recording paused.")
+                              : voiceIsRecordingActive
+                                ? (lang === "es" ? "Grabando..." : "Recording...")
+                                : (lang === "es" ? "Grabación completa. Envíe cuando esté listo." : "Recording complete. Send when ready.")}
+                        </p>
+
+                        {voiceBlob && (
+                          <p className="text-sm text-primary-darkest mb-4">
+                            {lang === "es" ? "Audio listo" : "Audio ready"}: {formatBytes(voiceBlob.size)}
+                          </p>
+                        )}
+
+                        <div className="mb-5 flex items-start justify-center gap-6 sm:gap-10">
+                          <div className="flex flex-col items-center gap-2">
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              className="!h-14 !w-14 !rounded-full !px-0 !py-0 shadow-sm"
+                              disabled={!canDiscardRecording}
+                              onClick={discardVoiceRecording}
+                            >
+                              ×
+                            </Button>
+                            <span className="text-xs font-semibold text-primary-darkest">
+                              {lang === "es" ? "Discard" : "Discard"}
+                            </span>
+                          </div>
+
+                          <div className="flex flex-col items-center gap-2">
+                            <Button
+                              type="button"
+                              variant="danger"
+                              className="!h-16 !w-16 !rounded-full !px-0 !py-0 shadow-md"
+                              disabled={!canToggleRecording}
+                              onClick={() => void startVoiceRecording()}
+                            >
+                              {voiceIsRecordingActive ? "II" : voiceIsRecordingPaused ? ">" : "●"}
+                            </Button>
+                            <span className="text-xs font-semibold text-primary-darkest">
+                              {centerControlLabel}
+                            </span>
+                          </div>
+
+                          <div className="flex flex-col items-center gap-2">
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              className="!h-14 !w-14 !rounded-full !px-0 !py-0 shadow-sm"
+                              disabled={!canCompleteRecording}
+                              onClick={completeVoiceRecording}
+                            >
+                              ✓
+                            </Button>
+                            <span className="text-xs font-semibold text-primary-darkest">
+                              {lang === "es" ? "Complete" : "Complete"}
+                            </span>
+                          </div>
+                        </div>
+
+                        <Button
+                          type="button"
+                          fullWidth
+                          disabled={!canSendRecording}
+                          onClick={() => void handleSendVoiceAnswer()}
+                        >
+                          {voiceRecorderState === "sending"
+                            ? (lang === "es" ? "Enviando..." : "Sending...")
+                            : (lang === "es" ? "Send recording" : "Send recording")}
+                        </Button>
+                      </Card>
+                    </>
+                  )}
                 </>
               )}
             </>

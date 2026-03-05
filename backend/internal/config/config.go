@@ -64,6 +64,12 @@ type Config struct {
 	InterviewOpeningDisclaimerEs            string       // Opening disclaimer shown on interview/start in Spanish
 	InterviewReadinessQuestionEn            string       // Non-criteria readiness question shown after disclaimer in English
 	InterviewReadinessQuestionEs            string       // Non-criteria readiness question shown after disclaimer in Spanish
+
+	// Voice AI configuration.
+	VoiceAIBaseURL             string // Deepgram-compatible base URL (real or mock)
+	VoiceAIAPIKey              string // Voice provider master API key (server only)
+	VoiceAIModel               string // Model label returned to the frontend
+	VoiceAITokenTimeoutSeconds int    // Minted token TTL in seconds
 }
 
 // Load reads required environment variables and returns a validated Config.
@@ -147,6 +153,15 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("OLLAMA_TEMPERATURE must be between 0 and 2")
 	}
 
+	voiceTokenTimeoutStr := envOr("VOICE_AI_TOKEN_TIMEOUT_SECONDS", "30")
+	voiceTokenTimeout, err13 := strconv.Atoi(voiceTokenTimeoutStr)
+	if err13 != nil {
+		return Config{}, fmt.Errorf("invalid VOICE_AI_TOKEN_TIMEOUT_SECONDS: %w", err13)
+	}
+	if voiceTokenTimeout <= 0 || voiceTokenTimeout > 3600 {
+		return Config{}, fmt.Errorf("VOICE_AI_TOKEN_TIMEOUT_SECONDS must be between 1 and 3600")
+	}
+
 	cfg := Config{
 		Port:                                    envOr("PORT", "8080"),
 		FrontendURL:                             envOr("FRONTEND_URL", "http://localhost:3000"),
@@ -183,6 +198,10 @@ func Load() (Config, error) {
 		InterviewOpeningDisclaimerEs:            os.Getenv("INTERVIEW_OPENING_DISCLAIMER_ES"),
 		InterviewReadinessQuestionEn:            os.Getenv("INTERVIEW_READINESS_QUESTION_EN"),
 		InterviewReadinessQuestionEs:            os.Getenv("INTERVIEW_READINESS_QUESTION_ES"),
+		VoiceAIBaseURL:                          envOr("VOICE_AI_BASE_URL", envOr("MOCK_API_URL", "https://api.deepgram.com")),
+		VoiceAIAPIKey:                           os.Getenv("VOICE_AI_API_KEY"),
+		VoiceAIModel:                            envOr("VOICE_AI_MODEL", "nova-3"),
+		VoiceAITokenTimeoutSeconds:              voiceTokenTimeout,
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -267,6 +286,13 @@ func (c Config) LogLoaded() {
 		"interview_opening_disclaimer_es_len", len(c.InterviewOpeningDisclaimerEs),
 		"interview_readiness_question_en_len", len(c.InterviewReadinessQuestionEn),
 		"interview_readiness_question_es_len", len(c.InterviewReadinessQuestionEs),
+	)
+	slog.Debug("voice AI config loaded",
+		"voice_ai_base_url", c.VoiceAIBaseURL,
+		"voice_ai_model", c.VoiceAIModel,
+		"voice_ai_api_key_set", c.VoiceAIAPIKey != "",
+		"voice_ai_token_timeout_seconds", c.VoiceAITokenTimeoutSeconds,
+		"ai_provider", c.AIProvider,
 	)
 	for _, ac := range c.AreaConfigs {
 		slog.Debug("area config",
