@@ -18,6 +18,7 @@ function PayPageContent() {
   const [lang, setLang] = useState<"es" | "en">(() => resolveLang(requestedLang));
   const [coupon, setCoupon] = useState("");
   const [couponError, setCouponError] = useState("");
+  const [checkoutError, setCheckoutError] = useState("");
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -50,14 +51,14 @@ function PayPageContent() {
         setCouponError(
           lang === "es"
             ? "Cupón inválido o ya utilizado. / Invalid or already used coupon."
-            : "Invalid or already used coupon. / Cupón inválido o ya utilizado."
+            : "Invalid or already used coupon. / Cupón inválido o ya utilizado.",
         );
       }
     } catch {
       setCouponError(
         lang === "es"
           ? "Error de conexión. Intente de nuevo. / Connection error. Please try again."
-          : "Connection error. Please try again. / Error de conexión."
+          : "Connection error. Please try again. / Error de conexión.",
       );
     } finally {
       setLoading(false);
@@ -66,15 +67,39 @@ function PayPageContent() {
 
   async function handleStripeCheckout() {
     setLoading(true);
+    setCheckoutError("");
+
     try {
-      const { data } = await api<{ url?: string }>("/api/payment/checkout", {
+      const { ok, status, data } = await api<{ url?: string; error?: string; code?: string }>("/api/payment/checkout", {
         method: "POST",
       });
-      if (data?.url) {
+
+      if (ok && data?.url) {
         window.location.href = data.url;
+        return;
       }
+
+      if (status === 501 || data?.code === "PAYMENT_NOT_IMPLEMENTED") {
+        setCheckoutError(
+          lang === "es"
+            ? "El pago con tarjeta no está disponible aún. Use un cupón para continuar."
+            : "Card payment is not available yet. Please use a coupon to continue.",
+        );
+        return;
+      }
+
+      setCheckoutError(
+        data?.error
+          || (lang === "es"
+            ? "No se pudo iniciar el pago. Intente nuevamente."
+            : "Could not start checkout. Please try again."),
+      );
     } catch {
-      // TODO: surface error to user
+      setCheckoutError(
+        lang === "es"
+          ? "Error de conexión al iniciar el pago. Intente nuevamente."
+          : "Connection error while starting checkout. Please try again.",
+      );
     } finally {
       setLoading(false);
     }
@@ -151,6 +176,11 @@ function PayPageContent() {
             <Button fullWidth disabled={loading} onClick={handleStripeCheckout}>
               {lang === "es" ? "Pagar con tarjeta" : "Pay by card"}
             </Button>
+            {checkoutError && (
+              <Alert variant="error" className="mt-4">
+                {checkoutError}
+              </Alert>
+            )}
           </Card>
 
           {loading && (

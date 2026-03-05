@@ -449,7 +449,6 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
       log.debug("voice token mint request", {
         phase: "token_request",
         backend_path: "/api/deepgram/token",
-        payload: requestPayload,
       });
       const { ok, status, data } = await api<DeepgramTokenResponse>("/api/deepgram/token", {
         method: "POST",
@@ -460,7 +459,9 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
         phase: "token_response",
         ok,
         status,
-        payload: data,
+        provider: data?.provider ?? "",
+        model: data?.model ?? "",
+        has_access_token: !!data?.accessToken,
       });
       if (!ok || !data?.accessToken) {
         log.warn("voice token mint failed", {
@@ -468,7 +469,6 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
           status,
           error: data?.error ?? "missing_access_token",
           code: data?.code ?? "",
-          payload: data,
         });
         throw new Error(
           data?.error
@@ -500,7 +500,6 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
         phase: "transcription_request",
         url: listenURL,
         method: "POST",
-        headers: requestHeaders,
         blob_size_bytes: audioBlob.size,
       });
 
@@ -520,7 +519,6 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
         phase: "transcription_response",
         status: response.status,
         ok: response.ok,
-        payload,
       });
 
       if (!response.ok) {
@@ -529,7 +527,6 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
           phase: "transcription_response",
           status: response.status,
           error: errorMessage || "provider_non_2xx",
-          payload,
         });
         throw new VoiceTranscriptionHTTPError(
           response.status,
@@ -544,7 +541,6 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
       if (!transcript) {
         log.warn("voice transcription returned empty transcript", {
           phase: "transcription_parse",
-          payload,
         });
         throw new Error(
           langRef.current === "es"
@@ -554,7 +550,6 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
       }
       log.debug("voice transcript extracted", {
         phase: "transcription_parse",
-        transcript,
         transcript_length: transcript.length,
       });
       return transcript;
@@ -601,7 +596,6 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
       log.info("voice transcription completed", {
         phase: "send_done",
         transcript_length: transcript.length,
-        session_code: trimmedSessionCode,
       });
       return transcript;
     } catch (err) {
@@ -609,7 +603,6 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
       setVoiceInfo("");
       log.error("voice send/transcription failed", {
         phase: "send_error",
-        session_code: trimmedSessionCode,
         error: err instanceof Error ? err.message : "unknown_error",
       });
       setVoiceError(

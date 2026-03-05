@@ -17,6 +17,7 @@ import (
 	"github.com/afirmativo/backend/internal/admin"
 	"github.com/afirmativo/backend/internal/config"
 	"github.com/afirmativo/backend/internal/interview"
+	"github.com/afirmativo/backend/internal/payment"
 	"github.com/afirmativo/backend/internal/report"
 	"github.com/afirmativo/backend/internal/session"
 	"github.com/afirmativo/backend/internal/shared"
@@ -178,6 +179,7 @@ func main() {
 		cfg.AsyncAnswerRecoveryBatch,
 		time.Duration(cfg.AsyncAnswerRecoveryEvery)*time.Second,
 		time.Duration(cfg.AsyncAnswerStaleAfterS)*time.Second,
+		time.Duration(cfg.AsyncAnswerJobTimeoutS)*time.Second,
 	)
 	asyncRuntimeCtx, asyncRuntimeCancel := context.WithCancel(context.Background())
 	defer asyncRuntimeCancel()
@@ -194,6 +196,8 @@ func main() {
 		cfg.AreaConfigs,
 	)
 	reportHandler := report.NewHandler(reportSvc)
+
+	paymentHandler := payment.NewHandler()
 
 	adminStore := admin.NewPostgresStore(pool)
 	adminSvc := admin.NewService(adminStore)
@@ -245,7 +249,15 @@ func main() {
 	)
 	mux.HandleFunc("GET /api/report/{code}", shared.RequireSessionAuth(sessionAuth, reportHandler.HandleGetReport))
 	mux.HandleFunc("GET /api/report/{code}/pdf", shared.RequireSessionAuth(sessionAuth, reportHandler.HandleGetReportPDF))
-	mux.HandleFunc("POST /api/admin/clean-up-db", adminHandler.HandleCleanUpDB)
+	mux.HandleFunc("POST /api/payment/checkout", paymentHandler.HandleCheckout)
+	mux.HandleFunc("POST /api/payment/webhook", paymentHandler.HandleWebhook)
+
+	if cfg.AdminCleanupEnabled {
+		mux.HandleFunc("POST /api/admin/clean-up-db", adminHandler.HandleCleanUpDB)
+		slog.Warn("admin cleanup endpoint enabled")
+	} else {
+		slog.Info("admin cleanup endpoint disabled")
+	}
 
 	// Apply middleware.
 	handler := shared.Chain(mux,

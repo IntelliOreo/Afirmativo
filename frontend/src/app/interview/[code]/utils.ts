@@ -119,7 +119,10 @@ export function extractErrorCode(err: unknown): string {
 }
 
 export function isReloadRecoveryErrorCode(errorCode: string): boolean {
-  return errorCode === "TURN_CONFLICT" || errorCode === "IDEMPOTENCY_CONFLICT";
+  return errorCode === "TURN_CONFLICT"
+    || errorCode === "IDEMPOTENCY_CONFLICT"
+    || errorCode === "ASYNC_POLL_TIMEOUT"
+    || errorCode === "ASYNC_POLL_CIRCUIT_OPEN";
 }
 
 export function shouldClearPendingAnswerOnError(errorCode: string): boolean {

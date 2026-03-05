@@ -49,8 +49,8 @@ export async function POST(request: NextRequest) {
 
     const candidate = parsed as CleanUpRequest;
     if (
-      Object.prototype.hasOwnProperty.call(candidate, "hours") &&
-      typeof candidate.hours !== "number"
+      Object.prototype.hasOwnProperty.call(candidate, "hours")
+      && typeof candidate.hours !== "number"
     ) {
       return NextResponse.json(
         { error: "hours must be a number", code: "BAD_REQUEST" },
@@ -71,6 +71,16 @@ export async function POST(request: NextRequest) {
   if (contentType.includes("application/json")) {
     const json = await backendResponse.json();
     return NextResponse.json(json, { status: backendResponse.status });
+  }
+
+  if (backendResponse.status === 404) {
+    return NextResponse.json(
+      {
+        error: "Backend admin cleanup endpoint is disabled",
+        code: "ADMIN_DISABLED",
+      },
+      { status: 404 },
+    );
   }
 
   const text = await backendResponse.text();

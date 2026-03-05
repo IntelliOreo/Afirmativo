@@ -14,6 +14,34 @@ interface ApiResult<T> {
   data: T | null;
 }
 
+function bodyKeys(body: unknown): string[] | undefined {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
+  return Object.keys(body as Record<string, unknown>).slice(0, 12);
+}
+
+const SENSITIVE_KEY_RE = /(pin|token|authorization|cookie|secret|password|api[_-]?key|jwt|bearer|auth)/i;
+
+function sanitizeDebugValue(value: unknown, seen: WeakSet<object> = new WeakSet()): unknown {
+  if (value == null) return value;
+  if (typeof value !== "object") return value;
+  if (seen.has(value as object)) return "[Circular]";
+  seen.add(value as object);
+
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeDebugValue(item, seen));
+  }
+
+  const out: Record<string, unknown> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (SENSITIVE_KEY_RE.test(key)) {
+      out[key] = "[REDACTED]";
+      continue;
+    }
+    out[key] = sanitizeDebugValue(raw, seen);
+  }
+  return out;
+}
+
 export async function api<T = unknown>(
   path: string,
   opts: ApiOptions = {},
@@ -21,7 +49,11 @@ export async function api<T = unknown>(
   const method = opts.method || "GET";
   const url = `${API_URL}${path}`;
 
-  log.debug(`calling ${method} ${path}`, opts.body != null ? { body: opts.body as Record<string, unknown> } : undefined);
+  log.debug(`calling ${method} ${path}`, {
+    has_body: opts.body != null,
+    body_keys: bodyKeys(opts.body),
+    body: sanitizeDebugValue(opts.body),
+  });
 
   const start = performance.now();
 
@@ -41,7 +73,7 @@ export async function api<T = unknown>(
   }
 
   if (!res.ok) {
-    log.warn(`${method} ${path} failed`, { status: res.status, elapsed_ms: elapsed, data: data as unknown as Record<string, unknown> });
+    log.warn(`${method} ${path} failed`, { status: res.status, elapsed_ms: elapsed });
   } else {
     log.debug(`${method} ${path} done`, { status: res.status, elapsed_ms: elapsed });
   }

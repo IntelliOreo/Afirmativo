@@ -14,6 +14,9 @@ import { beforeYouStartContent } from "../../../../content/beforeYouStart";
 import {
   AUTOSUBMIT_SECONDS,
   ASYNC_POLL_BACKOFF_MS,
+  ASYNC_POLL_CIRCUIT_BREAKER_COOLDOWN_MS,
+  ASYNC_POLL_CIRCUIT_BREAKER_FAILURES,
+  ASYNC_POLL_TIMEOUT_MS,
   VOICE_MAX_SECONDS,
   VOICE_WAVE_BARS,
   WARNING_AT_SECONDS,
@@ -267,44 +270,91 @@ function InterviewPageContent() {
     jobId: string,
     isCanceled: () => boolean = () => false,
   ): Promise<AnswerResponse> => {
+    const startedAt = Date.now();
     let attempt = 0;
+    let consecutiveTransientFailures = 0;
+
     while (true) {
       if (isCanceled()) {
         throw new Error("Polling canceled");
       }
 
-      const { ok, status: httpStatus, data } = await api<AnswerJobStatusResponse>(
-        `/api/interview/answer-jobs/${encodeURIComponent(jobId)}?sessionCode=${encodeURIComponent(code)}`,
-        { credentials: "include" },
-      );
-      if (!ok || !data) {
-        throw buildCodedError(
-          data?.error ?? (httpStatus === 404 ? "Async answer job not found" : "Failed to poll answer status"),
-          data?.code,
+      if (Date.now() - startedAt >= ASYNC_POLL_TIMEOUT_MS) {
+        throw buildCodedError("Polling timed out before the answer job completed", "ASYNC_POLL_TIMEOUT");
+      }
+
+      try {
+        const { ok, status: httpStatus, data } = await api<AnswerJobStatusResponse>(
+          `/api/interview/answer-jobs/${encodeURIComponent(jobId)}?sessionCode=${encodeURIComponent(code)}`,
+          { credentials: "include" },
         );
-      }
 
-      if (data.status === "queued" || data.status === "running") {
-        const delay = ASYNC_POLL_BACKOFF_MS[Math.min(attempt, ASYNC_POLL_BACKOFF_MS.length - 1)];
-        attempt += 1;
-        await wait(withJitter(delay));
-        continue;
-      }
+        if (!ok || !data) {
+          const isTransientStatus = httpStatus === 429 || httpStatus >= 500;
+          if (isTransientStatus) {
+            consecutiveTransientFailures += 1;
+            if (consecutiveTransientFailures >= ASYNC_POLL_CIRCUIT_BREAKER_FAILURES) {
+              await wait(withJitter(ASYNC_POLL_CIRCUIT_BREAKER_COOLDOWN_MS));
+              throw buildCodedError(
+                "Polling paused after repeated server failures. Reload to retry.",
+                "ASYNC_POLL_CIRCUIT_OPEN",
+              );
+            }
 
-      if (data.status === "succeeded") {
+            const transientDelay = ASYNC_POLL_BACKOFF_MS[Math.min(attempt, ASYNC_POLL_BACKOFF_MS.length - 1)];
+            attempt += 1;
+            await wait(withJitter(transientDelay));
+            continue;
+          }
+
+          throw buildCodedError(
+            data?.error ?? (httpStatus === 404 ? "Async answer job not found" : "Failed to poll answer status"),
+            data?.code,
+          );
+        }
+
+        consecutiveTransientFailures = 0;
+
+        if (data.status === "queued" || data.status === "running") {
+          const delay = ASYNC_POLL_BACKOFF_MS[Math.min(attempt, ASYNC_POLL_BACKOFF_MS.length - 1)];
+          attempt += 1;
+          await wait(withJitter(delay));
+          continue;
+        }
+
+        if (data.status === "succeeded") {
+          clearPendingAnswerJob(code);
+          return {
+            done: data.done,
+            nextQuestion: data.nextQuestion,
+            timerRemainingS: data.timerRemainingS,
+          };
+        }
+
         clearPendingAnswerJob(code);
-        return {
-          done: data.done,
-          nextQuestion: data.nextQuestion,
-          timerRemainingS: data.timerRemainingS,
-        };
-      }
+        if (data.status === "conflict") {
+          throw buildCodedError(data.errorMessage || "Turn is stale or out of order", data.errorCode || "TURN_CONFLICT");
+        }
+        throw buildCodedError(data.errorMessage || data.errorCode || "Failed to process answer", data.errorCode);
+      } catch (err) {
+        if (err instanceof TypeError) {
+          consecutiveTransientFailures += 1;
+          if (consecutiveTransientFailures >= ASYNC_POLL_CIRCUIT_BREAKER_FAILURES) {
+            await wait(withJitter(ASYNC_POLL_CIRCUIT_BREAKER_COOLDOWN_MS));
+            throw buildCodedError(
+              "Polling paused after repeated network failures. Reload to retry.",
+              "ASYNC_POLL_CIRCUIT_OPEN",
+            );
+          }
 
-      clearPendingAnswerJob(code);
-      if (data.status === "conflict") {
-        throw buildCodedError(data.errorMessage || "Turn is stale or out of order", data.errorCode || "TURN_CONFLICT");
+          const transientDelay = ASYNC_POLL_BACKOFF_MS[Math.min(attempt, ASYNC_POLL_BACKOFF_MS.length - 1)];
+          attempt += 1;
+          await wait(withJitter(transientDelay));
+          continue;
+        }
+
+        throw err;
       }
-      throw buildCodedError(data.errorMessage || data.errorCode || "Failed to process answer", data.errorCode);
     }
   }, [code]);
 

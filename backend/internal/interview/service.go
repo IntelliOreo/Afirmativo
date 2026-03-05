@@ -20,14 +20,14 @@ import (
 )
 
 const dbTimeout = 5 * time.Second
-const asyncAnswerJobTimeout = 3 * time.Minute
 
 const (
+	defaultAsyncAnswerJobTimeout      = 3 * time.Minute
 	defaultAsyncAnswerWorkers         = 4
 	defaultAsyncAnswerQueueSize       = 256
 	defaultAsyncAnswerRecoveryBatch   = 100
 	defaultAsyncAnswerRecoveryEvery   = 10 * time.Second
-	defaultAsyncAnswerStaleRunningAge = 4 * time.Minute
+	defaultAsyncAnswerStaleRunningAge = 3 * time.Minute
 )
 
 // SessionStarter transitions a session to 'interviewing'.
@@ -67,6 +67,7 @@ type Service struct {
 	asyncAnswerRecoveryBatch int
 	asyncAnswerRecoveryEvery time.Duration
 	asyncAnswerStaleAfter    time.Duration
+	asyncAnswerJobTimeout    time.Duration
 	asyncAnswerQueue         chan string
 	asyncRuntimeStartOnce    sync.Once
 }
@@ -96,6 +97,7 @@ func NewService(
 		asyncAnswerRecoveryBatch: defaultAsyncAnswerRecoveryBatch,
 		asyncAnswerRecoveryEvery: defaultAsyncAnswerRecoveryEvery,
 		asyncAnswerStaleAfter:    defaultAsyncAnswerStaleRunningAge,
+		asyncAnswerJobTimeout:    defaultAsyncAnswerJobTimeout,
 	}
 	svc.asyncAnswerQueue = make(chan string, defaultAsyncAnswerQueueSize)
 	return svc
@@ -108,6 +110,7 @@ func (s *Service) ConfigureAsyncAnswerRuntime(
 	recoveryBatch int,
 	recoveryEvery time.Duration,
 	staleAfter time.Duration,
+	jobTimeout time.Duration,
 ) {
 	if workers <= 0 {
 		workers = defaultAsyncAnswerWorkers
@@ -124,11 +127,15 @@ func (s *Service) ConfigureAsyncAnswerRuntime(
 	if staleAfter <= 0 {
 		staleAfter = defaultAsyncAnswerStaleRunningAge
 	}
+	if jobTimeout <= 0 {
+		jobTimeout = defaultAsyncAnswerJobTimeout
+	}
 
 	s.asyncAnswerWorkers = workers
 	s.asyncAnswerRecoveryBatch = recoveryBatch
 	s.asyncAnswerRecoveryEvery = recoveryEvery
 	s.asyncAnswerStaleAfter = staleAfter
+	s.asyncAnswerJobTimeout = jobTimeout
 	s.asyncAnswerQueue = make(chan string, queueSize)
 }
 
@@ -145,6 +152,7 @@ func (s *Service) StartAsyncAnswerRuntime(ctx context.Context) {
 			"recovery_batch", s.asyncAnswerRecoveryBatch,
 			"recovery_every", s.asyncAnswerRecoveryEvery,
 			"stale_after", s.asyncAnswerStaleAfter,
+			"job_timeout", s.asyncAnswerJobTimeout,
 		)
 
 		for i := 0; i < s.asyncAnswerWorkers; i++ {
@@ -164,7 +172,7 @@ func (s *Service) runAsyncAnswerWorker(ctx context.Context, workerID int) {
 		case <-ctx.Done():
 			return
 		case jobID := <-s.asyncAnswerQueue:
-			processCtx, cancel := context.WithTimeout(ctx, asyncAnswerJobTimeout)
+			processCtx, cancel := context.WithTimeout(ctx, s.asyncAnswerJobTimeout)
 			s.processAnswerJob(processCtx, jobID)
 			cancel()
 		}

@@ -69,7 +69,10 @@ func (h *Handler) HandleStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Debug("interview/start payload", "body", req)
+	slog.Debug("interview/start request",
+		"session_code", req.SessionCode,
+		"language", language,
+	)
 
 	result, err := h.svc.StartInterview(r.Context(), req.SessionCode, language)
 	if err != nil {
@@ -142,6 +145,41 @@ func normalizeRequestLanguage(language string) (string, bool) {
 	}
 }
 
+func isSensitiveLogKey(key string) bool {
+	lowerKey := strings.ToLower(strings.TrimSpace(key))
+	return strings.Contains(lowerKey, "pin") ||
+		strings.Contains(lowerKey, "token") ||
+		strings.Contains(lowerKey, "authorization") ||
+		strings.Contains(lowerKey, "cookie") ||
+		strings.Contains(lowerKey, "secret") ||
+		strings.Contains(lowerKey, "password") ||
+		strings.Contains(lowerKey, "api_key") ||
+		strings.Contains(lowerKey, "apikey")
+}
+
+func redactSensitiveLogValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, item := range typed {
+			if isSensitiveLogKey(key) {
+				out[key] = "[REDACTED]"
+				continue
+			}
+			out[key] = redactSensitiveLogValue(item)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			out[i] = redactSensitiveLogValue(item)
+		}
+		return out
+	default:
+		return value
+	}
+}
+
 // HandleAnswerAsync accepts a text answer and queues async interview processing.
 func (h *Handler) HandleAnswerAsync(w http.ResponseWriter, r *http.Request) {
 	var req answerAsyncRequest
@@ -167,7 +205,16 @@ func (h *Handler) HandleAnswerAsync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Match sync-style payload logging for local debugging at DEBUG level.
-	slog.Debug("interview/answer-async payload", "body", req)
+	debugPayload := map[string]any{
+		"sessionCode":     strings.TrimSpace(req.SessionCode),
+		"answerText":      req.AnswerText,
+		"questionText":    req.QuestionText,
+		"turnId":          strings.TrimSpace(req.TurnID),
+		"clientRequestId": strings.TrimSpace(req.ClientRequestID),
+	}
+	slog.Debug("interview/answer-async request",
+		"payload", redactSensitiveLogValue(debugPayload),
+	)
 
 	result, err := h.svc.SubmitAnswerAsync(
 		r.Context(),

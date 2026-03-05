@@ -45,6 +45,7 @@ type Config struct {
 	AsyncAnswerRecoveryBatch int    // Max queued jobs fetched per recovery cycle
 	AsyncAnswerRecoveryEvery int    // Recovery loop interval in seconds
 	AsyncAnswerStaleAfterS   int    // Running job stale threshold in seconds
+	AsyncAnswerJobTimeoutS   int    // Per-job processing timeout in seconds
 	VerifyIPRatePerMinute    int    // Max average /api/session/verify requests per minute per IP
 	VerifyIPBurst            int    // Burst size for /api/session/verify per-IP token bucket
 	VerifyFailMaxAttempts    int    // Max verify failures before lockout per session+IP
@@ -84,6 +85,9 @@ type Config struct {
 	VoiceAIAPIKey              string // Voice provider master API key (server only)
 	VoiceAIModel               string // Model label returned to the frontend
 	VoiceAITokenTimeoutSeconds int    // Minted token TTL in seconds
+
+	// Admin maintenance configuration.
+	AdminCleanupEnabled bool // Enables destructive admin cleanup endpoint when true
 }
 
 // Load reads required environment variables and returns a validated Config.
@@ -176,6 +180,12 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("VOICE_AI_TOKEN_TIMEOUT_SECONDS must be between 1 and 3600")
 	}
 
+	adminCleanupEnabledStr := envOr("ADMIN_CLEANUP_ENABLED", "false")
+	adminCleanupEnabled, err14 := strconv.ParseBool(adminCleanupEnabledStr)
+	if err14 != nil {
+		return Config{}, fmt.Errorf("invalid ADMIN_CLEANUP_ENABLED: %w", err14)
+	}
+
 	asyncWorkers, err := strconv.Atoi(envOr("ASYNC_ANSWER_WORKERS", "4"))
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid ASYNC_ANSWER_WORKERS: %w", err)
@@ -208,12 +218,20 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("ASYNC_ANSWER_RECOVERY_EVERY_SECONDS must be > 0")
 	}
 
-	asyncStaleAfterS, err := strconv.Atoi(envOr("ASYNC_ANSWER_STALE_AFTER_SECONDS", "240"))
+	asyncStaleAfterS, err := strconv.Atoi(envOr("ASYNC_ANSWER_STALE_AFTER_SECONDS", "180"))
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid ASYNC_ANSWER_STALE_AFTER_SECONDS: %w", err)
 	}
 	if asyncStaleAfterS <= 0 {
 		return Config{}, fmt.Errorf("ASYNC_ANSWER_STALE_AFTER_SECONDS must be > 0")
+	}
+
+	asyncJobTimeoutS, err := strconv.Atoi(envOr("ASYNC_ANSWER_JOB_TIMEOUT_SECONDS", "180"))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid ASYNC_ANSWER_JOB_TIMEOUT_SECONDS: %w", err)
+	}
+	if asyncJobTimeoutS <= 0 {
+		return Config{}, fmt.Errorf("ASYNC_ANSWER_JOB_TIMEOUT_SECONDS must be > 0")
 	}
 
 	verifyIPRatePerMinute, err := strconv.Atoi(envOr("VERIFY_IP_RATE_LIMIT_PER_MINUTE", "60"))
@@ -308,6 +326,7 @@ func Load() (Config, error) {
 		AsyncAnswerRecoveryBatch:                asyncRecoveryBatch,
 		AsyncAnswerRecoveryEvery:                asyncRecoveryEveryS,
 		AsyncAnswerStaleAfterS:                  asyncStaleAfterS,
+		AsyncAnswerJobTimeoutS:                  asyncJobTimeoutS,
 		VerifyIPRatePerMinute:                   verifyIPRatePerMinute,
 		VerifyIPBurst:                           verifyIPBurst,
 		VerifyFailMaxAttempts:                   verifyFailMaxAttempts,
@@ -342,6 +361,7 @@ func Load() (Config, error) {
 		VoiceAIAPIKey:                           os.Getenv("VOICE_AI_API_KEY"),
 		VoiceAIModel:                            envOr("VOICE_AI_MODEL", "nova-3"),
 		VoiceAITokenTimeoutSeconds:              voiceTokenTimeout,
+		AdminCleanupEnabled:                     adminCleanupEnabled,
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -407,6 +427,7 @@ func (c Config) LogLoaded() {
 		"async_answer_recovery_batch", c.AsyncAnswerRecoveryBatch,
 		"async_answer_recovery_every_seconds", c.AsyncAnswerRecoveryEvery,
 		"async_answer_stale_after_seconds", c.AsyncAnswerStaleAfterS,
+		"async_answer_job_timeout_seconds", c.AsyncAnswerJobTimeoutS,
 		"verify_ip_rate_limit_per_minute", c.VerifyIPRatePerMinute,
 		"verify_ip_rate_limit_burst", c.VerifyIPBurst,
 		"verify_fail_max_attempts", c.VerifyFailMaxAttempts,
@@ -416,6 +437,7 @@ func (c Config) LogLoaded() {
 		"voice_token_ip_rate_limit_burst", c.VoiceIPBurst,
 		"voice_token_session_rate_limit_per_minute", c.VoiceSessionRatePerMin,
 		"voice_token_session_rate_limit_burst", c.VoiceSessionBurst,
+		"admin_cleanup_enabled", c.AdminCleanupEnabled,
 	)
 	slog.Debug("AI config loaded",
 		"provider", c.AIProvider,
