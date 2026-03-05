@@ -3,6 +3,8 @@ package interview
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -261,4 +263,97 @@ func TestHandleAnswerJobStatus_ValidationAndContract(t *testing.T) {
 			t.Fatalf("nextQuestion.turnId = %q, want turn-next", got.NextQuestion.TurnID)
 		}
 	})
+}
+
+func TestRedactSensitiveLogValue_RecursivelyRedactsSensitiveKeys(t *testing.T) {
+	t.Parallel()
+
+	input := map[string]any{
+		"sessionCode": "AP-7K9X-M2NF",
+		"pin":         "482917",
+		"nested": map[string]any{
+			"api_key": "abc",
+			"token":   "secret-token",
+			"safe":    "ok",
+		},
+		"items": []any{
+			map[string]any{
+				"Authorization": "Bearer xyz",
+				"value":         "keep",
+			},
+			"text",
+		},
+	}
+
+	gotRaw := redactSensitiveLogValue(input)
+	got, ok := gotRaw.(map[string]any)
+	if !ok {
+		t.Fatalf("redacted payload type = %T, want map[string]any", gotRaw)
+	}
+
+	if got["sessionCode"] != "AP-7K9X-M2NF" {
+		t.Fatalf("sessionCode = %#v, want preserved value", got["sessionCode"])
+	}
+	if got["pin"] != "[REDACTED]" {
+		t.Fatalf("pin = %#v, want [REDACTED]", got["pin"])
+	}
+
+	nested, ok := got["nested"].(map[string]any)
+	if !ok {
+		t.Fatalf("nested type = %T, want map[string]any", got["nested"])
+	}
+	if nested["api_key"] != "[REDACTED]" {
+		t.Fatalf("nested.api_key = %#v, want [REDACTED]", nested["api_key"])
+	}
+	if nested["token"] != "[REDACTED]" {
+		t.Fatalf("nested.token = %#v, want [REDACTED]", nested["token"])
+	}
+	if nested["safe"] != "ok" {
+		t.Fatalf("nested.safe = %#v, want ok", nested["safe"])
+	}
+
+	items, ok := got["items"].([]any)
+	if !ok || len(items) != 2 {
+		t.Fatalf("items = %#v, want []any len=2", got["items"])
+	}
+	firstItem, ok := items[0].(map[string]any)
+	if !ok {
+		t.Fatalf("items[0] type = %T, want map[string]any", items[0])
+	}
+	if firstItem["Authorization"] != "[REDACTED]" {
+		t.Fatalf("items[0].Authorization = %#v, want [REDACTED]", firstItem["Authorization"])
+	}
+	if firstItem["value"] != "keep" {
+		t.Fatalf("items[0].value = %#v, want keep", firstItem["value"])
+	}
+}
+
+func TestHandlerDebugLogPayload_RequiresDebugLevelAndExplicitToggle(t *testing.T) {
+	original := slog.Default()
+	defer slog.SetDefault(original)
+
+	payload := map[string]any{
+		"token": "very-secret",
+		"safe":  "ok",
+	}
+	h := &Handler{}
+
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	redactedByDefault := h.debugLogPayload(payload).(map[string]any)
+	if redactedByDefault["token"] != "[REDACTED]" {
+		t.Fatalf("token without sensitive toggle = %#v, want [REDACTED]", redactedByDefault["token"])
+	}
+
+	h.SetAllowSensitiveDebugLogs(true)
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	redactedWithoutDebug := h.debugLogPayload(payload).(map[string]any)
+	if redactedWithoutDebug["token"] != "[REDACTED]" {
+		t.Fatalf("token without debug level = %#v, want [REDACTED]", redactedWithoutDebug["token"])
+	}
+
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	unredacted := h.debugLogPayload(payload).(map[string]any)
+	if unredacted["token"] != "very-secret" {
+		t.Fatalf("token with debug+toggle = %#v, want very-secret", unredacted["token"])
+	}
 }

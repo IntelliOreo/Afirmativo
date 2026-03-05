@@ -396,3 +396,106 @@ func TestHandleVerifySession_SuccessResetsFailureCount(t *testing.T) {
 		t.Fatalf("bad-again status = %d, want %d", badAgainRR.Code, http.StatusUnauthorized)
 	}
 }
+
+func TestHandleVerifySession_FailedAttemptLimiterIsScopedBySessionAndIP(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	h := newHandlerForTest(t, &fakeStore{
+		getSessionByCodeFn: func(context.Context, string) (*Session, error) {
+			return &Session{
+				SessionCode: "AP-AAAA-BBBB",
+				PinHash:     hashPIN(t, "482917"),
+				ExpiresAt:   now.Add(2 * time.Hour),
+			}, nil
+		},
+	})
+	h.SetVerifyAttemptLimiter(shared.NewFailedAttemptLockoutLimiter(shared.FailedAttemptLockoutConfig{
+		Name:        "test_verify_key_scope",
+		MaxFailures: 2,
+		Window:      10 * time.Minute,
+		Lockout:     15 * time.Minute,
+	}))
+
+	// Lock out one specific (sessionCode + IP) key.
+	first := httptest.NewRequest(http.MethodPost, "/api/session/verify", strings.NewReader(`{"sessionCode":"AP-AAAA-BBBB","pin":"000000"}`))
+	first.RemoteAddr = "203.0.113.50:1234"
+	firstRR := httptest.NewRecorder()
+	h.HandleVerifySession(firstRR, first)
+	if firstRR.Code != http.StatusUnauthorized {
+		t.Fatalf("first status = %d, want %d", firstRR.Code, http.StatusUnauthorized)
+	}
+
+	second := httptest.NewRequest(http.MethodPost, "/api/session/verify", strings.NewReader(`{"sessionCode":"AP-AAAA-BBBB","pin":"000000"}`))
+	second.RemoteAddr = "203.0.113.50:1234"
+	secondRR := httptest.NewRecorder()
+	h.HandleVerifySession(secondRR, second)
+	if secondRR.Code != http.StatusTooManyRequests {
+		t.Fatalf("second status = %d, want %d", secondRR.Code, http.StatusTooManyRequests)
+	}
+
+	// Same session, different IP should not inherit lockout.
+	otherIP := httptest.NewRequest(http.MethodPost, "/api/session/verify", strings.NewReader(`{"sessionCode":"AP-AAAA-BBBB","pin":"000000"}`))
+	otherIP.RemoteAddr = "203.0.113.51:1234"
+	otherIPRR := httptest.NewRecorder()
+	h.HandleVerifySession(otherIPRR, otherIP)
+	if otherIPRR.Code != http.StatusUnauthorized {
+		t.Fatalf("other-ip status = %d, want %d", otherIPRR.Code, http.StatusUnauthorized)
+	}
+
+	// Same IP, different session should not inherit lockout.
+	otherSession := httptest.NewRequest(http.MethodPost, "/api/session/verify", strings.NewReader(`{"sessionCode":"AP-CCCC-DDDD","pin":"000000"}`))
+	otherSession.RemoteAddr = "203.0.113.50:1234"
+	otherSessionRR := httptest.NewRecorder()
+	h.HandleVerifySession(otherSessionRR, otherSession)
+	if otherSessionRR.Code != http.StatusUnauthorized {
+		t.Fatalf("other-session status = %d, want %d", otherSessionRR.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestHandleVerifySession_PerIPTokenBucketLimiter(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	h := newHandlerForTest(t, &fakeStore{
+		getSessionByCodeFn: func(_ context.Context, sessionCode string) (*Session, error) {
+			return &Session{
+				SessionCode: sessionCode,
+				PinHash:     hashPIN(t, "482917"),
+				ExpiresAt:   now.Add(2 * time.Hour),
+			}, nil
+		},
+	})
+
+	ipLimiter := shared.NewTokenBucketRateLimiter(shared.TokenBucketRateLimiterConfig{
+		Name:              "test_verify_ip_limiter",
+		RequestsPerMinute: 1,
+		Burst:             1,
+		KeyFunc:           shared.ClientIPRateLimitKey,
+	})
+	wrapped := ipLimiter.Wrap(h.HandleVerifySession)
+
+	first := httptest.NewRequest(http.MethodPost, "/api/session/verify", strings.NewReader(`{"sessionCode":"AP-AAAA-BBBB","pin":"482917"}`))
+	first.RemoteAddr = "203.0.113.60:1234"
+	firstRR := httptest.NewRecorder()
+	wrapped(firstRR, first)
+	if firstRR.Code != http.StatusOK {
+		t.Fatalf("first status = %d, want %d", firstRR.Code, http.StatusOK)
+	}
+
+	second := httptest.NewRequest(http.MethodPost, "/api/session/verify", strings.NewReader(`{"sessionCode":"AP-AAAA-BBBB","pin":"482917"}`))
+	second.RemoteAddr = "203.0.113.60:1234"
+	secondRR := httptest.NewRecorder()
+	wrapped(secondRR, second)
+	if secondRR.Code != http.StatusTooManyRequests {
+		t.Fatalf("second status = %d, want %d", secondRR.Code, http.StatusTooManyRequests)
+	}
+	if retry := secondRR.Header().Get("Retry-After"); retry == "" {
+		t.Fatalf("expected Retry-After header on IP limiter response")
+	}
+	var secondErr shared.ErrorResponse
+	decodeJSONBody(t, secondRR, &secondErr)
+	if secondErr.Code != "RATE_LIMITED" {
+		t.Fatalf("second code = %q, want RATE_LIMITED", secondErr.Code)
+	}
+}

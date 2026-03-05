@@ -11,6 +11,8 @@ type fakeInterviewStore struct {
 	upsertAnswerJobFn      func(ctx context.Context, params UpsertAnswerJobParams) (*AnswerJob, error)
 	getAnswerJobFn         func(ctx context.Context, sessionCode, jobID string) (*AnswerJob, error)
 	claimQueuedAnswerJobFn func(ctx context.Context, jobID string) (*AnswerJob, error)
+	listQueuedAnswerJobIDsFn func(ctx context.Context, limit int) ([]string, error)
+	requeueStaleRunningAnswerJobsFn func(ctx context.Context, staleBefore time.Time) (int64, error)
 	markAnswerJobOKFn      func(ctx context.Context, jobID string, resultPayload []byte) error
 	markAnswerJobFailedFn  func(ctx context.Context, params MarkAnswerJobFailedParams) error
 }
@@ -75,11 +77,17 @@ func (f *fakeInterviewStore) ClaimQueuedAnswerJob(ctx context.Context, jobID str
 	return nil, nil
 }
 
-func (f *fakeInterviewStore) ListQueuedAnswerJobIDs(context.Context, int) ([]string, error) {
+func (f *fakeInterviewStore) ListQueuedAnswerJobIDs(ctx context.Context, limit int) ([]string, error) {
+	if f.listQueuedAnswerJobIDsFn != nil {
+		return f.listQueuedAnswerJobIDsFn(ctx, limit)
+	}
 	return nil, nil
 }
 
-func (f *fakeInterviewStore) RequeueStaleRunningAnswerJobs(context.Context, time.Time) (int64, error) {
+func (f *fakeInterviewStore) RequeueStaleRunningAnswerJobs(ctx context.Context, staleBefore time.Time) (int64, error) {
+	if f.requeueStaleRunningAnswerJobsFn != nil {
+		return f.requeueStaleRunningAnswerJobsFn(ctx, staleBefore)
+	}
 	return 0, nil
 }
 
