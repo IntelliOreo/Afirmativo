@@ -2,10 +2,17 @@
 // This file defines the Report domain type — no infrastructure imports.
 package report
 
+import "errors"
+
+var (
+	ErrSessionNotFound     = errors.New("report session not found")
+	ErrSessionNotCompleted = errors.New("report session not completed")
+)
+
 // Report represents a completed assessment report.
 type Report struct {
 	SessionCode     string
-	Status          string   // "generating", "ready", "failed"
+	Status          string // "generating", "ready", "failed"
 	ContentEn       string
 	ContentEs       string
 	Strengths       []string

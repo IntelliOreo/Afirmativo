@@ -5,12 +5,14 @@ package report
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
 	"time"
 
 	"github.com/afirmativo/backend/internal/config"
+	"github.com/afirmativo/backend/internal/shared"
 )
 
 // Service orchestrates report generation and retrieval.
@@ -53,10 +55,13 @@ func (s *Service) GetOrGenerateReport(ctx context.Context, sessionCode string) (
 	// Verify session is completed.
 	sess, err := s.sessions.GetSessionByCode(ctx, sessionCode)
 	if err != nil {
+		if errors.Is(err, shared.ErrNotFound) {
+			return nil, ErrSessionNotFound
+		}
 		return nil, fmt.Errorf("get session: %w", err)
 	}
 	if sess.Status != "completed" {
-		return nil, fmt.Errorf("session not completed (status: %s)", sess.Status)
+		return nil, ErrSessionNotCompleted
 	}
 
 	// Create a placeholder row so concurrent requests see "generating".

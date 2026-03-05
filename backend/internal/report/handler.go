@@ -5,9 +5,9 @@
 package report
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/afirmativo/backend/internal/shared"
 )
@@ -20,6 +20,22 @@ type Handler struct {
 // NewHandler creates a new report handler.
 func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
+}
+
+type reportGeneratingResponse struct {
+	Status string `json:"status"`
+}
+
+type reportReadyResponse struct {
+	SessionCode     string   `json:"session_code"`
+	Status          string   `json:"status"`
+	ContentEn       string   `json:"content_en"`
+	ContentEs       string   `json:"content_es"`
+	Strengths       []string `json:"strengths"`
+	Weaknesses      []string `json:"weaknesses"`
+	Recommendation  string   `json:"recommendation"`
+	QuestionCount   int      `json:"question_count"`
+	DurationMinutes int      `json:"duration_minutes"`
 }
 
 // HandleGetReport returns the report JSON for a session.
@@ -39,15 +55,14 @@ func (h *Handler) HandleGetReport(w http.ResponseWriter, r *http.Request) {
 
 	report, err := h.svc.GetOrGenerateReport(r.Context(), code)
 	if err != nil {
-		errStr := err.Error()
-		if strings.Contains(errStr, "not found") {
+		if errors.Is(err, ErrSessionNotFound) {
 			shared.WriteJSON(w, http.StatusNotFound, shared.ErrorResponse{
 				Error: "session not found",
 				Code:  "SESSION_NOT_FOUND",
 			})
 			return
 		}
-		if strings.Contains(errStr, "not completed") {
+		if errors.Is(err, ErrSessionNotCompleted) {
 			shared.WriteJSON(w, http.StatusBadRequest, shared.ErrorResponse{
 				Error: "interview not completed yet",
 				Code:  "NOT_COMPLETED",
@@ -63,9 +78,7 @@ func (h *Handler) HandleGetReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if report == nil || report.Status == "generating" {
-		shared.WriteJSON(w, http.StatusAccepted, map[string]string{
-			"status": "generating",
-		})
+		shared.WriteJSON(w, http.StatusAccepted, reportGeneratingResponse{Status: "generating"})
 		return
 	}
 
@@ -78,16 +91,16 @@ func (h *Handler) HandleGetReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Report is ready.
-	shared.WriteJSON(w, http.StatusOK, map[string]interface{}{
-		"session_code":     report.SessionCode,
-		"status":           report.Status,
-		"content_en":       report.ContentEn,
-		"content_es":       report.ContentEs,
-		"strengths":        report.Strengths,
-		"weaknesses":       report.Weaknesses,
-		"recommendation":   report.Recommendation,
-		"question_count":   report.QuestionCount,
-		"duration_minutes": report.DurationMinutes,
+	shared.WriteJSON(w, http.StatusOK, reportReadyResponse{
+		SessionCode:     report.SessionCode,
+		Status:          report.Status,
+		ContentEn:       report.ContentEn,
+		ContentEs:       report.ContentEs,
+		Strengths:       report.Strengths,
+		Weaknesses:      report.Weaknesses,
+		Recommendation:  report.Recommendation,
+		QuestionCount:   report.QuestionCount,
+		DurationMinutes: report.DurationMinutes,
 	})
 }
 

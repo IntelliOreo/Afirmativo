@@ -75,6 +75,14 @@ func (f *fakeInterviewStore) ClaimQueuedAnswerJob(ctx context.Context, jobID str
 	return nil, nil
 }
 
+func (f *fakeInterviewStore) ListQueuedAnswerJobIDs(context.Context, int) ([]string, error) {
+	return nil, nil
+}
+
+func (f *fakeInterviewStore) RequeueStaleRunningAnswerJobs(context.Context, time.Time) (int64, error) {
+	return 0, nil
+}
+
 func (f *fakeInterviewStore) GetAnswerJob(ctx context.Context, sessionCode, jobID string) (*AnswerJob, error) {
 	if f.getAnswerJobFn != nil {
 		return f.getAnswerJobFn(ctx, sessionCode, jobID)

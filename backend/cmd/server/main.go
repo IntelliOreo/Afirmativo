@@ -166,6 +166,17 @@ func main() {
 		cfg.InterviewReadinessQuestionEn,
 		cfg.InterviewReadinessQuestionEs,
 	)
+	interviewSvc.ConfigureAsyncAnswerRuntime(
+		cfg.AsyncAnswerWorkers,
+		cfg.AsyncAnswerQueueSize,
+		cfg.AsyncAnswerRecoveryBatch,
+		time.Duration(cfg.AsyncAnswerRecoveryEvery)*time.Second,
+		time.Duration(cfg.AsyncAnswerStaleAfterS)*time.Second,
+	)
+	asyncRuntimeCtx, asyncRuntimeCancel := context.WithCancel(context.Background())
+	defer asyncRuntimeCancel()
+	interviewSvc.StartAsyncAnswerRuntime(asyncRuntimeCtx)
+
 	interviewHandler := interview.NewHandler(interviewSvc)
 
 	// Report dependencies.
@@ -194,17 +205,29 @@ func main() {
 		os.Exit(1)
 	}
 	voiceHandler := voice.NewHandler(voiceClient, cfg.VoiceAITokenTimeoutSeconds)
+	sessionVerifyLimiter := shared.NewFixedWindowRateLimiter(shared.FixedWindowRateLimiterConfig{
+		Name:        "session_verify",
+		MaxRequests: cfg.VerifyRateLimitMax,
+		Window:      time.Duration(cfg.VerifyRateLimitWindowS) * time.Second,
+		KeyFunc:     shared.ClientIPRateLimitKey,
+	})
+	voiceTokenLimiter := shared.NewFixedWindowRateLimiter(shared.FixedWindowRateLimiterConfig{
+		Name:        "voice_token",
+		MaxRequests: cfg.VoiceRateLimitMax,
+		Window:      time.Duration(cfg.VoiceRateLimitWindowS) * time.Second,
+		KeyFunc:     shared.ClientIPRateLimitKey,
+	})
 
 	// Register routes.
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/health", shared.HandleHealth(pool))
 	mux.HandleFunc("POST /api/coupon/validate", sessionHandler.HandleValidateCoupon)
-	mux.HandleFunc("POST /api/session/verify", sessionHandler.HandleVerifySession)
+	mux.HandleFunc("POST /api/session/verify", sessionVerifyLimiter.Wrap(sessionHandler.HandleVerifySession))
 	mux.HandleFunc("POST /api/interview/start", shared.RequireSessionAuth(sessionAuth, interviewHandler.HandleStart))
 	mux.HandleFunc("POST /api/interview/answer-async", shared.RequireSessionAuth(sessionAuth, interviewHandler.HandleAnswerAsync))
 	mux.HandleFunc("GET /api/interview/answer-jobs/{jobId}", shared.RequireSessionAuth(sessionAuth, interviewHandler.HandleAnswerJobStatus))
-	mux.HandleFunc("POST /api/deepgram/token", shared.RequireSessionAuth(sessionAuth, voiceHandler.HandleMintToken))
+	mux.HandleFunc("POST /api/deepgram/token", shared.RequireSessionAuth(sessionAuth, voiceTokenLimiter.Wrap(voiceHandler.HandleMintToken)))
 	mux.HandleFunc("GET /api/report/{code}", shared.RequireSessionAuth(sessionAuth, reportHandler.HandleGetReport))
 	mux.HandleFunc("GET /api/report/{code}/pdf", shared.RequireSessionAuth(sessionAuth, reportHandler.HandleGetReportPDF))
 	mux.HandleFunc("POST /api/admin/clean-up-db", adminHandler.HandleCleanUpDB)
@@ -239,6 +262,7 @@ func main() {
 	<-quit
 
 	slog.Info("shutting down server")
+	asyncRuntimeCancel()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/afirmativo/backend/internal/sqlgen"
 	"github.com/jackc/pgx/v5"
@@ -581,6 +582,58 @@ func (s *PostgresStore) ClaimQueuedAnswerJob(ctx context.Context, jobID string) 
 		return nil, fmt.Errorf("claim answer job: %w", err)
 	}
 	return job, nil
+}
+
+// ListQueuedAnswerJobIDs returns oldest queued async answer job IDs.
+func (s *PostgresStore) ListQueuedAnswerJobIDs(ctx context.Context, limit int) ([]string, error) {
+	if limit <= 0 {
+		return []string{}, nil
+	}
+
+	rows, err := s.pool.Query(ctx,
+		`SELECT id::text
+		   FROM interview_answer_jobs
+		  WHERE status = 'queued'
+		  ORDER BY created_at ASC
+		  LIMIT $1`,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list queued answer jobs: %w", err)
+	}
+	defer rows.Close()
+
+	ids := make([]string, 0, limit)
+	for rows.Next() {
+		var id string
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			return nil, fmt.Errorf("scan queued answer job id: %w", scanErr)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate queued answer jobs: %w", err)
+	}
+	return ids, nil
+}
+
+// RequeueStaleRunningAnswerJobs marks stale running jobs as queued for retry.
+func (s *PostgresStore) RequeueStaleRunningAnswerJobs(ctx context.Context, staleBefore time.Time) (int64, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE interview_answer_jobs
+		    SET status = 'queued',
+		        started_at = NULL,
+		        completed_at = NULL,
+		        updated_at = now()
+		  WHERE status = 'running'
+		    AND started_at IS NOT NULL
+		    AND started_at < $1`,
+		staleBefore.UTC(),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("requeue stale running answer jobs: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 // GetAnswerJob returns a polling job by session and job ID.

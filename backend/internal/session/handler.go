@@ -94,6 +94,21 @@ type verifyRequest struct {
 	PIN         string `json:"pin"`
 }
 
+type verifySessionView struct {
+	SessionCode            string     `json:"session_code"`
+	Status                 string     `json:"status"`
+	Track                  string     `json:"track"`
+	InterviewBudgetSeconds int        `json:"interview_budget_seconds"`
+	InterviewLapsedSeconds int        `json:"interview_lapsed_seconds"`
+	InterviewStartedAt     *time.Time `json:"interview_started_at"`
+	CreatedAt              time.Time  `json:"created_at"`
+	ExpiresAt              time.Time  `json:"expires_at"`
+}
+
+type verifyResponse struct {
+	Session verifySessionView `json:"session"`
+}
+
 // HandleVerifySession handles POST /api/session/verify.
 func (h *Handler) HandleVerifySession(w http.ResponseWriter, r *http.Request) {
 	var req verifyRequest
@@ -157,16 +172,16 @@ func (h *Handler) HandleVerifySession(w http.ResponseWriter, r *http.Request) {
 		"auth_ttl_seconds", int(tokenExpiresAt.Sub(now).Seconds()),
 	)
 
-	shared.WriteJSON(w, http.StatusOK, map[string]any{
-		"session": map[string]any{
-			"session_code":             sess.SessionCode,
-			"status":                   sess.Status,
-			"track":                    sess.Track,
-			"interview_budget_seconds": sess.InterviewBudgetSeconds,
-			"interview_lapsed_seconds": sess.InterviewLapsedSeconds,
-			"interview_started_at":     sess.InterviewStartedAt,
-			"created_at":               sess.CreatedAt,
-			"expires_at":               sess.ExpiresAt,
+	shared.WriteJSON(w, http.StatusOK, verifyResponse{
+		Session: verifySessionView{
+			SessionCode:            sess.SessionCode,
+			Status:                 sess.Status,
+			Track:                  sess.Track,
+			InterviewBudgetSeconds: sess.InterviewBudgetSeconds,
+			InterviewLapsedSeconds: sess.InterviewLapsedSeconds,
+			InterviewStartedAt:     sess.InterviewStartedAt,
+			CreatedAt:              sess.CreatedAt,
+			ExpiresAt:              sess.ExpiresAt,
 		},
 	})
 }

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/afirmativo/backend/internal/config"
@@ -20,6 +21,14 @@ import (
 
 const dbTimeout = 5 * time.Second
 const asyncAnswerJobTimeout = 3 * time.Minute
+
+const (
+	defaultAsyncAnswerWorkers         = 4
+	defaultAsyncAnswerQueueSize       = 256
+	defaultAsyncAnswerRecoveryBatch   = 100
+	defaultAsyncAnswerRecoveryEvery   = 10 * time.Second
+	defaultAsyncAnswerStaleRunningAge = 4 * time.Minute
+)
 
 // SessionStarter transitions a session to 'interviewing'.
 type SessionStarter interface {
@@ -53,6 +62,13 @@ type Service struct {
 	openingTextEs    string
 	readinessTextEn  string
 	readinessTextEs  string
+
+	asyncAnswerWorkers       int
+	asyncAnswerRecoveryBatch int
+	asyncAnswerRecoveryEvery time.Duration
+	asyncAnswerStaleAfter    time.Duration
+	asyncAnswerQueue         chan string
+	asyncRuntimeStartOnce    sync.Once
 }
 
 // NewService creates a Service with the given dependencies.
@@ -65,17 +81,164 @@ func NewService(
 	areaConfigs []config.AreaConfig,
 	openingTextEn, openingTextEs, readinessTextEn, readinessTextEs string,
 ) *Service {
-	return &Service{
-		sessionStarter:   ss,
-		sessionGetter:    sg,
-		sessionCompleter: sc,
-		store:            store,
-		aiClient:         ai,
-		areaConfigs:      areaConfigs,
-		openingTextEn:    openingTextEn,
-		openingTextEs:    openingTextEs,
-		readinessTextEn:  readinessTextEn,
-		readinessTextEs:  readinessTextEs,
+	svc := &Service{
+		sessionStarter:           ss,
+		sessionGetter:            sg,
+		sessionCompleter:         sc,
+		store:                    store,
+		aiClient:                 ai,
+		areaConfigs:              areaConfigs,
+		openingTextEn:            openingTextEn,
+		openingTextEs:            openingTextEs,
+		readinessTextEn:          readinessTextEn,
+		readinessTextEs:          readinessTextEs,
+		asyncAnswerWorkers:       defaultAsyncAnswerWorkers,
+		asyncAnswerRecoveryBatch: defaultAsyncAnswerRecoveryBatch,
+		asyncAnswerRecoveryEvery: defaultAsyncAnswerRecoveryEvery,
+		asyncAnswerStaleAfter:    defaultAsyncAnswerStaleRunningAge,
+	}
+	svc.asyncAnswerQueue = make(chan string, defaultAsyncAnswerQueueSize)
+	return svc
+}
+
+// ConfigureAsyncAnswerRuntime overrides async job worker/recovery settings.
+func (s *Service) ConfigureAsyncAnswerRuntime(
+	workers int,
+	queueSize int,
+	recoveryBatch int,
+	recoveryEvery time.Duration,
+	staleAfter time.Duration,
+) {
+	if workers <= 0 {
+		workers = defaultAsyncAnswerWorkers
+	}
+	if queueSize <= 0 {
+		queueSize = defaultAsyncAnswerQueueSize
+	}
+	if recoveryBatch <= 0 {
+		recoveryBatch = defaultAsyncAnswerRecoveryBatch
+	}
+	if recoveryEvery <= 0 {
+		recoveryEvery = defaultAsyncAnswerRecoveryEvery
+	}
+	if staleAfter <= 0 {
+		staleAfter = defaultAsyncAnswerStaleRunningAge
+	}
+
+	s.asyncAnswerWorkers = workers
+	s.asyncAnswerRecoveryBatch = recoveryBatch
+	s.asyncAnswerRecoveryEvery = recoveryEvery
+	s.asyncAnswerStaleAfter = staleAfter
+	s.asyncAnswerQueue = make(chan string, queueSize)
+}
+
+// StartAsyncAnswerRuntime launches bounded workers and periodic recovery.
+func (s *Service) StartAsyncAnswerRuntime(ctx context.Context) {
+	s.asyncRuntimeStartOnce.Do(func() {
+		if s.asyncAnswerQueue == nil {
+			s.asyncAnswerQueue = make(chan string, defaultAsyncAnswerQueueSize)
+		}
+
+		slog.Info("starting async answer runtime",
+			"workers", s.asyncAnswerWorkers,
+			"queue_size", cap(s.asyncAnswerQueue),
+			"recovery_batch", s.asyncAnswerRecoveryBatch,
+			"recovery_every", s.asyncAnswerRecoveryEvery,
+			"stale_after", s.asyncAnswerStaleAfter,
+		)
+
+		for i := 0; i < s.asyncAnswerWorkers; i++ {
+			workerID := i + 1
+			go s.runAsyncAnswerWorker(ctx, workerID)
+		}
+		go s.runAsyncAnswerRecoveryLoop(ctx)
+	})
+}
+
+func (s *Service) runAsyncAnswerWorker(ctx context.Context, workerID int) {
+	slog.Debug("async answer worker started", "worker_id", workerID)
+	defer slog.Debug("async answer worker stopped", "worker_id", workerID)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case jobID := <-s.asyncAnswerQueue:
+			processCtx, cancel := context.WithTimeout(ctx, asyncAnswerJobTimeout)
+			s.processAnswerJob(processCtx, jobID)
+			cancel()
+		}
+	}
+}
+
+func (s *Service) runAsyncAnswerRecoveryLoop(ctx context.Context) {
+	s.recoverAsyncAnswerJobs(ctx)
+
+	ticker := time.NewTicker(s.asyncAnswerRecoveryEvery)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.recoverAsyncAnswerJobs(ctx)
+		}
+	}
+}
+
+func (s *Service) recoverAsyncAnswerJobs(ctx context.Context) {
+	staleBefore := time.Now().UTC().Add(-s.asyncAnswerStaleAfter)
+	requeueCtx, requeueCancel := context.WithTimeout(ctx, dbTimeout)
+	requeued, err := s.store.RequeueStaleRunningAnswerJobs(requeueCtx, staleBefore)
+	requeueCancel()
+	if err != nil {
+		slog.Error("failed to requeue stale running async answer jobs", "error", err)
+		return
+	}
+
+	listCtx, listCancel := context.WithTimeout(ctx, dbTimeout)
+	queuedIDs, err := s.store.ListQueuedAnswerJobIDs(listCtx, s.asyncAnswerRecoveryBatch)
+	listCancel()
+	if err != nil {
+		slog.Error("failed to list queued async answer jobs", "error", err)
+		return
+	}
+
+	enqueued := 0
+	for _, jobID := range queuedIDs {
+		if s.enqueueAsyncAnswerJob(jobID) {
+			enqueued++
+		}
+	}
+
+	if requeued > 0 || enqueued > 0 {
+		slog.Info("async answer recovery cycle completed",
+			"requeued_stale_running_jobs", requeued,
+			"queued_jobs_listed", len(queuedIDs),
+			"queued_jobs_enqueued", enqueued,
+		)
+	}
+}
+
+func (s *Service) enqueueAsyncAnswerJob(jobID string) bool {
+	id := strings.TrimSpace(jobID)
+	if id == "" {
+		return false
+	}
+	if s.asyncAnswerQueue == nil {
+		slog.Warn("async answer queue is not configured; job remains queued", "job_id", id)
+		return false
+	}
+
+	select {
+	case s.asyncAnswerQueue <- id:
+		slog.Debug("async answer job queued for worker pickup", "job_id", id)
+		return true
+	default:
+		// Leave status as queued in DB; recovery loop will retry enqueue.
+		slog.Warn("async answer queue is full; job remains queued", "job_id", id)
+		return false
 	}
 }
 
@@ -241,8 +404,7 @@ func (s *Service) SubmitAnswerAsync(ctx context.Context, sessionCode, answerText
 
 	triggered := false
 	if job.Status == AsyncAnswerJobQueued {
-		triggered = true
-		s.triggerAnswerJob(job.ID)
+		triggered = s.enqueueAsyncAnswerJob(job.ID)
 	}
 
 	slog.Info("async answer job accepted",
@@ -311,15 +473,6 @@ func (s *Service) GetAnswerJobResult(ctx context.Context, sessionCode, jobID str
 	}
 
 	return result, nil
-}
-
-func (s *Service) triggerAnswerJob(jobID string) {
-	slog.Debug("triggering async answer job worker", "job_id", jobID)
-	go func() {
-		processCtx, cancel := context.WithTimeout(context.Background(), asyncAnswerJobTimeout)
-		defer cancel()
-		s.processAnswerJob(processCtx, jobID)
-	}()
 }
 
 func (s *Service) processAnswerJob(ctx context.Context, jobID string) {

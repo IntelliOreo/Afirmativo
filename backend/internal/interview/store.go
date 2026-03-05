@@ -1,7 +1,10 @@
 // Store defines persistence operations for interview-specific tables.
 package interview
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Store defines persistence for question_areas and answers.
 type Store interface {
@@ -62,6 +65,12 @@ type Store interface {
 
 	// ClaimQueuedAnswerJob marks a queued job as running and returns it. Returns nil,nil if already claimed/terminal.
 	ClaimQueuedAnswerJob(ctx context.Context, jobID string) (*AnswerJob, error)
+
+	// ListQueuedAnswerJobIDs returns queued job IDs ordered oldest-first.
+	ListQueuedAnswerJobIDs(ctx context.Context, limit int) ([]string, error)
+
+	// RequeueStaleRunningAnswerJobs moves stale running jobs back to queued status.
+	RequeueStaleRunningAnswerJobs(ctx context.Context, staleBefore time.Time) (int64, error)
 
 	// GetAnswerJob returns a polling job by session+job id.
 	GetAnswerJob(ctx context.Context, sessionCode, jobID string) (*AnswerJob, error)

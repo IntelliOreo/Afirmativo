@@ -40,6 +40,15 @@ type Config struct {
 	HTTPReadTimeoutS         int    // HTTP server read timeout in seconds
 	HTTPWriteTimeoutS        int    // HTTP server write timeout in seconds
 	HTTPIdleTimeoutS         int    // HTTP server idle timeout in seconds
+	AsyncAnswerWorkers       int    // Number of async answer worker goroutines
+	AsyncAnswerQueueSize     int    // In-memory queue size for async answer dispatch
+	AsyncAnswerRecoveryBatch int    // Max queued jobs fetched per recovery cycle
+	AsyncAnswerRecoveryEvery int    // Recovery loop interval in seconds
+	AsyncAnswerStaleAfterS   int    // Running job stale threshold in seconds
+	VerifyRateLimitMax       int    // Max /api/session/verify requests per window per IP
+	VerifyRateLimitWindowS   int    // /api/session/verify window in seconds
+	VoiceRateLimitMax        int    // Max /api/deepgram/token requests per window per IP
+	VoiceRateLimitWindowS    int    // /api/deepgram/token window in seconds
 
 	// AI configuration — all AI instructions live here, not in Go code.
 	AIProvider                              string       // "claude" (default) or "ollama"
@@ -162,6 +171,78 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("VOICE_AI_TOKEN_TIMEOUT_SECONDS must be between 1 and 3600")
 	}
 
+	asyncWorkers, err := strconv.Atoi(envOr("ASYNC_ANSWER_WORKERS", "4"))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid ASYNC_ANSWER_WORKERS: %w", err)
+	}
+	if asyncWorkers <= 0 {
+		return Config{}, fmt.Errorf("ASYNC_ANSWER_WORKERS must be > 0")
+	}
+
+	asyncQueueSize, err := strconv.Atoi(envOr("ASYNC_ANSWER_QUEUE_SIZE", "256"))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid ASYNC_ANSWER_QUEUE_SIZE: %w", err)
+	}
+	if asyncQueueSize <= 0 {
+		return Config{}, fmt.Errorf("ASYNC_ANSWER_QUEUE_SIZE must be > 0")
+	}
+
+	asyncRecoveryBatch, err := strconv.Atoi(envOr("ASYNC_ANSWER_RECOVERY_BATCH", "100"))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid ASYNC_ANSWER_RECOVERY_BATCH: %w", err)
+	}
+	if asyncRecoveryBatch <= 0 {
+		return Config{}, fmt.Errorf("ASYNC_ANSWER_RECOVERY_BATCH must be > 0")
+	}
+
+	asyncRecoveryEveryS, err := strconv.Atoi(envOr("ASYNC_ANSWER_RECOVERY_EVERY_SECONDS", "10"))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid ASYNC_ANSWER_RECOVERY_EVERY_SECONDS: %w", err)
+	}
+	if asyncRecoveryEveryS <= 0 {
+		return Config{}, fmt.Errorf("ASYNC_ANSWER_RECOVERY_EVERY_SECONDS must be > 0")
+	}
+
+	asyncStaleAfterS, err := strconv.Atoi(envOr("ASYNC_ANSWER_STALE_AFTER_SECONDS", "240"))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid ASYNC_ANSWER_STALE_AFTER_SECONDS: %w", err)
+	}
+	if asyncStaleAfterS <= 0 {
+		return Config{}, fmt.Errorf("ASYNC_ANSWER_STALE_AFTER_SECONDS must be > 0")
+	}
+
+	verifyRateLimitMax, err := strconv.Atoi(envOr("VERIFY_RATE_LIMIT_MAX", "5"))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid VERIFY_RATE_LIMIT_MAX: %w", err)
+	}
+	if verifyRateLimitMax <= 0 {
+		return Config{}, fmt.Errorf("VERIFY_RATE_LIMIT_MAX must be > 0")
+	}
+
+	verifyRateLimitWindowS, err := strconv.Atoi(envOr("VERIFY_RATE_LIMIT_WINDOW_SECONDS", "600"))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid VERIFY_RATE_LIMIT_WINDOW_SECONDS: %w", err)
+	}
+	if verifyRateLimitWindowS <= 0 {
+		return Config{}, fmt.Errorf("VERIFY_RATE_LIMIT_WINDOW_SECONDS must be > 0")
+	}
+
+	voiceRateLimitMax, err := strconv.Atoi(envOr("VOICE_TOKEN_RATE_LIMIT_MAX", "30"))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid VOICE_TOKEN_RATE_LIMIT_MAX: %w", err)
+	}
+	if voiceRateLimitMax <= 0 {
+		return Config{}, fmt.Errorf("VOICE_TOKEN_RATE_LIMIT_MAX must be > 0")
+	}
+
+	voiceRateLimitWindowS, err := strconv.Atoi(envOr("VOICE_TOKEN_RATE_LIMIT_WINDOW_SECONDS", "60"))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid VOICE_TOKEN_RATE_LIMIT_WINDOW_SECONDS: %w", err)
+	}
+	if voiceRateLimitWindowS <= 0 {
+		return Config{}, fmt.Errorf("VOICE_TOKEN_RATE_LIMIT_WINDOW_SECONDS must be > 0")
+	}
+
 	cfg := Config{
 		Port:                                    envOr("PORT", "8080"),
 		FrontendURL:                             envOr("FRONTEND_URL", "http://localhost:3000"),
@@ -177,6 +258,15 @@ func Load() (Config, error) {
 		HTTPReadTimeoutS:                        httpReadTimeout,
 		HTTPWriteTimeoutS:                       httpWriteTimeout,
 		HTTPIdleTimeoutS:                        httpIdleTimeout,
+		AsyncAnswerWorkers:                      asyncWorkers,
+		AsyncAnswerQueueSize:                    asyncQueueSize,
+		AsyncAnswerRecoveryBatch:                asyncRecoveryBatch,
+		AsyncAnswerRecoveryEvery:                asyncRecoveryEveryS,
+		AsyncAnswerStaleAfterS:                  asyncStaleAfterS,
+		VerifyRateLimitMax:                      verifyRateLimitMax,
+		VerifyRateLimitWindowS:                  verifyRateLimitWindowS,
+		VoiceRateLimitMax:                       voiceRateLimitMax,
+		VoiceRateLimitWindowS:                   voiceRateLimitWindowS,
 		AIProvider:                              envOr("AI_PROVIDER", "claude"),
 		OllamaBaseURL:                           envOr("OLLAMA_BASE_URL", "http://localhost:11434"),
 		OllamaTemperature:                       ollamaTemp,
@@ -262,6 +352,15 @@ func (c Config) LogLoaded() {
 		"http_read_timeout_seconds", c.HTTPReadTimeoutS,
 		"http_write_timeout_seconds", c.HTTPWriteTimeoutS,
 		"http_idle_timeout_seconds", c.HTTPIdleTimeoutS,
+		"async_answer_workers", c.AsyncAnswerWorkers,
+		"async_answer_queue_size", c.AsyncAnswerQueueSize,
+		"async_answer_recovery_batch", c.AsyncAnswerRecoveryBatch,
+		"async_answer_recovery_every_seconds", c.AsyncAnswerRecoveryEvery,
+		"async_answer_stale_after_seconds", c.AsyncAnswerStaleAfterS,
+		"verify_rate_limit_max", c.VerifyRateLimitMax,
+		"verify_rate_limit_window_seconds", c.VerifyRateLimitWindowS,
+		"voice_token_rate_limit_max", c.VoiceRateLimitMax,
+		"voice_token_rate_limit_window_seconds", c.VoiceRateLimitWindowS,
 	)
 	slog.Debug("AI config loaded",
 		"provider", c.AIProvider,
