@@ -196,3 +196,7 @@ Frontend and backend deploy independently.
 - Keep business APIs in Go; Next.js route handlers are only for local/dev admin proxying
 - Frontend env vars: `NEXT_PUBLIC_API_URL` (required). Admin proxy route is gated by `NODE_ENV=development`.
 - Target device: cheap Android phones on Chrome
+
+
+bash -lc 'trap "kill 0" INT TERM EXIT; (cd frontend && npm run dev 2>&1 | sed -u "s/^/[frontend] /") & (cd backend && go run ./cmd/server 2>&1 | sed -u "s/^/[backend] /") & (cd mockThirdpartyAPIs && go run . 2>&1 | sed -u "s/^/[mock] /") & wait'
+
