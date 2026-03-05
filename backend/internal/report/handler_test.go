@@ -64,9 +64,14 @@ func (f *fakeReportInterviewProvider) GetAnswerCount(context.Context, string) (i
 	return 0, nil
 }
 
-type fakeReportAIClient struct{}
+type fakeReportAIClient struct {
+	generateReportFn func(context.Context, []AreaSummary, string) (*ReportAIResponse, error)
+}
 
-func (f *fakeReportAIClient) GenerateReport(context.Context, []AreaSummary, string) (*ReportAIResponse, error) {
+func (f *fakeReportAIClient) GenerateReport(ctx context.Context, summaries []AreaSummary, transcript string) (*ReportAIResponse, error) {
+	if f.generateReportFn != nil {
+		return f.generateReportFn(ctx, summaries, transcript)
+	}
 	return nil, fmt.Errorf("GenerateReport should not be called in these tests")
 }
 
@@ -126,6 +131,74 @@ func TestServiceGetOrGenerateReport_RequiresCompletedSession(t *testing.T) {
 	_, err := svc.GetOrGenerateReport(context.Background(), "AP-AAAA-BBBB")
 	if !errors.Is(err, ErrSessionNotCompleted) {
 		t.Fatalf("GetOrGenerateReport() error = %v, want ErrSessionNotCompleted", err)
+	}
+}
+
+func TestServiceGetOrGenerateReport_RetriesFailedReport(t *testing.T) {
+	t.Parallel()
+
+	updateStatuses := []string{}
+	store := &fakeReportStore{
+		getReportBySessionFn: func(context.Context, string) (*Report, error) {
+			return &Report{SessionCode: "AP-AAAA-BBBB", Status: "failed"}, nil
+		},
+		updateReportFn: func(_ context.Context, r *Report) error {
+			updateStatuses = append(updateStatuses, r.Status)
+			return nil
+		},
+	}
+	sessions := &fakeReportSessionProvider{
+		getSessionByCodeFn: func(context.Context, string) (*SessionInfo, error) {
+			return &SessionInfo{
+				SessionCode:        "AP-AAAA-BBBB",
+				Status:             "completed",
+				InterviewStartedAt: 1000,
+				EndedAt:            1060,
+			}, nil
+		},
+	}
+	aiCalls := 0
+	ai := &fakeReportAIClient{
+			generateReportFn: func(context.Context, []AreaSummary, string) (*ReportAIResponse, error) {
+				aiCalls++
+				return &ReportAIResponse{
+					ContentEn:             "English report",
+					ContentEs:             "Reporte en español",
+					AreasOfClarity:        []string{"clarity"},
+					AreasToDevelopFurther: []string{"pace"},
+					Recommendation:        "continue practice",
+				}, nil
+			},
+		}
+
+	svc := NewService(store, &fakeReportInterviewProvider{}, sessions, ai, nil)
+
+	report, err := svc.GetOrGenerateReport(context.Background(), "AP-AAAA-BBBB")
+	if err != nil {
+		t.Fatalf("GetOrGenerateReport() error = %v, want nil", err)
+	}
+	if report == nil {
+		t.Fatal("GetOrGenerateReport() report = nil, want non-nil")
+	}
+	if report.Status != "ready" {
+		t.Fatalf("report.Status = %q, want ready", report.Status)
+	}
+	if aiCalls != 1 {
+		t.Fatalf("AI calls = %d, want 1", aiCalls)
+	}
+
+	seenGenerating := false
+	seenReady := false
+	for _, status := range updateStatuses {
+		if status == "generating" {
+			seenGenerating = true
+		}
+		if status == "ready" {
+			seenReady = true
+		}
+	}
+	if !seenGenerating || !seenReady {
+		t.Fatalf("update statuses = %#v, want both generating and ready", updateStatuses)
 	}
 }
 
@@ -250,20 +323,20 @@ func TestHandleGetReport_TypedResponseContracts(t *testing.T) {
 
 		h := newReportHandlerForTest(
 			&fakeReportStore{
-				getReportBySessionFn: func(context.Context, string) (*Report, error) {
-					return &Report{
-						SessionCode:     "AP-AAAA-BBBB",
-						Status:          "ready",
-						ContentEn:       "English report",
-						ContentEs:       "Reporte en español",
-						Strengths:       []string{"clarity"},
-						Weaknesses:      []string{"pace"},
-						Recommendation:  "continue practice",
-						QuestionCount:   12,
-						DurationMinutes: 31,
-					}, nil
+					getReportBySessionFn: func(context.Context, string) (*Report, error) {
+						return &Report{
+							SessionCode:            "AP-AAAA-BBBB",
+							Status:                 "ready",
+							ContentEn:              "English report",
+							ContentEs:              "Reporte en español",
+							AreasOfClarity:         []string{"clarity"},
+							AreasToDevelopFurther:  []string{"pace"},
+							Recommendation:         "continue practice",
+							QuestionCount:          12,
+							DurationMinutes:        31,
+						}, nil
+					},
 				},
-			},
 			&fakeReportSessionProvider{},
 		)
 
@@ -276,17 +349,17 @@ func TestHandleGetReport_TypedResponseContracts(t *testing.T) {
 		if rr.Code != http.StatusOK {
 			t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
 		}
-		var got struct {
-			SessionCode     string   `json:"session_code"`
-			Status          string   `json:"status"`
-			ContentEn       string   `json:"content_en"`
-			ContentEs       string   `json:"content_es"`
-			Strengths       []string `json:"strengths"`
-			Weaknesses      []string `json:"weaknesses"`
-			Recommendation  string   `json:"recommendation"`
-			QuestionCount   int      `json:"question_count"`
-			DurationMinutes int      `json:"duration_minutes"`
-		}
+			var got struct {
+				SessionCode           string   `json:"session_code"`
+				Status                string   `json:"status"`
+				ContentEn             string   `json:"content_en"`
+				ContentEs             string   `json:"content_es"`
+				AreasOfClarity        []string `json:"areas_of_clarity"`
+				AreasToDevelopFurther []string `json:"areas_to_develop_further"`
+				Recommendation        string   `json:"recommendation"`
+				QuestionCount         int      `json:"question_count"`
+				DurationMinutes       int      `json:"duration_minutes"`
+			}
 		decodeReportBody(t, rr, &got)
 
 		if got.SessionCode != "AP-AAAA-BBBB" {

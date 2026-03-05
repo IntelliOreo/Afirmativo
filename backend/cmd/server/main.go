@@ -123,13 +123,14 @@ func main() {
 			AreaConfigs:        cfg.AreaConfigs,
 		})
 		reportAIClient = report.NewOllamaReportAIClient(report.OllamaReportAIClientConfig{
-			BaseURL:            cfg.OllamaBaseURL,
-			Model:              cfg.AIModel,
-			MaxTokens:          cfg.AIReportMaxTokens,
-			Temperature:        cfg.OllamaTemperature,
-			TimeoutSeconds:     cfg.AITimeoutSeconds,
-			ReportPrompt:       cfg.AIReportPrompt,
-			OutputFormatPrompt: cfg.UnstructuredReportOutputFormatPrompt,
+			BaseURL:                 cfg.OllamaBaseURL,
+			Model:                   cfg.AIModel,
+			MaxTokens:               cfg.AIReportMaxTokens,
+			Temperature:             cfg.OllamaTemperature,
+			TimeoutSeconds:          cfg.AITimeoutSeconds,
+			ReportPrompt:            cfg.AIReportPrompt,
+			OutputFormatPrompt:      cfg.UnstructuredReportOutputFormatPrompt,
+			AllowSensitiveDebugLogs: cfg.AllowSensitiveDebugLogs,
 		})
 	default:
 		// Claude branch: use mock server URL if set, otherwise real Anthropic API.
@@ -152,12 +153,13 @@ func main() {
 			AreaConfigs:       cfg.AreaConfigs,
 		})
 		reportAIClient = report.NewHTTPReportAIClient(report.ReportAIClientConfig{
-			BaseURL:        aiBaseURL,
-			APIKey:         cfg.AIAPIKey,
-			Model:          cfg.AIModel,
-			MaxTokens:      cfg.AIReportMaxTokens,
-			TimeoutSeconds: cfg.AITimeoutSeconds,
-			ReportPrompt:   cfg.AIReportPrompt,
+			BaseURL:                 aiBaseURL,
+			APIKey:                  cfg.AIAPIKey,
+			Model:                   cfg.AIModel,
+			MaxTokens:               cfg.AIReportMaxTokens,
+			TimeoutSeconds:          cfg.AITimeoutSeconds,
+			ReportPrompt:            cfg.AIReportPrompt,
+			AllowSensitiveDebugLogs: cfg.AllowSensitiveDebugLogs,
 		})
 	}
 

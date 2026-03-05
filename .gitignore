@@ -74,3 +74,8 @@ mockThirdpartyAPIs/
 design/
 
 .vscode/    
+
+# Local dev helper script
+dev-all.sh
+
+backend/server

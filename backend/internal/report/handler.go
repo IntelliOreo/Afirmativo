@@ -31,8 +31,8 @@ type reportReadyResponse struct {
 	Status          string   `json:"status"`
 	ContentEn       string   `json:"content_en"`
 	ContentEs       string   `json:"content_es"`
-	Strengths       []string `json:"strengths"`
-	Weaknesses      []string `json:"weaknesses"`
+	AreasOfClarity  []string `json:"areas_of_clarity"`
+	AreasToDevelopFurther []string `json:"areas_to_develop_further"`
 	Recommendation  string   `json:"recommendation"`
 	QuestionCount   int      `json:"question_count"`
 	DurationMinutes int      `json:"duration_minutes"`
@@ -96,8 +96,8 @@ func (h *Handler) HandleGetReport(w http.ResponseWriter, r *http.Request) {
 		Status:          report.Status,
 		ContentEn:       report.ContentEn,
 		ContentEs:       report.ContentEs,
-		Strengths:       report.Strengths,
-		Weaknesses:      report.Weaknesses,
+		AreasOfClarity:  report.AreasOfClarity,
+		AreasToDevelopFurther: report.AreasToDevelopFurther,
 		Recommendation:  report.Recommendation,
 		QuestionCount:   report.QuestionCount,
 		DurationMinutes: report.DurationMinutes,

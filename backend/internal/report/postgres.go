@@ -37,8 +37,8 @@ func (s *PostgresStore) GetReportBySession(ctx context.Context, sessionCode stri
 
 // CreateReport inserts a new report row.
 func (s *PostgresStore) CreateReport(ctx context.Context, r *Report) error {
-	strengthsJSON, _ := json.Marshal(r.Strengths)
-	weaknessesJSON, _ := json.Marshal(r.Weaknesses)
+	strengthsJSON, _ := json.Marshal(r.AreasOfClarity)
+	weaknessesJSON, _ := json.Marshal(r.AreasToDevelopFurther)
 
 	_, err := sqlgen.New(s.pool).CreateReport(ctx, sqlgen.CreateReportParams{
 		SessionCode:     r.SessionCode,
@@ -59,8 +59,8 @@ func (s *PostgresStore) CreateReport(ctx context.Context, r *Report) error {
 
 // UpdateReport updates a report with the generated content.
 func (s *PostgresStore) UpdateReport(ctx context.Context, r *Report) error {
-	strengthsJSON, _ := json.Marshal(r.Strengths)
-	weaknessesJSON, _ := json.Marshal(r.Weaknesses)
+	strengthsJSON, _ := json.Marshal(r.AreasOfClarity)
+	weaknessesJSON, _ := json.Marshal(r.AreasToDevelopFurther)
 
 	err := sqlgen.New(s.pool).UpdateReport(ctx, sqlgen.UpdateReportParams{
 		SessionCode:     r.SessionCode,
@@ -98,16 +98,16 @@ func reportFromRow(row sqlgen.Report) *Report {
 		r.Recommendation = row.Recommendation.String
 	}
 	if row.Strengths != nil {
-		_ = json.Unmarshal(row.Strengths, &r.Strengths)
+		_ = json.Unmarshal(row.Strengths, &r.AreasOfClarity)
 	}
-	if r.Strengths == nil {
-		r.Strengths = []string{}
+	if r.AreasOfClarity == nil {
+		r.AreasOfClarity = []string{}
 	}
 	if row.Weaknesses != nil {
-		_ = json.Unmarshal(row.Weaknesses, &r.Weaknesses)
+		_ = json.Unmarshal(row.Weaknesses, &r.AreasToDevelopFurther)
 	}
-	if r.Weaknesses == nil {
-		r.Weaknesses = []string{}
+	if r.AreasToDevelopFurther == nil {
+		r.AreasToDevelopFurther = []string{}
 	}
 	return r
 }

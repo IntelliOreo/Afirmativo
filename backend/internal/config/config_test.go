@@ -22,7 +22,7 @@ func setBaseValidEnv(t *testing.T) {
 		"HTTP_READ_TIMEOUT_SECONDS":                   "10",
 		"HTTP_WRITE_TIMEOUT_SECONDS":                  "30",
 		"HTTP_IDLE_TIMEOUT_SECONDS":                   "60",
-		"SESSION_AUTH_MAX_TTL_MINUTES":               "60",
+		"SESSION_AUTH_MAX_TTL_MINUTES":                "60",
 		"OLLAMA_TEMPERATURE":                          "0.3",
 		"VOICE_AI_TOKEN_TIMEOUT_SECONDS":              "30",
 		"ADMIN_CLEANUP_ENABLED":                       "false",
@@ -127,4 +127,38 @@ func TestLoad_RejectsInvalidVoiceSessionBurst(t *testing.T) {
 	if !strings.Contains(err.Error(), "VOICE_TOKEN_SESSION_RATE_LIMIT_BURST must be > 0") {
 		t.Fatalf("error = %v, want VOICE_TOKEN_SESSION_RATE_LIMIT_BURST validation message", err)
 	}
+}
+
+func TestLoad_ReportLabelDefaultsAndOverrides(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		setBaseValidEnv(t)
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if cfg.ReportStrengthsLabel != "areas-of-clarity" {
+			t.Fatalf("ReportStrengthsLabel = %q, want areas-of-clarity", cfg.ReportStrengthsLabel)
+		}
+		if cfg.ReportWeaknessesLabel != "areas-to-develop-further" {
+			t.Fatalf("ReportWeaknessesLabel = %q, want areas-to-develop-further", cfg.ReportWeaknessesLabel)
+		}
+	})
+
+	t.Run("overrides", func(t *testing.T) {
+		setBaseValidEnv(t)
+		t.Setenv("REPORT_STRENGTHS_LABEL", "areas-of-confidence")
+		t.Setenv("REPORT_WEAKNESSES_LABEL", "areas-to-reinforce")
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if cfg.ReportStrengthsLabel != "areas-of-confidence" {
+			t.Fatalf("ReportStrengthsLabel = %q, want areas-of-confidence", cfg.ReportStrengthsLabel)
+		}
+		if cfg.ReportWeaknessesLabel != "areas-to-reinforce" {
+			t.Fatalf("ReportWeaknessesLabel = %q, want areas-to-reinforce", cfg.ReportWeaknessesLabel)
+		}
+	})
 }

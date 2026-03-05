@@ -73,6 +73,8 @@ type Config struct {
 	AIAPIKey                                string       // Anthropic API key (not required for Ollama or when MOCK_API_URL is set)
 	AITimeoutSeconds                        int          // HTTP timeout for AI API calls (default 30)
 	AIReportPrompt                          string       // System prompt for report generation AI call
+	ReportStrengthsLabel                    string       // Semantic label for strengths in report prompts/schema (e.g. "areas of clarity")
+	ReportWeaknessesLabel                   string       // Semantic label for weaknesses in report prompts/schema (e.g. "areas to develop further")
 	UnstructuredReportOutputFormatPrompt    string       // Prompt instructions for unstructured providers to return report JSON
 	AIReportMaxTokens                       int          // Max tokens for report AI call (default 2048)
 	AreaConfigs                             []AreaConfig // Per-area rubrics loaded from AI_AREA_CONFIG JSON
@@ -90,6 +92,11 @@ type Config struct {
 	// Admin maintenance configuration.
 	AdminCleanupEnabled bool // Enables destructive admin cleanup endpoint when true
 }
+
+const (
+	defaultSessionAuthIssuer   = "afirmativo-backend"
+	defaultSessionAuthAudience = "afirmativo-frontend"
+)
 
 // Load reads required environment variables and returns a validated Config.
 // Returns an error if any required variable is missing.
@@ -318,9 +325,9 @@ func Load() (Config, error) {
 		FrontendURL:                             envOr("FRONTEND_URL", "http://localhost:3000"),
 		DatabaseURL:                             os.Getenv("DATABASE_URL"),
 		SessionExpiryHours:                      expiry,
-		JWTSecret:                               envOr("JWT_SECRET", os.Getenv("SESSION_AUTH_SECRET")),
-		SessionAuthIssuer:                       envOr("SESSION_AUTH_ISSUER", "afirmativo-backend"),
-		SessionAuthAudience:                     envOr("SESSION_AUTH_AUDIENCE", "afirmativo-frontend"),
+		JWTSecret:                               os.Getenv("JWT_SECRET"),
+		SessionAuthIssuer:                       defaultSessionAuthIssuer,
+		SessionAuthAudience:                     defaultSessionAuthAudience,
 		SessionAuthCookieName:                   envOr("SESSION_AUTH_COOKIE_NAME", "afirmativo_auth"),
 		SessionAuthMaxTTLMinutes:                sessionAuthMaxTTL,
 		MockAPIURL:                              os.Getenv("MOCK_API_URL"),
@@ -359,6 +366,8 @@ func Load() (Config, error) {
 		AIAPIKey:                                os.Getenv("AI_API_KEY"),
 		AITimeoutSeconds:                        aiTimeout,
 		AIReportPrompt:                          os.Getenv("AI_REPORT_PROMPT"),
+		ReportStrengthsLabel:                    envOr("REPORT_STRENGTHS_LABEL", "areas-of-clarity"),
+		ReportWeaknessesLabel:                   envOr("REPORT_WEAKNESSES_LABEL", "areas-to-develop-further"),
 		UnstructuredReportOutputFormatPrompt:    os.Getenv("UNSTRUCTURED_REPORT_OUTPUT_FORMAT_PROMPT"),
 		AIReportMaxTokens:                       reportMaxTokens,
 		InterviewOpeningDisclaimerEn:            os.Getenv("INTERVIEW_OPENING_DISCLAIMER_EN"),
@@ -465,6 +474,8 @@ func (c Config) LogLoaded() {
 		"ai_timeout_seconds", c.AITimeoutSeconds,
 		"area_configs_count", len(c.AreaConfigs),
 		"report_prompt_len", len(c.AIReportPrompt),
+		"report_strengths_label", c.ReportStrengthsLabel,
+		"report_weaknesses_label", c.ReportWeaknessesLabel,
 		"unstructured_report_output_format_prompt_len", len(c.UnstructuredReportOutputFormatPrompt),
 		"report_max_tokens", c.AIReportMaxTokens,
 		"interview_opening_disclaimer_en_len", len(c.InterviewOpeningDisclaimerEn),

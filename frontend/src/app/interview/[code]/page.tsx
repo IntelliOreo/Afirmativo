@@ -55,6 +55,11 @@ import {
   writePendingAnswerJob,
 } from "./utils";
 
+type ReportAPIResponse = Report & {
+  strengths?: string[];
+  weaknesses?: string[];
+};
+
 function InterviewPageContent() {
   const params = useParams();
   const searchParams = useSearchParams();
@@ -229,7 +234,7 @@ function InterviewPageContent() {
     setReportStatus("loading");
 
     try {
-      const { ok, status: httpStatus, data } = await api<Report & { error?: string }>(`/api/report/${code}`, {
+      const { ok, status: httpStatus, data } = await api<ReportAPIResponse & { error?: string }>(`/api/report/${code}`, {
         credentials: "include",
       });
 
@@ -242,7 +247,12 @@ function InterviewPageContent() {
         throw new Error(data?.error ?? "Failed to load report");
       }
 
-      setReport(data);
+      const normalizedReport: Report = {
+        ...data,
+        areas_of_clarity: data.areas_of_clarity ?? data.strengths ?? [],
+        areas_to_develop_further: data.areas_to_develop_further ?? data.weaknesses ?? [],
+      };
+      setReport(normalizedReport);
       setReportStatus("ready");
     } catch (err) {
       setReportError(err instanceof Error ? err.message : "Unknown error");
@@ -822,9 +832,9 @@ function InterviewPageContent() {
                       <h3 className="text-xl font-bold text-primary-dark mb-3">
                         {lang === "es" ? "Áreas de claridad" : "Areas of clarity"}
                       </h3>
-                      {report.strengths.length > 0 ? (
+                      {report.areas_of_clarity.length > 0 ? (
                         <ul className="list-disc list-inside space-y-1 text-primary-darkest">
-                          {report.strengths.map((s, i) => (
+                          {report.areas_of_clarity.map((s, i) => (
                             <li key={i}>{s}</li>
                           ))}
                         </ul>
@@ -839,9 +849,9 @@ function InterviewPageContent() {
                       <h3 className="text-xl font-bold text-primary-dark mb-3">
                         {lang === "es" ? "Áreas para desarrollar más" : "Areas to develop further"}
                       </h3>
-                      {report.weaknesses.length > 0 ? (
+                      {report.areas_to_develop_further.length > 0 ? (
                         <ul className="list-disc list-inside space-y-1 text-primary-darkest">
-                          {report.weaknesses.map((w, i) => (
+                          {report.areas_to_develop_further.map((w, i) => (
                             <li key={i}>{w}</li>
                           ))}
                         </ul>

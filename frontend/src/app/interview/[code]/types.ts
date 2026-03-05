@@ -77,8 +77,8 @@ export interface Report {
   status: string;
   content_en: string;
   content_es: string;
-  strengths: string[];
-  weaknesses: string[];
+  areas_of_clarity: string[];
+  areas_to_develop_further: string[];
   recommendation: string;
   question_count: number;
   duration_minutes: number;

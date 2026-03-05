@@ -23,37 +23,40 @@ type AIClient interface {
 
 // ReportAIClientConfig holds config for the report AI client.
 type ReportAIClientConfig struct {
-	BaseURL        string // "https://api.anthropic.com" or mock URL
-	APIKey         string
-	Model          string
-	MaxTokens      int
-	TimeoutSeconds int    // HTTP timeout for AI API calls (e.g. 30)
-	ReportPrompt   string // system prompt for report generation
+	BaseURL                 string // "https://api.anthropic.com" or mock URL
+	APIKey                  string
+	Model                   string
+	MaxTokens               int
+	TimeoutSeconds          int    // HTTP timeout for AI API calls (e.g. 30)
+	ReportPrompt            string // system prompt for report generation
+	AllowSensitiveDebugLogs bool
 }
 
 // HTTPReportAIClient implements AIClient by calling the Claude Messages API.
 type HTTPReportAIClient struct {
-	baseURL        string
-	apiKey         string
-	model          string
-	maxTokens      int
-	timeoutSeconds int
-	reportPrompt   string
-	outputSchema   map[string]interface{}
-	client         *http.Client
+	baseURL                 string
+	apiKey                  string
+	model                   string
+	maxTokens               int
+	timeoutSeconds          int
+	reportPrompt            string
+	allowSensitiveDebugLogs bool
+	outputSchema            map[string]interface{}
+	client                  *http.Client
 }
 
 // NewHTTPReportAIClient creates a report AI client.
 func NewHTTPReportAIClient(cfg ReportAIClientConfig) *HTTPReportAIClient {
 	return &HTTPReportAIClient{
-		baseURL:        cfg.BaseURL,
-		apiKey:         cfg.APIKey,
-		model:          cfg.Model,
-		maxTokens:      cfg.MaxTokens,
-		timeoutSeconds: cfg.TimeoutSeconds,
-		reportPrompt:   cfg.ReportPrompt,
-		outputSchema:   buildReportOutputSchema(),
-		client:         &http.Client{Timeout: time.Duration(cfg.TimeoutSeconds) * time.Second},
+		baseURL:                 cfg.BaseURL,
+		apiKey:                  cfg.APIKey,
+		model:                   cfg.Model,
+		maxTokens:               cfg.MaxTokens,
+		timeoutSeconds:          cfg.TimeoutSeconds,
+		reportPrompt:            cfg.ReportPrompt,
+		allowSensitiveDebugLogs: cfg.AllowSensitiveDebugLogs,
+		outputSchema:            buildReportOutputSchema(),
+		client:                  &http.Client{Timeout: time.Duration(cfg.TimeoutSeconds) * time.Second},
 	}
 }
 
@@ -80,11 +83,17 @@ func (c *HTTPReportAIClient) GenerateReport(ctx context.Context, areaSummaries [
 	}
 
 	url := c.baseURL + "/v1/messages"
-	slog.Debug("calling AI API for report", "url", url, "model", c.model)
-	if messages, ok := requestBody["messages"].([]map[string]interface{}); ok {
-		shared.DebugChatMessages("report AI request messages", messages)
+	slog.Debug("calling AI API for report",
+		"url", url,
+		"model", c.model,
+		"sensitive_debug_logs_enabled", c.allowSensitiveDebugLogs,
+	)
+	if c.allowSensitiveDebugLogs {
+		if messages, ok := requestBody["messages"].([]map[string]interface{}); ok {
+			shared.DebugChatMessages("report AI request messages", messages)
+		}
+		shared.DebugJSON("report AI request body", requestBody)
 	}
-	shared.DebugJSON("report AI request body", requestBody)
 
 	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(c.timeoutSeconds)*time.Second)
 	defer cancel()
@@ -132,7 +141,9 @@ func (c *HTTPReportAIClient) GenerateReport(ctx context.Context, areaSummaries [
 	}
 
 	jsonStr := apiResp.Content[0].Text
-	shared.DebugJSONText("report AI raw response", jsonStr)
+	if c.allowSensitiveDebugLogs {
+		shared.DebugJSONText("report AI raw response", jsonStr)
+	}
 
 	var result ReportAIResponse
 	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
@@ -140,8 +151,8 @@ func (c *HTTPReportAIClient) GenerateReport(ctx context.Context, areaSummaries [
 	}
 
 	slog.Debug("report AI response parsed",
-		"strengths_count", len(result.Strengths),
-		"weaknesses_count", len(result.Weaknesses),
+		"areas_of_clarity_count", len(result.AreasOfClarity),
+		"areas_to_develop_further_count", len(result.AreasToDevelopFurther),
 		"recommendation_len", len(result.Recommendation),
 	)
 
@@ -218,22 +229,22 @@ func buildReportOutputSchema() map[string]interface{} {
 						"type":        "string",
 						"description": "Full preparation feedback summary in Spanish. Same content as content_en but translated to Spanish.",
 					},
-					"strengths": map[string]interface{}{
+					"areas_of_clarity": map[string]interface{}{
 						"type":        "array",
 						"items":       map[string]interface{}{"type": "string"},
-						"description": "Array of 'areas of clarity' bullet points (in English). Each should be a specific, actionable observation.",
+						"description": "Array of 'areas of clarity' bullet points (in English). Keep each point specific and actionable.",
 					},
-					"weaknesses": map[string]interface{}{
+					"areas_to_develop_further": map[string]interface{}{
 						"type":        "array",
 						"items":       map[string]interface{}{"type": "string"},
-						"description": "Array of 'areas to articulate more clearly' bullet points (in English). Each should identify a gap and suggest how to address it.",
+						"description": "Array of 'areas to develop further' bullet points (in English). Each should identify a gap and suggest how to address it.",
 					},
 					"recommendation": map[string]interface{}{
 						"type":        "string",
 						"description": "Overall recommendation (in English). Focus on preparation quality and whether key elements were articulated clearly.",
 					},
 				},
-				"required":             []string{"content_en", "content_es", "strengths", "weaknesses", "recommendation"},
+				"required":             []string{"content_en", "content_es", "areas_of_clarity", "areas_to_develop_further", "recommendation"},
 				"additionalProperties": false,
 			},
 		},

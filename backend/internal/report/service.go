@@ -48,7 +48,31 @@ func (s *Service) GetOrGenerateReport(ctx context.Context, sessionCode string) (
 		if existing.Status == "ready" {
 			return existing, nil
 		}
-		// Still generating or failed — caller can check status.
+		if existing.Status == "failed" {
+			// Failed reports are retryable: move status back to generating and run inference again.
+			if err := s.store.UpdateReport(ctx, &Report{
+				SessionCode: sessionCode,
+				Status:      "generating",
+			}); err != nil {
+				return nil, fmt.Errorf("mark report generating for retry: %w", err)
+			}
+
+			sess, err := s.sessions.GetSessionByCode(ctx, sessionCode)
+			if err != nil {
+				if errors.Is(err, shared.ErrNotFound) {
+					return nil, ErrSessionNotFound
+				}
+				return nil, fmt.Errorf("get session for retry: %w", err)
+			}
+			if sess == nil || sess.Status != "completed" {
+				// Keep existing failed status semantics if session cannot be retried.
+				return existing, nil
+			}
+
+			return s.generateAndPersist(ctx, sessionCode, sess)
+		}
+
+		// Still generating — caller can poll again.
 		return existing, nil
 	}
 
@@ -60,7 +84,7 @@ func (s *Service) GetOrGenerateReport(ctx context.Context, sessionCode string) (
 		}
 		return nil, fmt.Errorf("get session: %w", err)
 	}
-	if sess.Status != "completed" {
+	if sess == nil || sess.Status != "completed" {
 		return nil, ErrSessionNotCompleted
 	}
 
@@ -78,6 +102,10 @@ func (s *Service) GetOrGenerateReport(ctx context.Context, sessionCode string) (
 		return existing, nil
 	}
 
+	return s.generateAndPersist(ctx, sessionCode, sess)
+}
+
+func (s *Service) generateAndPersist(ctx context.Context, sessionCode string, sess *SessionInfo) (*Report, error) {
 	// Generate the report.
 	report, err := s.generateReport(ctx, sessionCode, sess)
 	if err != nil {
@@ -85,7 +113,7 @@ func (s *Service) GetOrGenerateReport(ctx context.Context, sessionCode string) (
 		// Update status to failed so user can retry.
 		failed := &Report{SessionCode: sessionCode, Status: "failed"}
 		_ = s.store.UpdateReport(ctx, failed)
-		return nil, fmt.Errorf("generate report: %w", err)
+		return failed, nil
 	}
 
 	return report, nil
@@ -143,8 +171,8 @@ func (s *Service) generateReport(ctx context.Context, sessionCode string, sess *
 		Status:          "ready",
 		ContentEn:       aiResp.ContentEn,
 		ContentEs:       aiResp.ContentEs,
-		Strengths:       aiResp.Strengths,
-		Weaknesses:      aiResp.Weaknesses,
+		AreasOfClarity:  aiResp.AreasOfClarity,
+		AreasToDevelopFurther: aiResp.AreasToDevelopFurther,
 		Recommendation:  aiResp.Recommendation,
 		QuestionCount:   answerCount,
 		DurationMinutes: durationMinutes,
@@ -156,8 +184,8 @@ func (s *Service) generateReport(ctx context.Context, sessionCode string, sess *
 
 	slog.Info("report generated",
 		"session", sessionCode,
-		"strengths", len(report.Strengths),
-		"weaknesses", len(report.Weaknesses),
+		"areas_of_clarity", len(report.AreasOfClarity),
+		"areas_to_develop_further", len(report.AreasToDevelopFurther),
 		"duration_min", durationMinutes,
 		"questions", answerCount,
 	)

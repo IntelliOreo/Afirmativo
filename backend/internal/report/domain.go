@@ -15,8 +15,8 @@ type Report struct {
 	Status          string // "generating", "ready", "failed"
 	ContentEn       string
 	ContentEs       string
-	Strengths       []string
-	Weaknesses      []string
+	AreasOfClarity  []string
+	AreasToDevelopFurther []string
 	Recommendation  string
 	QuestionCount   int
 	DurationMinutes int
@@ -34,9 +34,9 @@ type AreaSummary struct {
 
 // ReportAIResponse is the structured response from the AI report generation call.
 type ReportAIResponse struct {
-	ContentEn      string   `json:"content_en"`
-	ContentEs      string   `json:"content_es"`
-	Strengths      []string `json:"strengths"`
-	Weaknesses     []string `json:"weaknesses"`
-	Recommendation string   `json:"recommendation"`
+	ContentEn             string   `json:"content_en"`
+	ContentEs             string   `json:"content_es"`
+	AreasOfClarity        []string `json:"areas_of_clarity"`
+	AreasToDevelopFurther []string `json:"areas_to_develop_further"`
+	Recommendation        string   `json:"recommendation"`
 }

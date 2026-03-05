@@ -15,36 +15,39 @@ import (
 
 // OllamaReportAIClientConfig holds config for the Ollama report AI client.
 type OllamaReportAIClientConfig struct {
-	BaseURL            string
-	Model              string
-	MaxTokens          int
-	Temperature        float64
-	TimeoutSeconds     int
-	ReportPrompt       string
-	OutputFormatPrompt string
+	BaseURL                 string
+	Model                   string
+	MaxTokens               int
+	Temperature             float64
+	TimeoutSeconds          int
+	ReportPrompt            string
+	OutputFormatPrompt      string
+	AllowSensitiveDebugLogs bool
 }
 
 // OllamaReportAIClient implements AIClient using Ollama's OpenAI-compatible endpoint.
 type OllamaReportAIClient struct {
-	baseURL            string
-	model              string
-	maxTokens          int
-	temperature        float64
-	reportPrompt       string
-	outputFormatPrompt string
-	client             *http.Client
+	baseURL                 string
+	model                   string
+	maxTokens               int
+	temperature             float64
+	reportPrompt            string
+	outputFormatPrompt      string
+	allowSensitiveDebugLogs bool
+	client                  *http.Client
 }
 
 // NewOllamaReportAIClient creates a new report AI client backed by Ollama.
 func NewOllamaReportAIClient(cfg OllamaReportAIClientConfig) *OllamaReportAIClient {
 	return &OllamaReportAIClient{
-		baseURL:            cfg.BaseURL,
-		model:              cfg.Model,
-		maxTokens:          cfg.MaxTokens,
-		temperature:        cfg.Temperature,
-		reportPrompt:       cfg.ReportPrompt,
-		outputFormatPrompt: cfg.OutputFormatPrompt,
-		client:             &http.Client{Timeout: time.Duration(cfg.TimeoutSeconds) * time.Second},
+		baseURL:                 cfg.BaseURL,
+		model:                   cfg.Model,
+		maxTokens:               cfg.MaxTokens,
+		temperature:             cfg.Temperature,
+		reportPrompt:            cfg.ReportPrompt,
+		outputFormatPrompt:      cfg.OutputFormatPrompt,
+		allowSensitiveDebugLogs: cfg.AllowSensitiveDebugLogs,
+		client:                  &http.Client{Timeout: time.Duration(cfg.TimeoutSeconds) * time.Second},
 	}
 }
 
@@ -55,6 +58,7 @@ func (c *OllamaReportAIClient) GenerateReport(ctx context.Context, areaSummaries
 	if c.outputFormatPrompt != "" {
 		systemPrompt += "\n\n" + c.outputFormatPrompt
 	}
+	systemPrompt += "\n\n" + c.buildReportFieldInstruction()
 
 	requestBody := map[string]interface{}{
 		"model":      c.model,
@@ -73,11 +77,17 @@ func (c *OllamaReportAIClient) GenerateReport(ctx context.Context, areaSummaries
 	}
 
 	url := strings.TrimRight(c.baseURL, "/") + "/v1/chat/completions"
-	slog.Debug("calling Ollama API for report", "url", url, "model", c.model)
-	if messages, ok := requestBody["messages"].([]map[string]interface{}); ok {
-		shared.DebugChatMessages("report Ollama request messages", messages)
+	slog.Debug("calling Ollama API for report",
+		"url", url,
+		"model", c.model,
+		"sensitive_debug_logs_enabled", c.allowSensitiveDebugLogs,
+	)
+	if c.allowSensitiveDebugLogs {
+		if messages, ok := requestBody["messages"].([]map[string]interface{}); ok {
+			shared.DebugChatMessages("report Ollama request messages", messages)
+		}
+		shared.DebugJSON("report Ollama request body", requestBody)
 	}
-	shared.DebugJSON("report Ollama request body", requestBody)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
 	if err != nil {
@@ -109,6 +119,9 @@ func (c *OllamaReportAIClient) GenerateReport(ctx context.Context, areaSummaries
 	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
 		return nil, fmt.Errorf("decode API response: %w", err)
 	}
+	if c.allowSensitiveDebugLogs {
+		shared.DebugJSON("report Ollama raw response envelope", apiResp)
+	}
 	if len(apiResp.Choices) == 0 {
 		return nil, fmt.Errorf("empty choices in API response")
 	}
@@ -117,6 +130,13 @@ func (c *OllamaReportAIClient) GenerateReport(ctx context.Context, areaSummaries
 	}
 
 	jsonStr := apiResp.Choices[0].Message.Content
+	if c.allowSensitiveDebugLogs {
+		shared.DebugJSONText("report Ollama raw response", jsonStr)
+		slog.Debug("report Ollama raw response captured",
+			"chars", len(jsonStr),
+			"sensitive_debug_logs_enabled", c.allowSensitiveDebugLogs,
+		)
+	}
 	if strings.TrimSpace(jsonStr) == "" {
 		return nil, fmt.Errorf("empty message content in API response")
 	}
@@ -130,8 +150,8 @@ func (c *OllamaReportAIClient) GenerateReport(ctx context.Context, areaSummaries
 	}
 
 	slog.Debug("report Ollama response parsed",
-		"strengths_count", len(result.Strengths),
-		"weaknesses_count", len(result.Weaknesses),
+		"areas_of_clarity_count", len(result.AreasOfClarity),
+		"areas_to_develop_further_count", len(result.AreasToDevelopFurther),
 		"recommendation_len", len(result.Recommendation),
 	)
 
@@ -145,14 +165,18 @@ func validateReportAIResponse(result *ReportAIResponse) error {
 	if strings.TrimSpace(result.ContentEs) == "" {
 		return fmt.Errorf("invalid report AI response: content_es is empty")
 	}
-	if result.Strengths == nil {
-		return fmt.Errorf("invalid report AI response: strengths must be an array")
+	if result.AreasOfClarity == nil {
+		return fmt.Errorf("invalid report AI response: areas_of_clarity must be an array")
 	}
-	if result.Weaknesses == nil {
-		return fmt.Errorf("invalid report AI response: weaknesses must be an array")
+	if result.AreasToDevelopFurther == nil {
+		return fmt.Errorf("invalid report AI response: areas_to_develop_further must be an array")
 	}
 	if strings.TrimSpace(result.Recommendation) == "" {
 		return fmt.Errorf("invalid report AI response: recommendation is empty")
 	}
 	return nil
+}
+
+func (c *OllamaReportAIClient) buildReportFieldInstruction() string {
+	return `Use JSON keys "areas_of_clarity" and "areas_to_develop_further".`
 }
