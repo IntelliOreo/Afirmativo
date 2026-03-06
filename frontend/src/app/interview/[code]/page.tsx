@@ -17,6 +17,7 @@ import {
   ASYNC_POLL_CIRCUIT_BREAKER_COOLDOWN_MS,
   ASYNC_POLL_CIRCUIT_BREAKER_FAILURES,
   ASYNC_POLL_TIMEOUT_MS,
+  TEXT_ANSWER_MAX_CHARS,
   VOICE_MAX_SECONDS,
   VOICE_WAVE_BARS,
   WARNING_AT_SECONDS,
@@ -571,6 +572,7 @@ function InterviewPageContent() {
   }
 
   const timerLabel = formatClock(secondsLeft);
+  const textAnswerCharCount = textAnswer.length;
   const isWarning = secondsLeft <= WARNING_AT_SECONDS;
   const isWrapup = secondsLeft <= WRAPUP_AT_SECONDS;
   const isBlinkingTimer = secondsLeft <= 30 && secondsLeft > 0;
@@ -1024,7 +1026,8 @@ function InterviewPageContent() {
                         </label>
                         <textarea
                           value={textAnswer}
-                          onChange={(e) => setTextAnswer(e.target.value)}
+                          onChange={(e) => setTextAnswer(e.target.value.slice(0, TEXT_ANSWER_MAX_CHARS))}
+                          maxLength={TEXT_ANSWER_MAX_CHARS}
                           rows={6}
                           className="w-full px-3 py-3 text-base border border-base-lighter rounded focus:outline-none focus:ring-2 focus:ring-primary resize-none"
                           placeholder={
@@ -1033,6 +1036,9 @@ function InterviewPageContent() {
                               : "Type your answer here..."
                           }
                         />
+                        <p className="mt-2 text-right text-sm text-primary-darkest">
+                          {lang === "es" ? "Caracteres" : "Characters"}: {textAnswerCharCount} / {TEXT_ANSWER_MAX_CHARS}
+                        </p>
                       </div>
 
                       <Button
