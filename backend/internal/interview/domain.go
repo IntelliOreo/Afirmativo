@@ -71,6 +71,59 @@ const (
 	AsyncAnswerJobCanceled  AsyncAnswerJobStatus = "canceled"
 )
 
+type CriterionTurnAction string
+
+const (
+	CriterionTurnActionStay CriterionTurnAction = "stay"
+	CriterionTurnActionNext CriterionTurnAction = "next"
+)
+
+// CriterionTurnDecision captures policy decisions for one criterion answer.
+// The DB adapter applies this decision transactionally.
+type CriterionTurnDecision struct {
+	Action        CriterionTurnAction
+	MarkCurrentAs AreaStatus // complete, insufficient, or empty for no status change
+}
+
+// DecideCriterionTurn determines whether to stay on the current criterion
+// or move to the next one, based on evaluation outcome and per-area question budget.
+func DecideCriterionTurn(current CurrentCriterion, questionsCount, maxQuestionsPerArea int) CriterionTurnDecision {
+	if strings.TrimSpace(current.Status) == "sufficient" {
+		return CriterionTurnDecision{
+			Action:        CriterionTurnActionNext,
+			MarkCurrentAs: AreaStatusComplete,
+		}
+	}
+
+	if strings.TrimSpace(current.Recommendation) == "move_on" ||
+		(maxQuestionsPerArea > 0 && questionsCount >= maxQuestionsPerArea) {
+		return CriterionTurnDecision{
+			Action:        CriterionTurnActionNext,
+			MarkCurrentAs: AreaStatusInsufficient,
+		}
+	}
+
+	return CriterionTurnDecision{
+		Action:        CriterionTurnActionStay,
+		MarkCurrentAs: "",
+	}
+}
+
+// SelectNextPendingArea returns the first pending/pre_addressed area in the
+// configured interview order. Empty string means no remaining area.
+func SelectNextPendingArea(orderedAreaSlugs []string, statusByArea map[string]AreaStatus) string {
+	for _, slug := range orderedAreaSlugs {
+		status, ok := statusByArea[slug]
+		if !ok {
+			continue
+		}
+		if status == AreaStatusPending || status == AreaStatusPreAddressed {
+			return slug
+		}
+	}
+	return ""
+}
+
 // ── Domain types ───────────────────────────────────────────────────
 
 // Question represents a single interview question sent to the client.

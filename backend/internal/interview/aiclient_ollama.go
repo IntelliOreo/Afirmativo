@@ -16,55 +16,58 @@ import (
 
 // OllamaAIClientConfig holds configuration for the Ollama interview AI client.
 type OllamaAIClientConfig struct {
-	BaseURL            string
-	Model              string
-	MaxTokens          int
-	Temperature        float64
-	SystemPrompt       string
-	OutputFormatPrompt string
-	PromptLastQ        string
-	PromptClosing      string
-	LastQSeconds       int
-	ClosingSeconds     int
-	MidpointAreaIndex  int
-	TimeoutSeconds     int
-	AreaConfigs        []config.AreaConfig
+	BaseURL                 string
+	Model                   string
+	MaxTokens               int
+	Temperature             float64
+	AllowSensitiveDebugLogs bool
+	SystemPrompt            string
+	OutputFormatPrompt      string
+	PromptLastQ             string
+	PromptClosing           string
+	LastQSeconds            int
+	ClosingSeconds          int
+	MidpointAreaIndex       int
+	TimeoutSeconds          int
+	AreaConfigs             []config.AreaConfig
 }
 
 // OllamaAIClient implements AIClient using Ollama's OpenAI-compatible endpoint.
 type OllamaAIClient struct {
-	baseURL            string
-	model              string
-	maxTokens          int
-	temperature        float64
-	systemPrompt       string
-	outputFormatPrompt string
-	promptLastQ        string
-	promptClosing      string
-	lastQSeconds       int
-	closingSeconds     int
-	midpointAreaIndex  int
-	areaConfigs        []config.AreaConfig
-	client             *http.Client
-	promptComposer     promptComposer
+	baseURL                 string
+	model                   string
+	maxTokens               int
+	temperature             float64
+	systemPrompt            string
+	outputFormatPrompt      string
+	promptLastQ             string
+	promptClosing           string
+	lastQSeconds            int
+	closingSeconds          int
+	midpointAreaIndex       int
+	areaConfigs             []config.AreaConfig
+	allowSensitiveDebugLogs bool
+	client                  *http.Client
+	promptComposer          promptComposer
 }
 
 // NewOllamaAIClient creates a new Ollama-backed interview AI client.
 func NewOllamaAIClient(cfg OllamaAIClientConfig) *OllamaAIClient {
 	return &OllamaAIClient{
-		baseURL:            cfg.BaseURL,
-		model:              cfg.Model,
-		maxTokens:          cfg.MaxTokens,
-		temperature:        cfg.Temperature,
-		systemPrompt:       cfg.SystemPrompt,
-		outputFormatPrompt: cfg.OutputFormatPrompt,
-		promptLastQ:        cfg.PromptLastQ,
-		promptClosing:      cfg.PromptClosing,
-		lastQSeconds:       cfg.LastQSeconds,
-		closingSeconds:     cfg.ClosingSeconds,
-		midpointAreaIndex:  cfg.MidpointAreaIndex,
-		areaConfigs:        cfg.AreaConfigs,
-		client:             &http.Client{Timeout: time.Duration(cfg.TimeoutSeconds) * time.Second},
+		baseURL:                 cfg.BaseURL,
+		model:                   cfg.Model,
+		maxTokens:               cfg.MaxTokens,
+		temperature:             cfg.Temperature,
+		allowSensitiveDebugLogs: cfg.AllowSensitiveDebugLogs,
+		systemPrompt:            cfg.SystemPrompt,
+		outputFormatPrompt:      cfg.OutputFormatPrompt,
+		promptLastQ:             cfg.PromptLastQ,
+		promptClosing:           cfg.PromptClosing,
+		lastQSeconds:            cfg.LastQSeconds,
+		closingSeconds:          cfg.ClosingSeconds,
+		midpointAreaIndex:       cfg.MidpointAreaIndex,
+		areaConfigs:             cfg.AreaConfigs,
+		client:                  &http.Client{Timeout: time.Duration(cfg.TimeoutSeconds) * time.Second},
 		promptComposer: promptComposer{
 			systemPrompt:      cfg.SystemPrompt,
 			promptLastQ:       cfg.PromptLastQ,
@@ -101,12 +104,19 @@ func (c *OllamaAIClient) CallAI(ctx context.Context, turnCtx *AITurnContext) (*A
 	}
 
 	url := strings.TrimRight(c.baseURL, "/") + "/v1/chat/completions"
-	slog.Debug("calling Ollama API", "url", url, "area", turnCtx.CurrentAreaSlug, "model", c.model)
-	shared.DebugTextBlock("Ollama request user message", userContent)
-	if messages, ok := requestBody["messages"].([]map[string]interface{}); ok {
-		shared.DebugChatMessages("Ollama request messages", messages)
+	slog.Debug("calling Ollama API",
+		"url", url,
+		"area", turnCtx.CurrentAreaSlug,
+		"model", c.model,
+		"sensitive_debug_logs_enabled", c.allowSensitiveDebugLogs,
+	)
+	if c.allowSensitiveDebugLogs {
+		shared.DebugTextBlock("Ollama request user message", userContent)
+		if messages, ok := requestBody["messages"].([]map[string]interface{}); ok {
+			shared.DebugChatMessages("Ollama request messages", messages)
+		}
+		shared.DebugJSON("Ollama request body", requestBody)
 	}
-	shared.DebugJSON("Ollama request body", requestBody)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
 	if err != nil {

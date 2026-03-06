@@ -207,7 +207,7 @@ func TestStartInterview_ResumingSessionReturnsReadinessReturningUserMessage(t *t
 	}
 }
 
-func TestSubmitAnswer_ReadinessStepTriggersNewAICallAndReturnsNewQuestion(t *testing.T) {
+func TestProcessTurn_ReadinessStepTriggersNewAICallAndReturnsNewQuestion(t *testing.T) {
 	sessionCode := "AP-7K9X-M2NF"
 	store := newQAServiceStore()
 	store.getFlowStateFn = func(context.Context, string) (*FlowState, error) {
@@ -240,9 +240,9 @@ func TestSubmitAnswer_ReadinessStepTriggersNewAICallAndReturnsNewQuestion(t *tes
 
 	svc := newServiceForRecoveryTests(store, sessions, ai)
 
-	result, err := svc.SubmitAnswer(context.Background(), sessionCode, "Yes", "Ready", "turn-readiness")
+	result, err := svc.processTurn(context.Background(), sessionCode, "Yes", "Ready", "turn-readiness")
 	if err != nil {
-		t.Fatalf("SubmitAnswer() error = %v", err)
+		t.Fatalf("processTurn() error = %v", err)
 	}
 	if result.Done {
 		t.Fatalf("done = %v, want false", result.Done)
@@ -302,7 +302,7 @@ func TestGetAnswerJobResult_CanceledJobExposesReloadRecoveryCode(t *testing.T) {
 	}
 }
 
-func TestSubmitAnswer_CriterionStepCompletesInterviewAcrossSessionLanguages(t *testing.T) {
+func TestProcessTurn_CriterionStepCompletesInterviewAcrossSessionLanguages(t *testing.T) {
 	tests := []struct {
 		name            string
 		sessionLanguage string
@@ -381,9 +381,9 @@ func TestSubmitAnswer_CriterionStepCompletesInterviewAcrossSessionLanguages(t *t
 
 			svc := newServiceForRecoveryTests(store, sessions, ai)
 
-			result, err := svc.SubmitAnswer(context.Background(), sessionCode, answerText, questionText, turnID)
+			result, err := svc.processTurn(context.Background(), sessionCode, answerText, questionText, turnID)
 			if err != nil {
-				t.Fatalf("SubmitAnswer() error = %v", err)
+				t.Fatalf("processTurn() error = %v", err)
 			}
 			if !result.Done {
 				t.Fatalf("done = %v, want true when ProcessCriterionTurn returns no next area", result.Done)

@@ -6,8 +6,8 @@ import (
 	"time"
 )
 
-// Store defines persistence for question_areas and answers.
-type Store interface {
+// InterviewStateStore defines persistence for interview flow and answers.
+type InterviewStateStore interface {
 	// CreateQuestionArea inserts a new area row. Idempotent via ON CONFLICT.
 	// Returns the area row, or nil if it already existed (conflict).
 	CreateQuestionArea(ctx context.Context, sessionCode, area string) (*QuestionArea, error)
@@ -21,23 +21,8 @@ type Store interface {
 	// GetAreasBySession returns all question_area rows for a session.
 	GetAreasBySession(ctx context.Context, sessionCode string) ([]QuestionArea, error)
 
-	// IncrementAreaQuestions increments questions_count by 1 for the given area.
-	IncrementAreaQuestions(ctx context.Context, sessionCode, area string) error
-
-	// CompleteArea marks an area as complete with area_ended_at = now().
-	CompleteArea(ctx context.Context, sessionCode, area string) error
-
-	// MarkAreaInsufficient marks an area as insufficient with area_ended_at = now().
-	MarkAreaInsufficient(ctx context.Context, sessionCode, area string) error
-
-	// MarkAreaPreAddressed marks a pending area as pre_addressed with evidence.
-	MarkAreaPreAddressed(ctx context.Context, sessionCode, area, evidence string) error
-
 	// MarkAreaNotAssessed marks a pending/pre_addressed area as not_assessed.
 	MarkAreaNotAssessed(ctx context.Context, sessionCode, area string) error
-
-	// SaveAnswer inserts a new answer row and returns it.
-	SaveAnswer(ctx context.Context, params SaveAnswerParams) (*Answer, error)
 
 	// GetAnswersBySession returns all answers for a session ordered by created_at.
 	GetAnswersBySession(ctx context.Context, sessionCode string) ([]Answer, error)
@@ -62,7 +47,10 @@ type Store interface {
 
 	// MarkFlowDone clears expected turn and marks flow as done.
 	MarkFlowDone(ctx context.Context, sessionCode string) error
+}
 
+// AsyncAnswerJobStore defines persistence for async submit/poll job workflow.
+type AsyncAnswerJobStore interface {
 	// UpsertAnswerJob creates an async answer job or returns the existing one for an idempotency key.
 	UpsertAnswerJob(ctx context.Context, params UpsertAnswerJobParams) (*AnswerJob, error)
 
@@ -89,6 +77,12 @@ type Store interface {
 
 	// IncrementAnswerJobAttempts increments attempts without changing status.
 	IncrementAnswerJobAttempts(ctx context.Context, jobID string) error
+}
+
+// Store composes the interview persistence ports required by the service layer.
+type Store interface {
+	InterviewStateStore
+	AsyncAnswerJobStore
 }
 
 // SaveAnswerParams holds the inputs for saving an answer.

@@ -79,18 +79,19 @@ func parseClaudeErrorEnvelope(body []byte) (errorType, message string, ok bool) 
 
 // AIClientConfig holds everything needed to build and call the AI API.
 type AIClientConfig struct {
-	BaseURL           string              // "https://api.anthropic.com" or mock URL
-	APIKey            string              // Anthropic API key
-	Model             string              // e.g. "claude-sonnet-4-20250514"
-	MaxTokens         int                 // e.g. 1024
-	SystemPrompt      string              // loaded from AI_SYSTEM_PROMPT env
-	PromptLastQ       string              // appended for per-area last follow-up, time pressure, or midpoint pacing
-	PromptClosing     string              // appended when whole-interview time is almost up
-	LastQSeconds      int                 // time threshold for last-question prompt (e.g. 30)
-	ClosingSeconds    int                 // time threshold for closing prompt (e.g. 15)
-	MidpointAreaIndex int                 // area index that defines the pacing midpoint (e.g. 3 = nexus)
-	TimeoutSeconds    int                 // HTTP timeout for AI API calls (e.g. 30)
-	AreaConfigs       []config.AreaConfig // loaded from AI_AREA_CONFIG env
+	BaseURL                 string              // "https://api.anthropic.com" or mock URL
+	APIKey                  string              // Anthropic API key
+	Model                   string              // e.g. "claude-sonnet-4-20250514"
+	MaxTokens               int                 // e.g. 1024
+	AllowSensitiveDebugLogs bool                // Allows sensitive prompt/response debug logs when true
+	SystemPrompt            string              // loaded from AI_SYSTEM_PROMPT env
+	PromptLastQ             string              // appended for per-area last follow-up, time pressure, or midpoint pacing
+	PromptClosing           string              // appended when whole-interview time is almost up
+	LastQSeconds            int                 // time threshold for last-question prompt (e.g. 30)
+	ClosingSeconds          int                 // time threshold for closing prompt (e.g. 15)
+	MidpointAreaIndex       int                 // area index that defines the pacing midpoint (e.g. 3 = nexus)
+	TimeoutSeconds          int                 // HTTP timeout for AI API calls (e.g. 30)
+	AreaConfigs             []config.AreaConfig // loaded from AI_AREA_CONFIG env
 }
 
 // promptComposer holds prompt pacing config shared by AI providers.
@@ -161,27 +162,29 @@ func (pc *promptComposer) compose(turnCtx *AITurnContext) string {
 
 // HTTPAIClient implements AIClient by calling the Claude Messages API.
 type HTTPAIClient struct {
-	baseURL        string
-	apiKey         string
-	model          string
-	maxTokens      int
-	timeoutSeconds int
-	areaConfigs    []config.AreaConfig
-	outputSchema   map[string]interface{}
-	promptComposer promptComposer
-	client         *http.Client
+	baseURL                 string
+	apiKey                  string
+	model                   string
+	maxTokens               int
+	timeoutSeconds          int
+	allowSensitiveDebugLogs bool
+	areaConfigs             []config.AreaConfig
+	outputSchema            map[string]interface{}
+	promptComposer          promptComposer
+	client                  *http.Client
 }
 
 // NewHTTPAIClient creates an AI client with the given configuration.
 func NewHTTPAIClient(cfg AIClientConfig) *HTTPAIClient {
 	return &HTTPAIClient{
-		baseURL:        cfg.BaseURL,
-		apiKey:         cfg.APIKey,
-		model:          cfg.Model,
-		maxTokens:      cfg.MaxTokens,
-		timeoutSeconds: cfg.TimeoutSeconds,
-		areaConfigs:    cfg.AreaConfigs,
-		outputSchema:   buildOutputSchema(),
+		baseURL:                 cfg.BaseURL,
+		apiKey:                  cfg.APIKey,
+		model:                   cfg.Model,
+		maxTokens:               cfg.MaxTokens,
+		timeoutSeconds:          cfg.TimeoutSeconds,
+		allowSensitiveDebugLogs: cfg.AllowSensitiveDebugLogs,
+		areaConfigs:             cfg.AreaConfigs,
+		outputSchema:            buildOutputSchema(),
 		promptComposer: promptComposer{
 			systemPrompt:      cfg.SystemPrompt,
 			promptLastQ:       cfg.PromptLastQ,
@@ -219,12 +222,19 @@ func (c *HTTPAIClient) CallAI(ctx context.Context, turnCtx *AITurnContext) (*AIR
 	}
 
 	url := c.baseURL + "/v1/messages"
-	slog.Debug("calling AI API", "url", url, "area", turnCtx.CurrentAreaSlug, "model", c.model)
-	shared.DebugTextBlock("AI request user message", userContent)
-	if messages, ok := requestBody["messages"].([]map[string]interface{}); ok {
-		shared.DebugChatMessages("AI request messages", messages)
+	slog.Debug("calling AI API",
+		"url", url,
+		"area", turnCtx.CurrentAreaSlug,
+		"model", c.model,
+		"sensitive_debug_logs_enabled", c.allowSensitiveDebugLogs,
+	)
+	if c.allowSensitiveDebugLogs {
+		shared.DebugTextBlock("AI request user message", userContent)
+		if messages, ok := requestBody["messages"].([]map[string]interface{}); ok {
+			shared.DebugChatMessages("AI request messages", messages)
+		}
+		shared.DebugJSON("AI request body", requestBody)
 	}
-	shared.DebugJSON("AI request body", requestBody)
 
 	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(c.timeoutSeconds)*time.Second)
 	defer cancel()
@@ -285,7 +295,9 @@ func (c *HTTPAIClient) CallAI(ctx context.Context, turnCtx *AITurnContext) (*AIR
 		}
 	}
 
-	shared.DebugJSON("AI API raw response", apiResp)
+	if c.allowSensitiveDebugLogs {
+		shared.DebugJSON("AI API raw response", apiResp)
+	}
 	result, err := parseAIResponse(&apiResp)
 	if err == nil {
 		return result, nil

@@ -413,8 +413,9 @@ func (s *PostgresStore) ProcessCriterionTurn(ctx context.Context, params Process
 		return nil, fmt.Errorf("increment area questions: %w", err)
 	}
 
-	action := "stay"
-	if params.Evaluation.CurrentCriterion.Status == "sufficient" {
+	decision := DecideCriterionTurn(params.Evaluation.CurrentCriterion, newCount, params.MaxQuestionsPerArea)
+	switch decision.MarkCurrentAs {
+	case AreaStatusComplete:
 		if _, err := tx.Exec(ctx,
 			`UPDATE question_areas
 			 SET status = 'complete', area_ended_at = now()
@@ -424,8 +425,7 @@ func (s *PostgresStore) ProcessCriterionTurn(ctx context.Context, params Process
 		); err != nil {
 			return nil, fmt.Errorf("complete area: %w", err)
 		}
-		action = "next"
-	} else if newCount >= params.MaxQuestionsPerArea || params.Evaluation.CurrentCriterion.Recommendation == "move_on" {
+	case AreaStatusInsufficient:
 		if _, err := tx.Exec(ctx,
 			`UPDATE question_areas
 			 SET status = 'insufficient', area_ended_at = now()
@@ -435,7 +435,6 @@ func (s *PostgresStore) ProcessCriterionTurn(ctx context.Context, params Process
 		); err != nil {
 			return nil, fmt.Errorf("mark area insufficient: %w", err)
 		}
-		action = "next"
 	}
 
 	for _, flag := range params.PreAddressed {
@@ -457,7 +456,7 @@ func (s *PostgresStore) ProcessCriterionTurn(ctx context.Context, params Process
 	}
 
 	nextArea := params.CurrentArea
-	if action == "next" {
+	if decision.Action == CriterionTurnActionNext {
 		rows, err := tx.Query(ctx,
 			`SELECT area, status
 			 FROM question_areas
@@ -468,7 +467,7 @@ func (s *PostgresStore) ProcessCriterionTurn(ctx context.Context, params Process
 			return nil, fmt.Errorf("list areas for transition: %w", err)
 		}
 
-		statusByArea := make(map[string]string)
+		statusByArea := make(map[string]AreaStatus)
 		for rows.Next() {
 			var area string
 			var status string
@@ -476,7 +475,7 @@ func (s *PostgresStore) ProcessCriterionTurn(ctx context.Context, params Process
 				rows.Close()
 				return nil, fmt.Errorf("scan area status: %w", err)
 			}
-			statusByArea[area] = status
+			statusByArea[area] = AreaStatus(status)
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()
@@ -484,17 +483,7 @@ func (s *PostgresStore) ProcessCriterionTurn(ctx context.Context, params Process
 		}
 		rows.Close()
 
-		nextArea = ""
-		for _, slug := range params.OrderedAreaSlugs {
-			status, ok := statusByArea[slug]
-			if !ok {
-				continue
-			}
-			if status == string(AreaStatusPending) || status == string(AreaStatusPreAddressed) {
-				nextArea = slug
-				break
-			}
-		}
+		nextArea = SelectNextPendingArea(params.OrderedAreaSlugs, statusByArea)
 
 		if nextArea != "" {
 			if _, err := tx.Exec(ctx,
@@ -532,7 +521,7 @@ func (s *PostgresStore) ProcessCriterionTurn(ctx context.Context, params Process
 	}
 
 	return &ProcessCriterionTurnResult{
-		Action:         action,
+		Action:         string(decision.Action),
 		NextArea:       nextArea,
 		QuestionNumber: questionNumber,
 		NewCount:       newCount,

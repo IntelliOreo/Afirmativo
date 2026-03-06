@@ -1,6 +1,6 @@
 // Service layer for interview operations.
 // StartInterview: sets session to interviewing, creates areas, returns first question.
-// SubmitAnswer: persists answer, evaluates via AI, manages area transitions.
+// processTurn: persists answer, evaluates via AI, manages area transitions.
 package interview
 
 import (
@@ -36,8 +36,6 @@ var aiRetryBackoffs = []time.Duration{
 	7 * time.Second,
 }
 
-type asyncAnswerJobIDCtxKey struct{}
-
 // SessionStarter transitions a session to 'interviewing'.
 type SessionStarter interface {
 	StartSession(ctx context.Context, sessionCode, preferredLanguage string) (*session.Session, error)
@@ -58,12 +56,26 @@ type AIClient interface {
 	CallAI(ctx context.Context, turnCtx *AITurnContext) (*AIResponse, error)
 }
 
+type interviewStateStore = InterviewStateStore
+type asyncAnswerJobStore = AsyncAnswerJobStore
+
+type aiRetryFailureRecorder interface {
+	RecordFailure(ctx context.Context, reason string, incrementAttempts bool)
+}
+
+type aiRetryFailureRecorderFunc func(ctx context.Context, reason string, incrementAttempts bool)
+
+func (f aiRetryFailureRecorderFunc) RecordFailure(ctx context.Context, reason string, incrementAttempts bool) {
+	f(ctx, reason, incrementAttempts)
+}
+
 // Service contains interview business logic.
 type Service struct {
 	sessionStarter   SessionStarter
 	sessionGetter    SessionGetter
 	sessionCompleter SessionCompleter
-	store            Store
+	stateStore       interviewStateStore
+	jobStore         asyncAnswerJobStore
 	aiClient         AIClient
 	areaConfigs      []config.AreaConfig
 	openingTextEn    string
@@ -94,7 +106,8 @@ func NewService(
 		sessionStarter:           ss,
 		sessionGetter:            sg,
 		sessionCompleter:         sc,
-		store:                    store,
+		stateStore:               store,
+		jobStore:                 store,
 		aiClient:                 ai,
 		areaConfigs:              areaConfigs,
 		openingTextEn:            openingTextEn,
@@ -206,7 +219,7 @@ func (s *Service) runAsyncAnswerRecoveryLoop(ctx context.Context) {
 func (s *Service) recoverAsyncAnswerJobs(ctx context.Context) {
 	staleBefore := time.Now().UTC().Add(-s.asyncAnswerStaleAfter)
 	requeueCtx, requeueCancel := context.WithTimeout(ctx, dbTimeout)
-	requeued, err := s.store.RequeueStaleRunningAnswerJobs(requeueCtx, staleBefore)
+	requeued, err := s.jobStore.RequeueStaleRunningAnswerJobs(requeueCtx, staleBefore)
 	requeueCancel()
 	if err != nil {
 		slog.Error("failed to requeue stale running async answer jobs", "error", err)
@@ -214,7 +227,7 @@ func (s *Service) recoverAsyncAnswerJobs(ctx context.Context) {
 	}
 
 	listCtx, listCancel := context.WithTimeout(ctx, dbTimeout)
-	queuedIDs, err := s.store.ListQueuedAnswerJobIDs(listCtx, s.asyncAnswerRecoveryBatch)
+	queuedIDs, err := s.jobStore.ListQueuedAnswerJobIDs(listCtx, s.asyncAnswerRecoveryBatch)
 	listCancel()
 	if err != nil {
 		slog.Error("failed to list queued async answer jobs", "error", err)
@@ -290,11 +303,11 @@ func (s *Service) StartInterview(ctx context.Context, sessionCode, preferredLang
 
 	remaining := sess.InterviewBudgetSeconds - sess.InterviewLapsedSeconds
 
-	answersCount, err := s.store.GetAnswerCount(dbCtx, sessionCode)
+	answersCount, err := s.stateStore.GetAnswerCount(dbCtx, sessionCode)
 	if err != nil {
 		return nil, fmt.Errorf("get answer count: %w", err)
 	}
-	currentFlow, err := s.store.GetFlowState(dbCtx, sessionCode)
+	currentFlow, err := s.stateStore.GetFlowState(dbCtx, sessionCode)
 	if err != nil {
 		return nil, fmt.Errorf("get flow state: %w", err)
 	}
@@ -305,19 +318,19 @@ func (s *Service) StartInterview(ctx context.Context, sessionCode, preferredLang
 
 	// Pre-create all 8 question area rows (idempotent — ON CONFLICT DO NOTHING).
 	for _, area := range s.areaConfigs {
-		if _, err := s.store.CreateQuestionArea(dbCtx, sessionCode, area.Slug); err != nil {
+		if _, err := s.stateStore.CreateQuestionArea(dbCtx, sessionCode, area.Slug); err != nil {
 			return nil, fmt.Errorf("create question area %s: %w", area.Slug, err)
 		}
 	}
 
 	// Set the first area to in_progress (no-op if already in_progress from a prior start).
 	firstArea := s.areaConfigs[0].Slug
-	if err := s.store.SetAreaInProgress(dbCtx, sessionCode, firstArea); err != nil {
+	if err := s.stateStore.SetAreaInProgress(dbCtx, sessionCode, firstArea); err != nil {
 		return nil, fmt.Errorf("set first area in_progress: %w", err)
 	}
 
 	activeArea := firstArea
-	inProgressArea, err := s.store.GetInProgressArea(dbCtx, sessionCode)
+	inProgressArea, err := s.stateStore.GetInProgressArea(dbCtx, sessionCode)
 	if err != nil {
 		return nil, fmt.Errorf("get in-progress area: %w", err)
 	}
@@ -334,7 +347,7 @@ func (s *Service) StartInterview(ctx context.Context, sessionCode, preferredLang
 		q         *Question
 	)
 	if resuming {
-		flowState, err = s.store.PrepareReadinessStep(dbCtx, sessionCode, turnID)
+		flowState, err = s.stateStore.PrepareReadinessStep(dbCtx, sessionCode, turnID)
 		if err != nil {
 			return nil, fmt.Errorf("prepare readiness step: %w", err)
 		}
@@ -347,7 +360,7 @@ func (s *Service) StartInterview(ctx context.Context, sessionCode, preferredLang
 			turnID,
 		)
 	} else {
-		flowState, err = s.store.PrepareDisclaimerStep(dbCtx, sessionCode, turnID)
+		flowState, err = s.stateStore.PrepareDisclaimerStep(dbCtx, sessionCode, turnID)
 		if err != nil {
 			return nil, fmt.Errorf("prepare disclaimer step: %w", err)
 		}
@@ -426,7 +439,7 @@ func (s *Service) SubmitAnswerAsync(ctx context.Context, sessionCode, answerText
 		return nil, session.ErrSessionExpired
 	}
 
-	job, err := s.store.UpsertAnswerJob(dbCtx, UpsertAnswerJobParams{
+	job, err := s.jobStore.UpsertAnswerJob(dbCtx, UpsertAnswerJobParams{
 		SessionCode:     sessionCode,
 		ClientRequestID: clientRequestID,
 		TurnID:          turnID,
@@ -476,7 +489,7 @@ func (s *Service) GetAnswerJobResult(ctx context.Context, sessionCode, jobID str
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
-	job, err := s.store.GetAnswerJob(dbCtx, sessionCode, jobID)
+	job, err := s.jobStore.GetAnswerJob(dbCtx, sessionCode, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -525,7 +538,7 @@ func (s *Service) GetAnswerJobResult(ctx context.Context, sessionCode, jobID str
 
 func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
 	claimCtx, claimCancel := context.WithTimeout(ctx, dbTimeout)
-	job, err := s.store.ClaimQueuedAnswerJob(claimCtx, jobID)
+	job, err := s.jobStore.ClaimQueuedAnswerJob(claimCtx, jobID)
 	claimCancel()
 	if err != nil {
 		slog.Error("failed to claim async answer job", "job_id", jobID, "error", err)
@@ -544,8 +557,7 @@ func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
 		"attempts", job.Attempts,
 	)
 
-	jobCtx := context.WithValue(ctx, asyncAnswerJobIDCtxKey{}, job.ID)
-	answerResult, err := s.SubmitAnswer(jobCtx, job.SessionCode, job.AnswerText, job.QuestionText, job.TurnID)
+	answerResult, err := s.processTurnForAsyncJob(ctx, job)
 	if err != nil {
 		status := AsyncAnswerJobFailed
 		errorCode := "INTERNAL_ERROR"
@@ -573,7 +585,7 @@ func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
 		)
 
 		failCtx, failCancel := context.WithTimeout(ctx, dbTimeout)
-		markErr := s.store.MarkAnswerJobFailed(failCtx, MarkAnswerJobFailedParams{
+		markErr := s.jobStore.MarkAnswerJobFailed(failCtx, MarkAnswerJobFailedParams{
 			JobID:        job.ID,
 			Status:       status,
 			ErrorCode:    errorCode,
@@ -603,7 +615,7 @@ func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
 
 	if answerResult.Substituted {
 		cancelCtx, cancelCancel := context.WithTimeout(ctx, dbTimeout)
-		markErr := s.store.MarkAnswerJobFailed(cancelCtx, MarkAnswerJobFailedParams{
+		markErr := s.jobStore.MarkAnswerJobFailed(cancelCtx, MarkAnswerJobFailedParams{
 			JobID:        job.ID,
 			Status:       AsyncAnswerJobCanceled,
 			ErrorCode:    "AI_RETRY_EXHAUSTED",
@@ -632,7 +644,7 @@ func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
 	payload, err := json.Marshal(toAnswerJobPayload(answerResult))
 	if err != nil {
 		failCtx, failCancel := context.WithTimeout(ctx, dbTimeout)
-		markErr := s.store.MarkAnswerJobFailed(failCtx, MarkAnswerJobFailedParams{
+		markErr := s.jobStore.MarkAnswerJobFailed(failCtx, MarkAnswerJobFailedParams{
 			JobID:        job.ID,
 			Status:       AsyncAnswerJobFailed,
 			ErrorCode:    "SERIALIZATION_ERROR",
@@ -658,7 +670,7 @@ func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
 	}
 
 	successCtx, successCancel := context.WithTimeout(ctx, dbTimeout)
-	if err := s.store.MarkAnswerJobSucceeded(successCtx, job.ID, payload); err != nil {
+	if err := s.jobStore.MarkAnswerJobSucceeded(successCtx, job.ID, payload); err != nil {
 		slog.Error("failed to mark async answer job as succeeded",
 			"session_code", job.SessionCode,
 			"client_request_id", job.ClientRequestID,
@@ -695,11 +707,6 @@ func toAnswerJobPayload(result *AnswerResult) *answerJobPayload {
 	return payload
 }
 
-func asyncAnswerJobIDFromContext(ctx context.Context) string {
-	jobID, _ := ctx.Value(asyncAnswerJobIDCtxKey{}).(string)
-	return strings.TrimSpace(jobID)
-}
-
 func formatAIFailureReason(attempt int, err error) string {
 	var providerFailure *AIProviderFailure
 	if errors.As(err, &providerFailure) {
@@ -719,32 +726,34 @@ func formatAIFailureReason(attempt int, err error) string {
 	)
 }
 
-func (s *Service) recordAIFailureReason(ctx context.Context, reason string, incrementAttempts bool) {
-	jobID := asyncAnswerJobIDFromContext(ctx)
-	if jobID == "" {
-		return
+func (s *Service) newAsyncJobRetryFailureRecorder(jobID string) aiRetryFailureRecorder {
+	trimmedJobID := strings.TrimSpace(jobID)
+	if trimmedJobID == "" {
+		return nil
 	}
 
-	appendCtx, appendCancel := context.WithTimeout(ctx, dbTimeout)
-	appendErr := s.store.AppendAnswerJobFailedReason(appendCtx, jobID, reason)
-	appendCancel()
-	if appendErr != nil {
-		slog.Warn("failed to append async answer retry reason", "job_id", jobID, "error", appendErr)
-	}
+	return aiRetryFailureRecorderFunc(func(ctx context.Context, reason string, incrementAttempts bool) {
+		appendCtx, appendCancel := context.WithTimeout(ctx, dbTimeout)
+		appendErr := s.jobStore.AppendAnswerJobFailedReason(appendCtx, trimmedJobID, reason)
+		appendCancel()
+		if appendErr != nil {
+			slog.Warn("failed to append async answer retry reason", "job_id", trimmedJobID, "error", appendErr)
+		}
 
-	if !incrementAttempts {
-		return
-	}
+		if !incrementAttempts {
+			return
+		}
 
-	incCtx, incCancel := context.WithTimeout(ctx, dbTimeout)
-	incErr := s.store.IncrementAnswerJobAttempts(incCtx, jobID)
-	incCancel()
-	if incErr != nil {
-		slog.Warn("failed to increment async answer attempts for retry", "job_id", jobID, "error", incErr)
-	}
+		incCtx, incCancel := context.WithTimeout(ctx, dbTimeout)
+		incErr := s.jobStore.IncrementAnswerJobAttempts(incCtx, trimmedJobID)
+		incCancel()
+		if incErr != nil {
+			slog.Warn("failed to increment async answer attempts for retry", "job_id", trimmedJobID, "error", incErr)
+		}
+	})
 }
 
-func (s *Service) callAIWithRetry(ctx context.Context, turnCtx *AITurnContext) (*AIResponse, error) {
+func (s *Service) callAIWithRetry(ctx context.Context, turnCtx *AITurnContext, failureRecorder aiRetryFailureRecorder) (*AIResponse, error) {
 	maxAttempts := len(aiRetryBackoffs) + 1
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		aiResult, err := s.aiClient.CallAI(ctx, turnCtx)
@@ -754,7 +763,9 @@ func (s *Service) callAIWithRetry(ctx context.Context, turnCtx *AITurnContext) (
 
 		reason := formatAIFailureReason(attempt, err)
 		retrying := attempt < maxAttempts
-		s.recordAIFailureReason(ctx, reason, retrying)
+		if failureRecorder != nil {
+			failureRecorder.RecordFailure(ctx, reason, retrying)
+		}
 
 		if !retrying {
 			return nil, fmt.Errorf("%w: %s", ErrAIRetryExhausted, reason)
@@ -781,8 +792,27 @@ func (s *Service) callAIWithRetry(ctx context.Context, turnCtx *AITurnContext) (
 	return nil, fmt.Errorf("%w: exhausted", ErrAIRetryExhausted)
 }
 
-// SubmitAnswer processes one answer according to the explicit flow step.
-func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, questionText, turnID string) (*AnswerResult, error) {
+// processTurn processes one answer according to the explicit flow step.
+func (s *Service) processTurn(ctx context.Context, sessionCode, answerText, questionText, turnID string) (*AnswerResult, error) {
+	return s.processTurnCore(ctx, sessionCode, answerText, questionText, turnID, nil)
+}
+
+func (s *Service) processTurnForAsyncJob(ctx context.Context, job *AnswerJob) (*AnswerResult, error) {
+	return s.processTurnCore(
+		ctx,
+		job.SessionCode,
+		job.AnswerText,
+		job.QuestionText,
+		job.TurnID,
+		s.newAsyncJobRetryFailureRecorder(job.ID),
+	)
+}
+
+func (s *Service) processTurnCore(
+	ctx context.Context,
+	sessionCode, answerText, questionText, turnID string,
+	failureRecorder aiRetryFailureRecorder,
+) (*AnswerResult, error) {
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
@@ -794,7 +824,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 		slog.Debug("submit answer rejected: session expired", "session_code", sessionCode)
 		return nil, session.ErrSessionExpired
 	}
-	flowState, err := s.store.GetFlowState(dbCtx, sessionCode)
+	flowState, err := s.stateStore.GetFlowState(dbCtx, sessionCode)
 	if err != nil {
 		return nil, fmt.Errorf("get flow state: %w", err)
 	}
@@ -815,7 +845,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 	timeRemainingS := s.calcTimeRemaining(sess)
 	if timeRemainingS <= 0 {
 		s.markRemainingNotAssessed(ctx, sessionCode, areas)
-		if err := s.store.MarkFlowDone(ctx, sessionCode); err != nil {
+		if err := s.stateStore.MarkFlowDone(ctx, sessionCode); err != nil {
 			slog.Warn("failed to mark flow done on timeout", "session", sessionCode, "error", err)
 		}
 		s.finishSession(ctx, sessionCode)
@@ -835,7 +865,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 		if err != nil {
 			return nil, fmt.Errorf("new turn id: %w", err)
 		}
-		nextFlow, err := s.store.AdvanceNonCriterionStep(dbCtx, AdvanceNonCriterionStepParams{
+		nextFlow, err := s.stateStore.AdvanceNonCriterionStep(dbCtx, AdvanceNonCriterionStepParams{
 			SessionCode:    sessionCode,
 			ExpectedTurnID: turnID,
 			CurrentStep:    FlowStepDisclaimer,
@@ -880,7 +910,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 		if err != nil {
 			return nil, fmt.Errorf("new turn id: %w", err)
 		}
-		nextFlow, err := s.store.AdvanceNonCriterionStep(dbCtx, AdvanceNonCriterionStepParams{
+		nextFlow, err := s.stateStore.AdvanceNonCriterionStep(dbCtx, AdvanceNonCriterionStepParams{
 			SessionCode:    sessionCode,
 			ExpectedTurnID: turnID,
 			CurrentStep:    FlowStepReadiness,
@@ -893,7 +923,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 			return nil, fmt.Errorf("advance readiness step: %w", err)
 		}
 
-		answers, err := s.store.GetAnswersBySession(dbCtx, sessionCode)
+		answers, err := s.stateStore.GetAnswersBySession(dbCtx, sessionCode)
 		if err != nil {
 			return nil, fmt.Errorf("get answers: %w", err)
 		}
@@ -925,7 +955,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 
 		slog.Debug("calling AI for first criterion question", "session", sessionCode, "area", currentArea.Area)
 		substituted := false
-		aiResult, err := s.callAIWithRetry(ctx, turnCtx)
+		aiResult, err := s.callAIWithRetry(ctx, turnCtx, failureRecorder)
 		if err != nil {
 			if !errors.Is(err, ErrAIRetryExhausted) {
 				return nil, err
@@ -956,14 +986,14 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 
 	case FlowStepCriterion:
 		if currentArea == nil {
-			if err := s.store.MarkFlowDone(ctx, sessionCode); err != nil {
+			if err := s.stateStore.MarkFlowDone(ctx, sessionCode); err != nil {
 				slog.Warn("failed to mark flow done with no in-progress area", "session", sessionCode, "error", err)
 			}
 			s.finishSession(ctx, sessionCode)
 			return &AnswerResult{Done: true, TimerRemainingS: 0}, nil
 		}
 
-		answers, err := s.store.GetAnswersBySession(dbCtx, sessionCode)
+		answers, err := s.stateStore.GetAnswersBySession(dbCtx, sessionCode)
 		if err != nil {
 			return nil, fmt.Errorf("get answers: %w", err)
 		}
@@ -995,7 +1025,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 
 		slog.Debug("calling AI for criterion turn", "session", sessionCode, "area", currentArea.Area)
 		substituted := false
-		aiResult, err := s.callAIWithRetry(ctx, turnCtx)
+		aiResult, err := s.callAIWithRetry(ctx, turnCtx, failureRecorder)
 		if err != nil {
 			if !errors.Is(err, ErrAIRetryExhausted) {
 				return nil, err
@@ -1028,7 +1058,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 
 		preAddressed := s.extractPreAddressed(aiResult.Evaluation.OtherCriteriaAddressed)
 		processCtx, processCancel := context.WithTimeout(ctx, dbTimeout)
-		result, err := s.store.ProcessCriterionTurn(processCtx, ProcessCriterionTurnParams{
+		result, err := s.stateStore.ProcessCriterionTurn(processCtx, ProcessCriterionTurnParams{
 			SessionCode:         sessionCode,
 			ExpectedTurnID:      turnID,
 			CurrentArea:         currentArea.Area,
@@ -1059,7 +1089,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 		timeRemainingS = s.calcTimeRemaining(sess)
 		if timeRemainingS <= 0 {
 			s.markRemainingNotAssessed(ctx, sessionCode, areas)
-			if err := s.store.MarkFlowDone(ctx, sessionCode); err != nil {
+			if err := s.stateStore.MarkFlowDone(ctx, sessionCode); err != nil {
 				slog.Warn("failed to mark flow done on timeout after criterion", "session", sessionCode, "error", err)
 			}
 			s.finishSession(ctx, sessionCode)
@@ -1067,7 +1097,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 		}
 
 		if strings.TrimSpace(result.NextArea) == "" {
-			if err := s.store.MarkFlowDone(ctx, sessionCode); err != nil {
+			if err := s.stateStore.MarkFlowDone(ctx, sessionCode); err != nil {
 				slog.Warn("failed to mark flow done on final criterion", "session", sessionCode, "error", err)
 			}
 			s.finishSession(ctx, sessionCode)
@@ -1087,7 +1117,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 			}
 			if nextAreaState != nil {
 				answersCtx, answersCancel := context.WithTimeout(ctx, dbTimeout)
-				latestAnswers, err := s.store.GetAnswersBySession(answersCtx, sessionCode)
+				latestAnswers, err := s.stateStore.GetAnswersBySession(answersCtx, sessionCode)
 				answersCancel()
 				if err != nil {
 					slog.Warn("failed to load answers for next-area opening question", "session", sessionCode, "area", result.NextArea, "error", err)
@@ -1118,7 +1148,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 					}
 
 					slog.Debug("calling AI for next criterion opening question", "session", sessionCode, "area", result.NextArea)
-					nextAreaAIResult, err := s.callAIWithRetry(ctx, openingTurnCtx)
+					nextAreaAIResult, err := s.callAIWithRetry(ctx, openingTurnCtx, failureRecorder)
 					if err != nil {
 						if !errors.Is(err, ErrAIRetryExhausted) {
 							return nil, err
@@ -1300,7 +1330,7 @@ func (s *Service) markRemainingNotAssessed(ctx context.Context, sessionCode stri
 	defer dbCancel()
 	for _, a := range areas {
 		if a.Status == AreaStatusPending || a.Status == AreaStatusPreAddressed || a.Status == AreaStatusInProgress {
-			if err := s.store.MarkAreaNotAssessed(dbCtx, sessionCode, a.Area); err != nil {
+			if err := s.stateStore.MarkAreaNotAssessed(dbCtx, sessionCode, a.Area); err != nil {
 				slog.Warn("failed to mark not_assessed", "area", a.Area, "error", err)
 			}
 		}
@@ -1311,12 +1341,12 @@ func (s *Service) refreshAreaState(ctx context.Context, sessionCode string) ([]Q
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	defer dbCancel()
 
-	areas, err := s.store.GetAreasBySession(dbCtx, sessionCode)
+	areas, err := s.stateStore.GetAreasBySession(dbCtx, sessionCode)
 	if err != nil {
 		return nil, nil, fmt.Errorf("get areas by session: %w", err)
 	}
 
-	currentArea, err := s.store.GetInProgressArea(dbCtx, sessionCode)
+	currentArea, err := s.stateStore.GetInProgressArea(dbCtx, sessionCode)
 	if err != nil {
 		return nil, nil, fmt.Errorf("get in-progress area: %w", err)
 	}
