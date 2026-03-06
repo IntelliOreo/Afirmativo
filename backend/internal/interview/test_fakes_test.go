@@ -13,6 +13,7 @@ type fakeInterviewStore struct {
 	claimQueuedAnswerJobFn          func(ctx context.Context, jobID string) (*AnswerJob, error)
 	listQueuedAnswerJobIDsFn        func(ctx context.Context, limit int) ([]string, error)
 	requeueStaleRunningAnswerJobsFn func(ctx context.Context, staleBefore time.Time) (int64, error)
+	processCriterionTurnFn          func(ctx context.Context, params ProcessCriterionTurnParams) (*ProcessCriterionTurnResult, error)
 	markAnswerJobOKFn               func(ctx context.Context, jobID string, resultPayload []byte) error
 	markAnswerJobFailedFn           func(ctx context.Context, params MarkAnswerJobFailedParams) error
 }
@@ -61,7 +62,10 @@ func (f *fakeInterviewStore) PrepareReadinessStep(context.Context, string, strin
 func (f *fakeInterviewStore) AdvanceNonCriterionStep(context.Context, AdvanceNonCriterionStepParams) (*FlowState, error) {
 	return nil, nil
 }
-func (f *fakeInterviewStore) ProcessCriterionTurn(context.Context, ProcessCriterionTurnParams) (*ProcessCriterionTurnResult, error) {
+func (f *fakeInterviewStore) ProcessCriterionTurn(ctx context.Context, params ProcessCriterionTurnParams) (*ProcessCriterionTurnResult, error) {
+	if f.processCriterionTurnFn != nil {
+		return f.processCriterionTurnFn(ctx, params)
+	}
 	return nil, nil
 }
 func (f *fakeInterviewStore) MarkFlowDone(context.Context, string) error { return nil }

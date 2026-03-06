@@ -386,3 +386,112 @@ func TestProcessAnswerJob_AIRetryExhaustedMarksCanceledWithReloadRecoveryCode(t 
 		t.Fatalf("MarkAnswerJobSucceeded should not be called when retries are exhausted")
 	}
 }
+
+func TestSubmitAnswer_CriterionStepCarriesPreferredLanguageToStore(t *testing.T) {
+	tests := []struct {
+		name              string
+		sessionLanguage   string
+		wantStoreLanguage string
+	}{
+		{
+			name:              "english_session_uses_en",
+			sessionLanguage:   "en",
+			wantStoreLanguage: "en",
+		},
+		{
+			name:              "spanish_session_uses_es",
+			sessionLanguage:   "es",
+			wantStoreLanguage: "es",
+		},
+		{
+			name:              "unknown_language_normalizes_to_es",
+			sessionLanguage:   "fr",
+			wantStoreLanguage: "es",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sessionCode := "AP-7K9X-M2NF"
+			const answerText = "Candidate answer from frontend"
+			const questionText = "Criterion question text"
+			const turnID = "turn-criterion"
+
+			store := newQAServiceStore()
+			store.getFlowStateFn = func(context.Context, string) (*FlowState, error) {
+				return &FlowState{
+					Step:           FlowStepCriterion,
+					ExpectedTurnID: turnID,
+					QuestionNumber: 4,
+				}, nil
+			}
+			store.getAreasBySessionFn = func(context.Context, string) ([]QuestionArea, error) {
+				return []QuestionArea{
+					{Area: "protected_ground", Status: AreaStatusInProgress, QuestionsCount: 1},
+				}, nil
+			}
+			store.getInProgressAreaFn = func(context.Context, string) (*QuestionArea, error) {
+				return &QuestionArea{Area: "protected_ground", Status: AreaStatusInProgress, QuestionsCount: 1}, nil
+			}
+			store.getAnswersBySessionFn = func(context.Context, string) ([]Answer, error) {
+				return []Answer{}, nil
+			}
+
+			var capturedParams *ProcessCriterionTurnParams
+			store.processCriterionTurnFn = func(_ context.Context, params ProcessCriterionTurnParams) (*ProcessCriterionTurnResult, error) {
+				paramsCopy := params
+				capturedParams = &paramsCopy
+				return &ProcessCriterionTurnResult{
+					Action:         "next",
+					NextArea:       "",
+					QuestionNumber: 5,
+				}, nil
+			}
+
+			sessions := &fakeInterviewSessionStore{
+				getSessionByCodeFn: func(context.Context, string) (*session.Session, error) {
+					return activeSession(sessionCode, tc.sessionLanguage), nil
+				},
+			}
+
+			ai := &qaAIClient{
+				callFn: func(context.Context, *AITurnContext) (*AIResponse, error) {
+					return &AIResponse{
+						Evaluation: &Evaluation{
+							CurrentCriterion: CurrentCriterion{
+								ID:              1,
+								Status:          "sufficient",
+								EvidenceSummary: "English evidence summary",
+								Recommendation:  "move_on",
+							},
+							OtherCriteriaAddressed: nil,
+						},
+						NextQuestion: "Any fallback next question",
+					}, nil
+				},
+			}
+
+			svc := newServiceForRecoveryTests(store, sessions, ai)
+
+			result, err := svc.SubmitAnswer(context.Background(), sessionCode, answerText, questionText, turnID)
+			if err != nil {
+				t.Fatalf("SubmitAnswer() error = %v", err)
+			}
+			if !result.Done {
+				t.Fatalf("done = %v, want true when ProcessCriterionTurn returns no next area", result.Done)
+			}
+			if capturedParams == nil {
+				t.Fatalf("expected ProcessCriterionTurn params to be captured")
+			}
+			if capturedParams.PreferredLanguage != tc.wantStoreLanguage {
+				t.Fatalf("preferred language passed to store = %q, want %q", capturedParams.PreferredLanguage, tc.wantStoreLanguage)
+			}
+			if capturedParams.AnswerText != answerText {
+				t.Fatalf("answer text passed to store = %q, want %q", capturedParams.AnswerText, answerText)
+			}
+			if capturedParams.QuestionText != questionText {
+				t.Fatalf("question text passed to store = %q, want %q", capturedParams.QuestionText, questionText)
+			}
+		})
+	}
+}
