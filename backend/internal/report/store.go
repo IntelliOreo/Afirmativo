@@ -45,6 +45,7 @@ type AnswerRow struct {
 	Area         string
 	QuestionText string
 	TranscriptEs string
+	TranscriptEn string
 	AiEvaluation string // raw JSON
 	Sufficiency  string
 }
@@ -53,6 +54,7 @@ type AnswerRow struct {
 type SessionInfo struct {
 	SessionCode        string
 	Status             string
+	PreferredLanguage  string
 	InterviewStartedAt int64 // unix timestamp
 	EndedAt            int64 // unix timestamp
 }

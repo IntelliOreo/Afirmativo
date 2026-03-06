@@ -73,8 +73,6 @@ type Config struct {
 	AIAPIKey                                string       // Anthropic API key (not required for Ollama or when MOCK_API_URL is set)
 	AITimeoutSeconds                        int          // HTTP timeout for AI API calls (default 30)
 	AIReportPrompt                          string       // System prompt for report generation AI call
-	ReportStrengthsLabel                    string       // Semantic label for strengths in report prompts/schema (e.g. "areas of clarity")
-	ReportWeaknessesLabel                   string       // Semantic label for weaknesses in report prompts/schema (e.g. "areas to develop further")
 	UnstructuredReportOutputFormatPrompt    string       // Prompt instructions for unstructured providers to return report JSON
 	AIReportMaxTokens                       int          // Max tokens for report AI call (default 2048)
 	AreaConfigs                             []AreaConfig // Per-area rubrics loaded from AI_AREA_CONFIG JSON
@@ -366,8 +364,6 @@ func Load() (Config, error) {
 		AIAPIKey:                                os.Getenv("AI_API_KEY"),
 		AITimeoutSeconds:                        aiTimeout,
 		AIReportPrompt:                          os.Getenv("AI_REPORT_PROMPT"),
-		ReportStrengthsLabel:                    envOr("REPORT_STRENGTHS_LABEL", "areas-of-clarity"),
-		ReportWeaknessesLabel:                   envOr("REPORT_WEAKNESSES_LABEL", "areas-to-develop-further"),
 		UnstructuredReportOutputFormatPrompt:    os.Getenv("UNSTRUCTURED_REPORT_OUTPUT_FORMAT_PROMPT"),
 		AIReportMaxTokens:                       reportMaxTokens,
 		InterviewOpeningDisclaimerEn:            os.Getenv("INTERVIEW_OPENING_DISCLAIMER_EN"),
@@ -474,8 +470,6 @@ func (c Config) LogLoaded() {
 		"ai_timeout_seconds", c.AITimeoutSeconds,
 		"area_configs_count", len(c.AreaConfigs),
 		"report_prompt_len", len(c.AIReportPrompt),
-		"report_strengths_label", c.ReportStrengthsLabel,
-		"report_weaknesses_label", c.ReportWeaknessesLabel,
 		"unstructured_report_output_format_prompt_len", len(c.UnstructuredReportOutputFormatPrompt),
 		"report_max_tokens", c.AIReportMaxTokens,
 		"interview_opening_disclaimer_en_len", len(c.InterviewOpeningDisclaimerEn),

@@ -900,7 +900,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 		areaCfg, areaIndex := s.findAreaConfig(currentArea.Area)
 		criteriaCoverage := s.buildCriteriaCoverage(areas)
 		criteriaRemaining := s.countCriteriaRemaining(areas)
-		transcript := s.buildTranscript(answers)
+		transcript := s.buildTranscript(answers, preferredLanguage)
 
 		nextQuestion := s.fallbackQuestionForArea(currentArea.Area)
 		turnCtx := &AITurnContext{
@@ -970,7 +970,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 
 		areaCfg, areaIndex := s.findAreaConfig(currentArea.Area)
 		criteriaCoverage := s.buildCriteriaCoverage(areas)
-		transcript := s.buildTranscript(answers)
+		transcript := s.buildTranscript(answers, preferredLanguage)
 		criteriaRemaining := s.countCriteriaRemaining(areas)
 
 		turnCtx := &AITurnContext{
@@ -1095,7 +1095,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 					nextAreaCfg, nextAreaIndex := s.findAreaConfig(result.NextArea)
 					nextAreaCoverage := s.buildCriteriaCoverage(areas)
 					nextAreaRemaining := s.countCriteriaRemaining(areas)
-					nextAreaTranscript := s.buildTranscript(latestAnswers)
+					nextAreaTranscript := s.buildTranscript(latestAnswers, preferredLanguage)
 
 					openingTurnCtx := &AITurnContext{
 						PreferredLanguage:  preferredLanguage,
@@ -1249,11 +1249,18 @@ func (s *Service) buildCriteriaCoverage(areas []QuestionArea) []CriteriaCoverage
 	return coverage
 }
 
-func (s *Service) buildTranscript(answers []Answer) []TranscriptEntry {
+func (s *Service) buildTranscript(answers []Answer, preferredLanguage string) []TranscriptEntry {
+	useEnglish := strings.EqualFold(strings.TrimSpace(preferredLanguage), "en")
+
 	transcript := make([]TranscriptEntry, 0, len(answers))
 	for i, a := range answers {
 		answerText := a.TranscriptEs
-		if a.TranscriptEn != "" {
+		if useEnglish {
+			answerText = a.TranscriptEn
+			if strings.TrimSpace(answerText) == "" {
+				answerText = a.TranscriptEs
+			}
+		} else if strings.TrimSpace(answerText) == "" {
 			answerText = a.TranscriptEn
 		}
 		transcript = append(transcript, TranscriptEntry{

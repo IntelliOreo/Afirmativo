@@ -339,6 +339,7 @@ func (a *interviewDataAdapter) GetAnswersBySession(ctx context.Context, sessionC
 			Area:         ans.Area,
 			QuestionText: ans.QuestionText,
 			TranscriptEs: ans.TranscriptEs,
+			TranscriptEn: ans.TranscriptEn,
 			AiEvaluation: ans.AiEvaluation,
 			Sufficiency:  ans.Sufficiency,
 		}
@@ -361,8 +362,9 @@ func (a *sessionDataAdapter) GetSessionByCode(ctx context.Context, sessionCode s
 		return nil, err
 	}
 	info := &report.SessionInfo{
-		SessionCode: sess.SessionCode,
-		Status:      sess.Status,
+		SessionCode:       sess.SessionCode,
+		Status:            sess.Status,
+		PreferredLanguage: sess.PreferredLanguage,
 	}
 	if sess.InterviewStartedAt != nil {
 		info.InterviewStartedAt = sess.InterviewStartedAt.Unix()

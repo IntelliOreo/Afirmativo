@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/afirmativo/backend/internal/config"
@@ -141,7 +142,7 @@ func (s *Service) generateReport(ctx context.Context, sessionCode string, sess *
 	summaries := s.buildAreaSummaries(areas, answers)
 
 	// 3. Extract open floor transcript (all answers for the open_floor area).
-	openFloorTranscript := s.extractOpenFloorTranscript(answers)
+	openFloorTranscript := s.extractOpenFloorTranscript(answers, sess.PreferredLanguage)
 
 	slog.Debug("report generation context",
 		"session", sessionCode,
@@ -167,15 +168,15 @@ func (s *Service) generateReport(ctx context.Context, sessionCode string, sess *
 
 	// 6. Build and persist report.
 	report := &Report{
-		SessionCode:     sessionCode,
-		Status:          "ready",
-		ContentEn:       aiResp.ContentEn,
-		ContentEs:       aiResp.ContentEs,
-		AreasOfClarity:  aiResp.AreasOfClarity,
+		SessionCode:           sessionCode,
+		Status:                "ready",
+		ContentEn:             aiResp.ContentEn,
+		ContentEs:             aiResp.ContentEs,
+		AreasOfClarity:        aiResp.AreasOfClarity,
 		AreasToDevelopFurther: aiResp.AreasToDevelopFurther,
-		Recommendation:  aiResp.Recommendation,
-		QuestionCount:   answerCount,
-		DurationMinutes: durationMinutes,
+		Recommendation:        aiResp.Recommendation,
+		QuestionCount:         answerCount,
+		DurationMinutes:       durationMinutes,
 	}
 
 	if err := s.store.UpdateReport(ctx, report); err != nil {
@@ -248,13 +249,26 @@ func (s *Service) buildAreaSummaries(areas []QuestionAreaRow, answers []AnswerRo
 }
 
 // extractOpenFloorTranscript concatenates all answers for the open_floor area.
-func (s *Service) extractOpenFloorTranscript(answers []AnswerRow) string {
+func (s *Service) extractOpenFloorTranscript(answers []AnswerRow, preferredLanguage string) string {
+	useEnglish := strings.EqualFold(strings.TrimSpace(preferredLanguage), "en")
+
 	var transcript string
 	for _, a := range answers {
 		if a.Area != "open_floor" {
 			continue
 		}
-		if a.TranscriptEs == "" {
+
+		answerText := strings.TrimSpace(a.TranscriptEs)
+		if useEnglish {
+			answerText = strings.TrimSpace(a.TranscriptEn)
+			if answerText == "" {
+				answerText = strings.TrimSpace(a.TranscriptEs)
+			}
+		} else if answerText == "" {
+			answerText = strings.TrimSpace(a.TranscriptEn)
+		}
+
+		if answerText == "" {
 			continue
 		}
 		if transcript != "" {
@@ -263,7 +277,7 @@ func (s *Service) extractOpenFloorTranscript(answers []AnswerRow) string {
 		if a.QuestionText != "" {
 			transcript += "Q: " + a.QuestionText + "\n"
 		}
-		transcript += "A: " + a.TranscriptEs
+		transcript += "A: " + answerText
 	}
 	return transcript
 }

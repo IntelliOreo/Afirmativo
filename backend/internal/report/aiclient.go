@@ -149,6 +149,9 @@ func (c *HTTPReportAIClient) GenerateReport(ctx context.Context, areaSummaries [
 	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
 		return nil, fmt.Errorf("parse report AI response: %w", err)
 	}
+	if err := validateReportAIResponse(&result); err != nil {
+		return nil, err
+	}
 
 	slog.Debug("report AI response parsed",
 		"areas_of_clarity_count", len(result.AreasOfClarity),
