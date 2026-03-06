@@ -6,7 +6,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -16,6 +18,64 @@ import (
 	"github.com/afirmativo/backend/internal/config"
 	"github.com/afirmativo/backend/internal/shared"
 )
+
+const aiFailurePayloadExcerptMaxChars = 200
+
+// AIProviderFailure carries structured provider diagnostics for retry logging.
+type AIProviderFailure struct {
+	HTTPStatus     int
+	ErrorType      string
+	ErrorMessage   string
+	PayloadExcerpt string
+}
+
+func (e *AIProviderFailure) Error() string {
+	parts := make([]string, 0, 3)
+	if e.HTTPStatus > 0 {
+		parts = append(parts, fmt.Sprintf("status=%d", e.HTTPStatus))
+	}
+	if strings.TrimSpace(e.ErrorType) != "" {
+		parts = append(parts, "type="+strings.TrimSpace(e.ErrorType))
+	}
+	if strings.TrimSpace(e.ErrorMessage) != "" {
+		parts = append(parts, "message="+strings.TrimSpace(e.ErrorMessage))
+	}
+	if len(parts) == 0 {
+		return "AI provider failure"
+	}
+	return "AI provider failure: " + strings.Join(parts, " ")
+}
+
+func truncateWithPrefix(raw string, max int) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	if max <= 0 || len(trimmed) <= max {
+		return trimmed
+	}
+	return "[truncated] " + trimmed[:max]
+}
+
+func parseClaudeErrorEnvelope(body []byte) (errorType, message string, ok bool) {
+	var env struct {
+		Type  string `json:"type"`
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		return "", "", false
+	}
+
+	errorType = strings.TrimSpace(env.Error.Type)
+	message = strings.TrimSpace(env.Error.Message)
+	if errorType == "" && message == "" {
+		return "", "", false
+	}
+	return errorType, message, true
+}
 
 // AIClientConfig holds everything needed to build and call the AI API.
 type AIClientConfig struct {
@@ -182,41 +242,111 @@ func (c *HTTPAIClient) CallAI(ctx context.Context, turnCtx *AITurnContext) (*AIR
 	start := time.Now()
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("AI API call failed: %w", err)
+		return nil, &AIProviderFailure{
+			ErrorType:    "transport_error",
+			ErrorMessage: err.Error(),
+		}
 	}
 	defer resp.Body.Close()
 
 	slog.Debug("AI API responded", "status", resp.StatusCode, "duration", time.Since(start))
 
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, &AIProviderFailure{
+			HTTPStatus:   resp.StatusCode,
+			ErrorType:    "response_read_error",
+			ErrorMessage: err.Error(),
+		}
+	}
+
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("AI API returned status %d", resp.StatusCode)
+		payloadExcerpt := truncateWithPrefix(string(respBody), aiFailurePayloadExcerptMaxChars)
+		errorType, errorMessage, ok := parseClaudeErrorEnvelope(respBody)
+		if !ok {
+			errorType = "http_error"
+			errorMessage = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		}
+		return nil, &AIProviderFailure{
+			HTTPStatus:     resp.StatusCode,
+			ErrorType:      errorType,
+			ErrorMessage:   errorMessage,
+			PayloadExcerpt: payloadExcerpt,
+		}
 	}
 
 	var apiResp ClaudeAPIResponse
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
-		return nil, fmt.Errorf("decode API response: %w", err)
+	if err := json.Unmarshal(respBody, &apiResp); err != nil {
+		return nil, &AIProviderFailure{
+			HTTPStatus:     resp.StatusCode,
+			ErrorType:      "response_decode_error",
+			ErrorMessage:   err.Error(),
+			PayloadExcerpt: truncateWithPrefix(string(respBody), aiFailurePayloadExcerptMaxChars),
+		}
 	}
 
 	shared.DebugJSON("AI API raw response", apiResp)
+	result, err := parseAIResponse(&apiResp)
+	if err == nil {
+		return result, nil
+	}
 
-	return parseAIResponse(&apiResp)
+	var aiFailure *AIProviderFailure
+	if errors.As(err, &aiFailure) {
+		if aiFailure.HTTPStatus <= 0 {
+			aiFailure.HTTPStatus = resp.StatusCode
+		}
+		if strings.TrimSpace(aiFailure.PayloadExcerpt) == "" {
+			aiFailure.PayloadExcerpt = truncateWithPrefix(string(respBody), aiFailurePayloadExcerptMaxChars)
+		}
+		return nil, aiFailure
+	}
+	return nil, err
 }
 
 // parseAIResponse extracts the AIResponse from a Claude API envelope.
 func parseAIResponse(apiResp *ClaudeAPIResponse) (*AIResponse, error) {
 	if apiResp.StopReason == "max_tokens" {
-		return nil, fmt.Errorf("response truncated: stop_reason=max_tokens")
+		return nil, &AIProviderFailure{
+			HTTPStatus:   http.StatusOK,
+			ErrorType:    "stop_reason_max_tokens",
+			ErrorMessage: "response truncated due to max_tokens",
+		}
+	}
+	if apiResp.StopReason == "refusal" {
+		return nil, &AIProviderFailure{
+			HTTPStatus:   http.StatusOK,
+			ErrorType:    "stop_reason_refusal",
+			ErrorMessage: "model refused to answer",
+		}
 	}
 
 	if len(apiResp.Content) == 0 {
-		return nil, fmt.Errorf("empty content in API response")
+		return nil, &AIProviderFailure{
+			HTTPStatus:   http.StatusOK,
+			ErrorType:    "empty_content",
+			ErrorMessage: "empty content in API response",
+		}
 	}
 
 	jsonStr := apiResp.Content[0].Text
 
 	var result AIResponse
 	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
-		return nil, fmt.Errorf("parse AI response JSON: %w", err)
+		return nil, &AIProviderFailure{
+			HTTPStatus:     http.StatusOK,
+			ErrorType:      "parse_error",
+			ErrorMessage:   err.Error(),
+			PayloadExcerpt: truncateWithPrefix(jsonStr, aiFailurePayloadExcerptMaxChars),
+		}
+	}
+	if err := validateAIResponse(&result); err != nil {
+		return nil, &AIProviderFailure{
+			HTTPStatus:     http.StatusOK,
+			ErrorType:      "invalid_response",
+			ErrorMessage:   err.Error(),
+			PayloadExcerpt: truncateWithPrefix(jsonStr, aiFailurePayloadExcerptMaxChars),
+		}
 	}
 
 	slog.Debug("AI response parsed",

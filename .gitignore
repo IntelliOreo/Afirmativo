@@ -26,6 +26,7 @@ frontend/build/
 .env.test.local
 .env.production.local
 backend/.env.example
+frontend/.env.example
 
 # Database migration tool secrets
 database/.env

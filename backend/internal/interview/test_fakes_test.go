@@ -8,13 +8,13 @@ import (
 )
 
 type fakeInterviewStore struct {
-	upsertAnswerJobFn      func(ctx context.Context, params UpsertAnswerJobParams) (*AnswerJob, error)
-	getAnswerJobFn         func(ctx context.Context, sessionCode, jobID string) (*AnswerJob, error)
-	claimQueuedAnswerJobFn func(ctx context.Context, jobID string) (*AnswerJob, error)
-	listQueuedAnswerJobIDsFn func(ctx context.Context, limit int) ([]string, error)
+	upsertAnswerJobFn               func(ctx context.Context, params UpsertAnswerJobParams) (*AnswerJob, error)
+	getAnswerJobFn                  func(ctx context.Context, sessionCode, jobID string) (*AnswerJob, error)
+	claimQueuedAnswerJobFn          func(ctx context.Context, jobID string) (*AnswerJob, error)
+	listQueuedAnswerJobIDsFn        func(ctx context.Context, limit int) ([]string, error)
 	requeueStaleRunningAnswerJobsFn func(ctx context.Context, staleBefore time.Time) (int64, error)
-	markAnswerJobOKFn      func(ctx context.Context, jobID string, resultPayload []byte) error
-	markAnswerJobFailedFn  func(ctx context.Context, params MarkAnswerJobFailedParams) error
+	markAnswerJobOKFn               func(ctx context.Context, jobID string, resultPayload []byte) error
+	markAnswerJobFailedFn           func(ctx context.Context, params MarkAnswerJobFailedParams) error
 }
 
 type fakeInterviewSessionStore struct {
@@ -53,6 +53,9 @@ func (f *fakeInterviewStore) GetFlowState(context.Context, string) (*FlowState, 
 	return nil, nil
 }
 func (f *fakeInterviewStore) PrepareDisclaimerStep(context.Context, string, string) (*FlowState, error) {
+	return nil, nil
+}
+func (f *fakeInterviewStore) PrepareReadinessStep(context.Context, string, string) (*FlowState, error) {
 	return nil, nil
 }
 func (f *fakeInterviewStore) AdvanceNonCriterionStep(context.Context, AdvanceNonCriterionStepParams) (*FlowState, error) {
@@ -109,6 +112,14 @@ func (f *fakeInterviewStore) MarkAnswerJobFailed(ctx context.Context, params Mar
 	if f.markAnswerJobFailedFn != nil {
 		return f.markAnswerJobFailedFn(ctx, params)
 	}
+	return nil
+}
+
+func (f *fakeInterviewStore) AppendAnswerJobFailedReason(context.Context, string, string) error {
+	return nil
+}
+
+func (f *fakeInterviewStore) IncrementAnswerJobAttempts(context.Context, string) error {
 	return nil
 }
 

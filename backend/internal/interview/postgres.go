@@ -259,6 +259,32 @@ func (s *PostgresStore) PrepareDisclaimerStep(ctx context.Context, sessionCode, 
 	}, nil
 }
 
+// PrepareReadinessStep forces the flow pointer to readiness and sets turn id.
+func (s *PostgresStore) PrepareReadinessStep(ctx context.Context, sessionCode, turnID string) (*FlowState, error) {
+	row := s.pool.QueryRow(ctx,
+		`UPDATE sessions
+		 SET flow_step = 'readiness',
+		     expected_turn_id = $2
+		 WHERE session_code = $1
+		 RETURNING flow_step, COALESCE(expected_turn_id, ''), display_question_number`,
+		sessionCode,
+		turnID,
+	)
+
+	var step string
+	var expectedTurnID string
+	var questionNumber int
+	if err := row.Scan(&step, &expectedTurnID, &questionNumber); err != nil {
+		return nil, fmt.Errorf("prepare readiness step: %w", err)
+	}
+
+	return &FlowState{
+		Step:           FlowStep(step),
+		ExpectedTurnID: expectedTurnID,
+		QuestionNumber: questionNumber,
+	}, nil
+}
+
 // AdvanceNonCriterionStep records an event and advances flow atomically.
 func (s *PostgresStore) AdvanceNonCriterionStep(ctx context.Context, params AdvanceNonCriterionStepParams) (*FlowState, error) {
 	tx, err := s.pool.Begin(ctx)
@@ -703,6 +729,51 @@ func (s *PostgresStore) MarkAnswerJobFailed(ctx context.Context, params MarkAnsw
 	)
 	if err != nil {
 		return fmt.Errorf("mark answer job failed: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrAsyncJobNotFound
+	}
+	return nil
+}
+
+// AppendAnswerJobFailedReason appends one retry reason string to failed_reasons_truncated.
+func (s *PostgresStore) AppendAnswerJobFailedReason(ctx context.Context, jobID, reason string) error {
+	trimmed := strings.TrimSpace(reason)
+	if trimmed == "" {
+		return nil
+	}
+
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE interview_answer_jobs
+		 SET failed_reasons_truncated = CASE
+		     WHEN COALESCE(failed_reasons_truncated, '') = '' THEN $2
+		     ELSE left(failed_reasons_truncated || E'\n' || $2, 4000)
+		 END,
+		     updated_at = now()
+		 WHERE id = $1::uuid`,
+		jobID,
+		trimmed,
+	)
+	if err != nil {
+		return fmt.Errorf("append answer job failed reason: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrAsyncJobNotFound
+	}
+	return nil
+}
+
+// IncrementAnswerJobAttempts increments attempts counter without changing status.
+func (s *PostgresStore) IncrementAnswerJobAttempts(ctx context.Context, jobID string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE interview_answer_jobs
+		 SET attempts = attempts + 1,
+		     updated_at = now()
+		 WHERE id = $1::uuid`,
+		jobID,
+	)
+	if err != nil {
+		return fmt.Errorf("increment answer job attempts: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrAsyncJobNotFound

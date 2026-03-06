@@ -343,6 +343,12 @@ function InterviewPageContent() {
         }
 
         clearPendingAnswerJob(code);
+        if (data.status === "canceled") {
+          throw buildCodedError(
+            data.errorMessage || "Processing was canceled. Reload to continue.",
+            data.errorCode || "AI_RETRY_EXHAUSTED",
+          );
+        }
         if (data.status === "conflict") {
           throw buildCodedError(data.errorMessage || "Turn is stale or out of order", data.errorCode || "TURN_CONFLICT");
         }

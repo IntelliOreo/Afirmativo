@@ -30,6 +30,14 @@ const (
 	defaultAsyncAnswerStaleRunningAge = 3 * time.Minute
 )
 
+var aiRetryBackoffs = []time.Duration{
+	1 * time.Second,
+	3 * time.Second,
+	7 * time.Second,
+}
+
+type asyncAnswerJobIDCtxKey struct{}
+
 // SessionStarter transitions a session to 'interviewing'.
 type SessionStarter interface {
 	StartSession(ctx context.Context, sessionCode, preferredLanguage string) (*session.Session, error)
@@ -286,10 +294,14 @@ func (s *Service) StartInterview(ctx context.Context, sessionCode, preferredLang
 	if err != nil {
 		return nil, fmt.Errorf("get answer count: %w", err)
 	}
+	currentFlow, err := s.store.GetFlowState(dbCtx, sessionCode)
+	if err != nil {
+		return nil, fmt.Errorf("get flow state: %w", err)
+	}
 
 	// Resume only after there is actual prior progress. This avoids showing
 	// "Welcome back" on first entry if the start endpoint is called twice.
-	resuming := answersCount > 0
+	resuming := answersCount > 0 || currentFlow.Step != FlowStepDisclaimer
 
 	// Pre-create all 8 question area rows (idempotent — ON CONFLICT DO NOTHING).
 	for _, area := range s.areaConfigs {
@@ -304,27 +316,54 @@ func (s *Service) StartInterview(ctx context.Context, sessionCode, preferredLang
 		return nil, fmt.Errorf("set first area in_progress: %w", err)
 	}
 
+	activeArea := firstArea
+	inProgressArea, err := s.store.GetInProgressArea(dbCtx, sessionCode)
+	if err != nil {
+		return nil, fmt.Errorf("get in-progress area: %w", err)
+	}
+	if inProgressArea != nil && strings.TrimSpace(inProgressArea.Area) != "" {
+		activeArea = inProgressArea.Area
+	}
+
 	turnID, err := newTurnID()
 	if err != nil {
 		return nil, fmt.Errorf("new turn id: %w", err)
 	}
-	flowState, err := s.store.PrepareDisclaimerStep(dbCtx, sessionCode, turnID)
-	if err != nil {
-		return nil, fmt.Errorf("prepare disclaimer step: %w", err)
-	}
-
-	q := OpeningDisclaimerQuestion(
-		firstArea,
-		s.openingTextEs,
-		s.openingTextEn,
-		flowState.QuestionNumber,
-		turnID,
+	var (
+		flowState *FlowState
+		q         *Question
 	)
+	if resuming {
+		flowState, err = s.store.PrepareReadinessStep(dbCtx, sessionCode, turnID)
+		if err != nil {
+			return nil, fmt.Errorf("prepare readiness step: %w", err)
+		}
+		resumeQuestion := ResumeQuestion(activeArea)
+		q = ReadinessQuestion(
+			activeArea,
+			resumeQuestion.TextEs,
+			resumeQuestion.TextEn,
+			flowState.QuestionNumber,
+			turnID,
+		)
+	} else {
+		flowState, err = s.store.PrepareDisclaimerStep(dbCtx, sessionCode, turnID)
+		if err != nil {
+			return nil, fmt.Errorf("prepare disclaimer step: %w", err)
+		}
+		q = OpeningDisclaimerQuestion(
+			activeArea,
+			s.openingTextEs,
+			s.openingTextEn,
+			flowState.QuestionNumber,
+			turnID,
+		)
+	}
 
 	return &StartResult{
 		Question:        q,
 		TimerRemainingS: remaining,
-		Area:            firstArea,
+		Area:            activeArea,
 		Resuming:        resuming,
 		Language:        effectiveLanguage,
 	}, nil
@@ -335,6 +374,7 @@ type AnswerResult struct {
 	Done            bool
 	NextQuestion    *Question
 	TimerRemainingS int
+	Substituted     bool
 }
 
 // SubmitAnswerAsyncResult is returned when an async answer job is accepted.
@@ -504,7 +544,8 @@ func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
 		"attempts", job.Attempts,
 	)
 
-	answerResult, err := s.SubmitAnswer(ctx, job.SessionCode, job.AnswerText, job.QuestionText, job.TurnID)
+	jobCtx := context.WithValue(ctx, asyncAnswerJobIDCtxKey{}, job.ID)
+	answerResult, err := s.SubmitAnswer(jobCtx, job.SessionCode, job.AnswerText, job.QuestionText, job.TurnID)
 	if err != nil {
 		status := AsyncAnswerJobFailed
 		errorCode := "INTERNAL_ERROR"
@@ -516,6 +557,10 @@ func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
 		} else if errors.Is(err, ErrInvalidFlow) {
 			errorCode = "FLOW_INVALID"
 			errorMessage = "Interview flow is not in a valid state"
+		} else if errors.Is(err, ErrAIRetryExhausted) {
+			status = AsyncAnswerJobCanceled
+			errorCode = "AI_RETRY_EXHAUSTED"
+			errorMessage = "AI processing was unstable after retries. Reload to continue."
 		}
 
 		slog.Warn("async answer job processing failed",
@@ -551,6 +596,34 @@ func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
 				"job_id", job.ID,
 				"status", status,
 				"error_code", errorCode,
+			)
+		}
+		return
+	}
+
+	if answerResult.Substituted {
+		cancelCtx, cancelCancel := context.WithTimeout(ctx, dbTimeout)
+		markErr := s.store.MarkAnswerJobFailed(cancelCtx, MarkAnswerJobFailedParams{
+			JobID:        job.ID,
+			Status:       AsyncAnswerJobCanceled,
+			ErrorCode:    "AI_RETRY_EXHAUSTED",
+			ErrorMessage: "AI retries exhausted and fallback substitution was applied. Reload to continue.",
+		})
+		cancelCancel()
+		if markErr != nil {
+			slog.Error("failed to mark async answer job as canceled",
+				"session_code", job.SessionCode,
+				"client_request_id", job.ClientRequestID,
+				"job_id", job.ID,
+				"error", markErr,
+			)
+		} else {
+			slog.Info("async answer job marked terminal",
+				"session_code", job.SessionCode,
+				"client_request_id", job.ClientRequestID,
+				"job_id", job.ID,
+				"status", AsyncAnswerJobCanceled,
+				"error_code", "AI_RETRY_EXHAUSTED",
 			)
 		}
 		return
@@ -620,6 +693,92 @@ func toAnswerJobPayload(result *AnswerResult) *answerJobPayload {
 		}
 	}
 	return payload
+}
+
+func asyncAnswerJobIDFromContext(ctx context.Context) string {
+	jobID, _ := ctx.Value(asyncAnswerJobIDCtxKey{}).(string)
+	return strings.TrimSpace(jobID)
+}
+
+func formatAIFailureReason(attempt int, err error) string {
+	var providerFailure *AIProviderFailure
+	if errors.As(err, &providerFailure) {
+		return fmt.Sprintf(
+			"attempt=%d http_status=%d error_type=%s error_message=%s payload_excerpt=%s",
+			attempt,
+			providerFailure.HTTPStatus,
+			strings.TrimSpace(providerFailure.ErrorType),
+			truncateWithPrefix(providerFailure.ErrorMessage, aiFailurePayloadExcerptMaxChars),
+			providerFailure.PayloadExcerpt,
+		)
+	}
+	return fmt.Sprintf(
+		"attempt=%d http_status=0 error_type=unstructured_error error_message=%s",
+		attempt,
+		truncateWithPrefix(err.Error(), aiFailurePayloadExcerptMaxChars),
+	)
+}
+
+func (s *Service) recordAIFailureReason(ctx context.Context, reason string, incrementAttempts bool) {
+	jobID := asyncAnswerJobIDFromContext(ctx)
+	if jobID == "" {
+		return
+	}
+
+	appendCtx, appendCancel := context.WithTimeout(ctx, dbTimeout)
+	appendErr := s.store.AppendAnswerJobFailedReason(appendCtx, jobID, reason)
+	appendCancel()
+	if appendErr != nil {
+		slog.Warn("failed to append async answer retry reason", "job_id", jobID, "error", appendErr)
+	}
+
+	if !incrementAttempts {
+		return
+	}
+
+	incCtx, incCancel := context.WithTimeout(ctx, dbTimeout)
+	incErr := s.store.IncrementAnswerJobAttempts(incCtx, jobID)
+	incCancel()
+	if incErr != nil {
+		slog.Warn("failed to increment async answer attempts for retry", "job_id", jobID, "error", incErr)
+	}
+}
+
+func (s *Service) callAIWithRetry(ctx context.Context, turnCtx *AITurnContext) (*AIResponse, error) {
+	maxAttempts := len(aiRetryBackoffs) + 1
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		aiResult, err := s.aiClient.CallAI(ctx, turnCtx)
+		if err == nil {
+			return aiResult, nil
+		}
+
+		reason := formatAIFailureReason(attempt, err)
+		retrying := attempt < maxAttempts
+		s.recordAIFailureReason(ctx, reason, retrying)
+
+		if !retrying {
+			return nil, fmt.Errorf("%w: %s", ErrAIRetryExhausted, reason)
+		}
+
+		delay := aiRetryBackoffs[attempt-1]
+		slog.Warn("AI call failed; retrying",
+			"area", turnCtx.CurrentAreaSlug,
+			"attempt", attempt,
+			"max_attempts", maxAttempts,
+			"retry_in", delay,
+			"error", err,
+		)
+
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, fmt.Errorf("AI retry aborted: %w", ctx.Err())
+		case <-timer.C:
+		}
+	}
+
+	return nil, fmt.Errorf("%w: exhausted", ErrAIRetryExhausted)
 }
 
 // SubmitAnswer processes one answer according to the explicit flow step.
@@ -765,12 +924,18 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 		}
 
 		slog.Debug("calling AI for first criterion question", "session", sessionCode, "area", currentArea.Area)
-		aiResult, err := s.aiClient.CallAI(ctx, turnCtx)
+		substituted := false
+		aiResult, err := s.callAIWithRetry(ctx, turnCtx)
 		if err != nil {
-			slog.Warn("AI API error on first criterion question, using fallback", "error", err, "area", currentArea.Area)
+			if !errors.Is(err, ErrAIRetryExhausted) {
+				return nil, err
+			}
+			substituted = true
+			slog.Warn("AI retries exhausted on first criterion question, using fallback", "error", err, "area", currentArea.Area)
 		} else if candidate := strings.TrimSpace(aiResult.NextQuestion); candidate != "" {
 			nextQuestion = candidate
 		} else {
+			substituted = true
 			slog.Warn("AI returned empty first criterion question, using fallback", "session", sessionCode, "area", currentArea.Area)
 		}
 
@@ -786,6 +951,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 				TotalQuestions: EstimatedTotalQuestions,
 			},
 			TimerRemainingS: timeRemainingS,
+			Substituted:     substituted,
 		}, nil
 
 	case FlowStepCriterion:
@@ -828,9 +994,14 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 		}
 
 		slog.Debug("calling AI for criterion turn", "session", sessionCode, "area", currentArea.Area)
-		aiResult, err := s.aiClient.CallAI(ctx, turnCtx)
+		substituted := false
+		aiResult, err := s.callAIWithRetry(ctx, turnCtx)
 		if err != nil {
-			slog.Warn("AI API error, using fallback evaluation", "error", err, "area", currentArea.Area)
+			if !errors.Is(err, ErrAIRetryExhausted) {
+				return nil, err
+			}
+			substituted = true
+			slog.Warn("AI retries exhausted, using fallback evaluation", "error", err, "area", currentArea.Area)
 			aiResult = &AIResponse{
 				Evaluation:   s.fallbackEvaluation(areaCfg.ID),
 				NextQuestion: s.fallbackQuestionForArea(currentArea.Area),
@@ -847,6 +1018,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 				)
 			}
 			aiResult.Evaluation = s.fallbackEvaluation(areaCfg.ID)
+			substituted = true
 		}
 
 		nextTurnID, err := newTurnID()
@@ -946,18 +1118,24 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 					}
 
 					slog.Debug("calling AI for next criterion opening question", "session", sessionCode, "area", result.NextArea)
-					nextAreaAIResult, err := s.aiClient.CallAI(ctx, openingTurnCtx)
+					nextAreaAIResult, err := s.callAIWithRetry(ctx, openingTurnCtx)
 					if err != nil {
-						slog.Warn("AI API error on next criterion opening question, using fallback", "error", err, "area", result.NextArea)
+						if !errors.Is(err, ErrAIRetryExhausted) {
+							return nil, err
+						}
+						substituted = true
+						slog.Warn("AI retries exhausted on next criterion opening question, using fallback", "error", err, "area", result.NextArea)
 					} else if candidate := strings.TrimSpace(nextAreaAIResult.NextQuestion); candidate != "" {
 						nextQuestion = candidate
 					} else {
+						substituted = true
 						slog.Warn("AI returned empty next criterion opening question, using fallback", "session", sessionCode, "area", result.NextArea)
 					}
 				}
 			}
 		}
 		if nextQuestion == "" {
+			substituted = true
 			slog.Warn("next question is empty after AI processing, using fallback", "session", sessionCode, "area", result.NextArea)
 			nextQuestion = s.fallbackQuestionForArea(result.NextArea)
 		}
@@ -974,6 +1152,7 @@ func (s *Service) SubmitAnswer(ctx context.Context, sessionCode, answerText, que
 				TotalQuestions: EstimatedTotalQuestions,
 			},
 			TimerRemainingS: timeRemainingS,
+			Substituted:     substituted,
 		}, nil
 	default:
 		return nil, ErrInvalidFlow

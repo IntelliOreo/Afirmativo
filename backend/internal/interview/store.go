@@ -51,6 +51,9 @@ type Store interface {
 	// PrepareDisclaimerStep sets flow_step=disclaimer and assigns the expected turn id.
 	PrepareDisclaimerStep(ctx context.Context, sessionCode, turnID string) (*FlowState, error)
 
+	// PrepareReadinessStep sets flow_step=readiness and assigns the expected turn id.
+	PrepareReadinessStep(ctx context.Context, sessionCode, turnID string) (*FlowState, error)
+
 	// AdvanceNonCriterionStep records a non-criterion event and advances flow state atomically.
 	AdvanceNonCriterionStep(ctx context.Context, params AdvanceNonCriterionStepParams) (*FlowState, error)
 
@@ -80,6 +83,12 @@ type Store interface {
 
 	// MarkAnswerJobFailed stores terminal failure or conflict state.
 	MarkAnswerJobFailed(ctx context.Context, params MarkAnswerJobFailedParams) error
+
+	// AppendAnswerJobFailedReason appends one truncated retry failure reason string.
+	AppendAnswerJobFailedReason(ctx context.Context, jobID, reason string) error
+
+	// IncrementAnswerJobAttempts increments attempts without changing status.
+	IncrementAnswerJobAttempts(ctx context.Context, jobID string) error
 }
 
 // SaveAnswerParams holds the inputs for saving an answer.

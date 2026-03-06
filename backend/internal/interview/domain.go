@@ -57,6 +57,7 @@ var (
 	ErrInvalidFlow         = errors.New("invalid flow state")
 	ErrAsyncJobNotFound    = errors.New("async answer job not found")
 	ErrIdempotencyConflict = errors.New("idempotency key reused with different payload")
+	ErrAIRetryExhausted    = errors.New("ai retry exhausted")
 )
 
 type AsyncAnswerJobStatus string
