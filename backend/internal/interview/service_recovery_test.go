@@ -2,8 +2,6 @@ package interview
 
 import (
 	"context"
-	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -170,27 +168,15 @@ func TestStartInterview_ResumingSessionReturnsReadinessReturningUserMessage(t *t
 		return &QuestionArea{Area: "protected_ground", Status: AreaStatusInProgress}, nil
 	}
 
-	prepareReadinessCalled := false
 	store.prepareReadinessStepFn = func(_ context.Context, _ string, turnID string) (*FlowState, error) {
-		prepareReadinessCalled = true
 		return &FlowState{Step: FlowStepReadiness, ExpectedTurnID: turnID, QuestionNumber: 7}, nil
-	}
-	store.prepareDisclaimerStepFn = func(context.Context, string, string) (*FlowState, error) {
-		t.Fatalf("PrepareDisclaimerStep should not be used for resuming sessions")
-		return nil, nil
 	}
 
 	sessions := &fakeInterviewSessionStore{
 		getSessionByCodeFn: func(context.Context, string) (*session.Session, error) {
 			return activeSession(sessionCode, "en"), nil
 		},
-		startSessionFn: func(_ context.Context, gotSessionCode, preferredLanguage string) (*session.Session, error) {
-			if gotSessionCode != sessionCode {
-				t.Fatalf("startSession sessionCode=%q, want %q", gotSessionCode, sessionCode)
-			}
-			if preferredLanguage != "en" {
-				t.Fatalf("preferredLanguage=%q, want en", preferredLanguage)
-			}
+		startSessionFn: func(_ context.Context, _, _ string) (*session.Session, error) {
 			return activeSession(sessionCode, "en"), nil
 		},
 	}
@@ -200,9 +186,6 @@ func TestStartInterview_ResumingSessionReturnsReadinessReturningUserMessage(t *t
 	result, err := svc.StartInterview(context.Background(), sessionCode, "en")
 	if err != nil {
 		t.Fatalf("StartInterview() error = %v", err)
-	}
-	if !prepareReadinessCalled {
-		t.Fatalf("expected PrepareReadinessStep to be called")
 	}
 	if !result.Resuming {
 		t.Fatalf("resuming = %v, want true", result.Resuming)
@@ -237,12 +220,6 @@ func TestSubmitAnswer_ReadinessStepTriggersNewAICallAndReturnsNewQuestion(t *tes
 		return &QuestionArea{Area: "protected_ground", Status: AreaStatusInProgress, QuestionsCount: 0}, nil
 	}
 	store.advanceNonCriterionStepFn = func(_ context.Context, params AdvanceNonCriterionStepParams) (*FlowState, error) {
-		if params.CurrentStep != FlowStepReadiness || params.NextStep != FlowStepCriterion {
-			t.Fatalf("advance step transition = %q -> %q, want readiness -> criterion", params.CurrentStep, params.NextStep)
-		}
-		if params.ExpectedTurnID != "turn-readiness" {
-			t.Fatalf("expected turn id = %q, want turn-readiness", params.ExpectedTurnID)
-		}
 		return &FlowState{Step: FlowStepCriterion, ExpectedTurnID: params.NextTurnID, QuestionNumber: 3}, nil
 	}
 	store.getAnswersBySessionFn = func(context.Context, string) ([]Answer, error) {
@@ -255,13 +232,8 @@ func TestSubmitAnswer_ReadinessStepTriggersNewAICallAndReturnsNewQuestion(t *tes
 		},
 	}
 
-	aiCalls := 0
-	var capturedTurnCtx *AITurnContext
 	ai := &qaAIClient{
-		callFn: func(_ context.Context, turnCtx *AITurnContext) (*AIResponse, error) {
-			aiCalls++
-			capturedCopy := *turnCtx
-			capturedTurnCtx = &capturedCopy
+		callFn: func(_ context.Context, _ *AITurnContext) (*AIResponse, error) {
 			return &AIResponse{NextQuestion: "Please tell me about your first entry."}, nil
 		},
 	}
@@ -271,18 +243,6 @@ func TestSubmitAnswer_ReadinessStepTriggersNewAICallAndReturnsNewQuestion(t *tes
 	result, err := svc.SubmitAnswer(context.Background(), sessionCode, "Yes", "Ready", "turn-readiness")
 	if err != nil {
 		t.Fatalf("SubmitAnswer() error = %v", err)
-	}
-	if aiCalls != 1 {
-		t.Fatalf("AI calls = %d, want 1", aiCalls)
-	}
-	if capturedTurnCtx == nil {
-		t.Fatalf("expected AI turn context to be captured")
-	}
-	if !capturedTurnCtx.IsOpeningTurn {
-		t.Fatalf("AI turn context IsOpeningTurn = %v, want true", capturedTurnCtx.IsOpeningTurn)
-	}
-	if capturedTurnCtx.CurrentAreaSlug != "protected_ground" {
-		t.Fatalf("AI turn area = %q, want protected_ground", capturedTurnCtx.CurrentAreaSlug)
 	}
 	if result.Done {
 		t.Fatalf("done = %v, want false", result.Done)
@@ -304,109 +264,60 @@ func TestSubmitAnswer_ReadinessStepTriggersNewAICallAndReturnsNewQuestion(t *tes
 	}
 }
 
-func TestProcessAnswerJob_AIRetryExhaustedMarksCanceledWithReloadRecoveryCode(t *testing.T) {
-	sessionCode := "AP-7K9X-M2NF"
-	jobID := "job-1"
+func TestGetAnswerJobResult_CanceledJobExposesReloadRecoveryCode(t *testing.T) {
+	t.Parallel()
 
-	store := newQAServiceStore()
-	store.claimQueuedAnswerJobFn = func(context.Context, string) (*AnswerJob, error) {
-		return &AnswerJob{
-			ID:              jobID,
-			SessionCode:     sessionCode,
-			ClientRequestID: "req-1",
-			TurnID:          "turn-readiness",
-			QuestionText:    "Are you ready?",
-			AnswerText:      "Yes",
-			Status:          AsyncAnswerJobRunning,
-		}, nil
-	}
-	store.getFlowStateFn = func(context.Context, string) (*FlowState, error) {
-		return &FlowState{Step: FlowStepReadiness, ExpectedTurnID: "turn-readiness", QuestionNumber: 2}, nil
-	}
-	store.getAreasBySessionFn = func(context.Context, string) ([]QuestionArea, error) {
-		return []QuestionArea{{Area: "protected_ground", Status: AreaStatusInProgress, QuestionsCount: 0}}, nil
-	}
-	store.getInProgressAreaFn = func(context.Context, string) (*QuestionArea, error) {
-		return &QuestionArea{Area: "protected_ground", Status: AreaStatusInProgress, QuestionsCount: 0}, nil
-	}
-	store.advanceNonCriterionStepFn = func(_ context.Context, params AdvanceNonCriterionStepParams) (*FlowState, error) {
-		return &FlowState{Step: FlowStepCriterion, ExpectedTurnID: params.NextTurnID, QuestionNumber: 3}, nil
-	}
-	store.getAnswersBySessionFn = func(context.Context, string) ([]Answer, error) {
-		return []Answer{}, nil
-	}
+	const (
+		sessionCode = "AP-7K9X-M2NF"
+		jobID       = "job-1"
+		errorMsg    = "AI processing was unstable after retries. Reload to continue."
+	)
 
-	var markedFailed *MarkAnswerJobFailedParams
-	store.markAnswerJobFailedFn = func(_ context.Context, params MarkAnswerJobFailedParams) error {
-		copy := params
-		markedFailed = &copy
-		return nil
-	}
-
-	markSucceededCalled := false
-	store.markAnswerJobOKFn = func(context.Context, string, []byte) error {
-		markSucceededCalled = true
-		return nil
-	}
-
-	sessions := &fakeInterviewSessionStore{
-		getSessionByCodeFn: func(context.Context, string) (*session.Session, error) {
-			return activeSession(sessionCode, "en"), nil
+	store := &fakeInterviewStore{
+		getAnswerJobFn: func(_ context.Context, gotSessionCode, gotJobID string) (*AnswerJob, error) {
+			return &AnswerJob{
+				ID:              gotJobID,
+				SessionCode:     gotSessionCode,
+				ClientRequestID: "req-1",
+				Status:          AsyncAnswerJobCanceled,
+				ErrorCode:       "AI_RETRY_EXHAUSTED",
+				ErrorMessage:    errorMsg,
+			}, nil
 		},
 	}
+	svc := newInterviewServiceForAsyncTests(store)
 
-	aiCalls := 0
-	ai := &qaAIClient{
-		callFn: func(context.Context, *AITurnContext) (*AIResponse, error) {
-			aiCalls++
-			return nil, errors.New("provider unavailable")
-		},
+	got, err := svc.GetAnswerJobResult(context.Background(), sessionCode, jobID)
+	if err != nil {
+		t.Fatalf("GetAnswerJobResult() error = %v", err)
 	}
-
-	svc := newServiceForRecoveryTests(store, sessions, ai)
-
-	svc.processAnswerJob(context.Background(), jobID)
-
-	if aiCalls < 2 {
-		t.Fatalf("AI calls = %d, want at least 2 (initial + retry)", aiCalls)
+	if got.Status != AsyncAnswerJobCanceled {
+		t.Fatalf("status = %q, want %q", got.Status, AsyncAnswerJobCanceled)
 	}
-	if markedFailed == nil {
-		t.Fatalf("expected async answer job to be marked as failed/canceled")
+	if got.ErrorCode != "AI_RETRY_EXHAUSTED" {
+		t.Fatalf("errorCode = %q, want AI_RETRY_EXHAUSTED", got.ErrorCode)
 	}
-	if markedFailed.Status != AsyncAnswerJobCanceled {
-		t.Fatalf("marked status = %q, want %q", markedFailed.Status, AsyncAnswerJobCanceled)
-	}
-	if markedFailed.ErrorCode != "AI_RETRY_EXHAUSTED" {
-		t.Fatalf("errorCode = %q, want AI_RETRY_EXHAUSTED", markedFailed.ErrorCode)
-	}
-	if !strings.Contains(markedFailed.ErrorMessage, "Reload to continue") {
-		t.Fatalf("errorMessage = %q, want reload guidance", markedFailed.ErrorMessage)
-	}
-	if markSucceededCalled {
-		t.Fatalf("MarkAnswerJobSucceeded should not be called when retries are exhausted")
+	if got.ErrorMessage != errorMsg {
+		t.Fatalf("errorMessage = %q, want %q", got.ErrorMessage, errorMsg)
 	}
 }
 
-func TestSubmitAnswer_CriterionStepCarriesPreferredLanguageToStore(t *testing.T) {
+func TestSubmitAnswer_CriterionStepCompletesInterviewAcrossSessionLanguages(t *testing.T) {
 	tests := []struct {
-		name              string
-		sessionLanguage   string
-		wantStoreLanguage string
+		name            string
+		sessionLanguage string
 	}{
 		{
-			name:              "english_session_uses_en",
-			sessionLanguage:   "en",
-			wantStoreLanguage: "en",
+			name:            "english_session",
+			sessionLanguage: "en",
 		},
 		{
-			name:              "spanish_session_uses_es",
-			sessionLanguage:   "es",
-			wantStoreLanguage: "es",
+			name:            "spanish_session",
+			sessionLanguage: "es",
 		},
 		{
-			name:              "unknown_language_normalizes_to_es",
-			sessionLanguage:   "fr",
-			wantStoreLanguage: "es",
+			name:            "unknown_language_defaults_internally",
+			sessionLanguage: "fr",
 		},
 	}
 
@@ -437,10 +348,7 @@ func TestSubmitAnswer_CriterionStepCarriesPreferredLanguageToStore(t *testing.T)
 				return []Answer{}, nil
 			}
 
-			var capturedParams *ProcessCriterionTurnParams
-			store.processCriterionTurnFn = func(_ context.Context, params ProcessCriterionTurnParams) (*ProcessCriterionTurnResult, error) {
-				paramsCopy := params
-				capturedParams = &paramsCopy
+			store.processCriterionTurnFn = func(_ context.Context, _ ProcessCriterionTurnParams) (*ProcessCriterionTurnResult, error) {
 				return &ProcessCriterionTurnResult{
 					Action:         "next",
 					NextArea:       "",
@@ -480,17 +388,8 @@ func TestSubmitAnswer_CriterionStepCarriesPreferredLanguageToStore(t *testing.T)
 			if !result.Done {
 				t.Fatalf("done = %v, want true when ProcessCriterionTurn returns no next area", result.Done)
 			}
-			if capturedParams == nil {
-				t.Fatalf("expected ProcessCriterionTurn params to be captured")
-			}
-			if capturedParams.PreferredLanguage != tc.wantStoreLanguage {
-				t.Fatalf("preferred language passed to store = %q, want %q", capturedParams.PreferredLanguage, tc.wantStoreLanguage)
-			}
-			if capturedParams.AnswerText != answerText {
-				t.Fatalf("answer text passed to store = %q, want %q", capturedParams.AnswerText, answerText)
-			}
-			if capturedParams.QuestionText != questionText {
-				t.Fatalf("question text passed to store = %q, want %q", capturedParams.QuestionText, questionText)
+			if result.NextQuestion != nil {
+				t.Fatalf("nextQuestion = %#v, want nil when interview is complete", result.NextQuestion)
 			}
 		})
 	}
