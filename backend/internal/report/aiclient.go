@@ -152,11 +152,8 @@ func (c *HTTPReportAIClient) GenerateReport(ctx context.Context, areaSummaries [
 		shared.DebugJSONText("report AI raw response", jsonStr)
 	}
 
-	var result ReportAIResponse
-	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
-		return nil, fmt.Errorf("parse report AI response: %w", err)
-	}
-	if err := validateReportAIResponse(&result); err != nil {
+	result, err := parseReportAIResponseJSON(jsonStr)
+	if err != nil {
 		return nil, err
 	}
 
@@ -177,7 +174,7 @@ func (c *HTTPReportAIClient) GenerateReport(ctx context.Context, areaSummaries [
 		"cache_read_input_tokens", apiResp.Usage.CacheReadInputTokens,
 	)
 
-	return &result, nil
+	return result, nil
 }
 
 type reportUserPromptData struct {
@@ -250,38 +247,49 @@ func buildReportOutputSchema() map[string]interface{} {
 						"type":        "string",
 						"description": "Full preparation feedback summary in Spanish. Same content as content_en but translated to Spanish.",
 					},
-						"areas_of_clarity": map[string]interface{}{
-							"type":        "array",
-							"items":       map[string]interface{}{"type": "string"},
-							"description": "Array of 'areas of clarity' bullet points (in English). Keep each point specific and actionable.",
-						},
-						"areas_of_clarity_es": map[string]interface{}{
-							"type":        "array",
-							"items":       map[string]interface{}{"type": "string"},
-							"description": "Spanish translation of areas_of_clarity. Keep each point aligned with the English version.",
-						},
-						"areas_to_develop_further": map[string]interface{}{
-							"type":        "array",
-							"items":       map[string]interface{}{"type": "string"},
-							"description": "Array of 'areas to develop further' bullet points (in English). Each should identify a gap and suggest how to address it.",
-						},
-						"areas_to_develop_further_es": map[string]interface{}{
-							"type":        "array",
-							"items":       map[string]interface{}{"type": "string"},
-							"description": "Spanish translation of areas_to_develop_further. Keep each point aligned with the English version.",
-						},
-						"recommendation": map[string]interface{}{
-							"type":        "string",
-							"description": "Overall recommendation (in English). Focus on preparation quality and whether key elements were articulated clearly.",
-						},
-						"recommendation_es": map[string]interface{}{
-							"type":        "string",
-							"description": "Spanish translation of recommendation. Keep the same meaning and tone as the English version.",
-						},
+					"areas_of_clarity": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Array of 'areas of clarity' bullet points (in English). Keep each point specific and actionable.",
 					},
-					"required":             []string{"content_en", "content_es", "areas_of_clarity", "areas_of_clarity_es", "areas_to_develop_further", "areas_to_develop_further_es", "recommendation", "recommendation_es"},
-					"additionalProperties": false,
+					"areas_of_clarity_es": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Spanish translation of areas_of_clarity. Keep each point aligned with the English version.",
+					},
+					"areas_to_develop_further": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Array of 'areas to develop further' bullet points (in English). Each should identify a gap and suggest how to address it.",
+					},
+					"areas_to_develop_further_es": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Spanish translation of areas_to_develop_further. Keep each point aligned with the English version.",
+					},
+					"recommendation": map[string]interface{}{
+						"type":        "string",
+						"description": "Overall recommendation (in English). Focus on preparation quality and whether key elements were articulated clearly.",
+					},
+					"recommendation_es": map[string]interface{}{
+						"type":        "string",
+						"description": "Spanish translation of recommendation. Keep the same meaning and tone as the English version.",
+					},
 				},
+				"required":             []string{"content_en", "content_es", "areas_of_clarity", "areas_of_clarity_es", "areas_to_develop_further", "areas_to_develop_further_es", "recommendation", "recommendation_es"},
+				"additionalProperties": false,
 			},
+		},
 	}
+}
+
+func parseReportAIResponseJSON(jsonStr string) (*ReportAIResponse, error) {
+	var result ReportAIResponse
+	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
+		return nil, fmt.Errorf("parse report AI response: %w", err)
+	}
+	if err := validateReportAIResponse(&result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }

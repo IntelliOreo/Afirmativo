@@ -104,7 +104,11 @@ func main() {
 
 	reportStore := report.NewPostgresStore(pool)
 
-	aiClient, reportAIClient := createAIClients(cfg)
+	aiClient, reportAIClient, err := createAIClients(cfg)
+	if err != nil {
+		slog.Error("failed to initialize AI clients", "error", err)
+		os.Exit(1)
+	}
 
 	interviewSvc := interview.NewService(
 		sessionStore,

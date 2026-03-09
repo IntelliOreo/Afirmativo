@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 )
 
 // AreaConfig holds the rubric and fallback for a single interview criterion.
@@ -76,6 +77,12 @@ type Config struct {
 	AIReportPrompt                          string       // System prompt for report generation AI call
 	UnstructuredReportOutputFormatPrompt    string       // Prompt instructions for unstructured providers to return report JSON
 	AIReportMaxTokens                       int          // Max tokens for report AI call (default 2048)
+	VertexAIAuthMode                        string       // "api_key" (default) or "adc"
+	VertexAIAPIKey                          string       // Google Cloud API key for Vertex API-key auth
+	VertexAIProjectID                       string       // GCP project used for Vertex standard endpoints
+	VertexAILocation                        string       // Vertex location (default "global")
+	VertexAIExplicitCacheEnabled            bool         // Enables explicit cachedContents usage when true
+	VertexAIContextCacheTTLSeconds          int          // Explicit cachedContents TTL in seconds
 	AreaConfigs                             []AreaConfig // Per-area rubrics loaded from AI_AREA_CONFIG JSON
 	InterviewOpeningDisclaimerEn            string       // Opening disclaimer shown on interview/start in English
 	InterviewOpeningDisclaimerEs            string       // Opening disclaimer shown on interview/start in Spanish
@@ -128,11 +135,19 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	vertexCacheTTLSeconds, err := envIntMin("VERTEX_AI_CONTEXT_CACHE_TTL_SECONDS", 300, 1)
+	if err != nil {
+		return Config{}, err
+	}
 	httpReadTimeout, err := envInt("HTTP_READ_TIMEOUT_SECONDS", 10)
 	if err != nil {
 		return Config{}, err
 	}
 	httpWriteTimeout, err := envInt("HTTP_WRITE_TIMEOUT_SECONDS", 30)
+	if err != nil {
+		return Config{}, err
+	}
+	vertexExplicitCacheEnabled, err := envBool("VERTEX_AI_EXPLICIT_CACHE_ENABLED", true)
 	if err != nil {
 		return Config{}, err
 	}
@@ -278,6 +293,12 @@ func Load() (Config, error) {
 		AIReportPrompt:                          os.Getenv("AI_REPORT_PROMPT"),
 		UnstructuredReportOutputFormatPrompt:    os.Getenv("UNSTRUCTURED_REPORT_OUTPUT_FORMAT_PROMPT"),
 		AIReportMaxTokens:                       reportMaxTokens,
+		VertexAIAuthMode:                        envOr("VERTEX_AI_AUTH_MODE", "api_key"),
+		VertexAIAPIKey:                          os.Getenv("VERTEX_AI_API_KEY"),
+		VertexAIProjectID:                       os.Getenv("VERTEX_AI_PROJECT_ID"),
+		VertexAILocation:                        envOr("VERTEX_AI_LOCATION", "global"),
+		VertexAIExplicitCacheEnabled:            vertexExplicitCacheEnabled,
+		VertexAIContextCacheTTLSeconds:          vertexCacheTTLSeconds,
 		InterviewOpeningDisclaimerEn:            os.Getenv("INTERVIEW_OPENING_DISCLAIMER_EN"),
 		InterviewOpeningDisclaimerEs:            os.Getenv("INTERVIEW_OPENING_DISCLAIMER_ES"),
 		InterviewReadinessQuestionEn:            os.Getenv("INTERVIEW_READINESS_QUESTION_EN"),
@@ -296,12 +317,12 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("JWT_SECRET is required")
 	}
 
-	if cfg.AIProvider != "claude" && cfg.AIProvider != "ollama" {
-		return Config{}, fmt.Errorf("invalid AI_PROVIDER %q (expected \"claude\" or \"ollama\")", cfg.AIProvider)
+	if cfg.AIProvider != "claude" && cfg.AIProvider != "ollama" && cfg.AIProvider != "vertex" {
+		return Config{}, fmt.Errorf("invalid AI_PROVIDER %q (expected \"claude\", \"ollama\", or \"vertex\")", cfg.AIProvider)
 	}
 
 	// AI_API_KEY is required for Claude unless using mock server.
-	if cfg.AIProvider != "ollama" && cfg.AIAPIKey == "" && cfg.MockAPIURL == "" {
+	if cfg.AIProvider == "claude" && cfg.AIAPIKey == "" && cfg.MockAPIURL == "" {
 		return Config{}, fmt.Errorf("AI_API_KEY is required (or set MOCK_API_URL for dev)")
 	}
 	if cfg.AIProvider == "ollama" {
@@ -313,6 +334,20 @@ func Load() (Config, error) {
 		}
 		if cfg.UnstructuredReportOutputFormatPrompt == "" {
 			slog.Warn("UNSTRUCTURED_REPORT_OUTPUT_FORMAT_PROMPT is empty; Ollama report JSON reliability may be reduced")
+		}
+	}
+	if cfg.AIProvider == "vertex" {
+		cfg.VertexAIAuthMode = strings.TrimSpace(cfg.VertexAIAuthMode)
+		if cfg.VertexAIAuthMode != "api_key" && cfg.VertexAIAuthMode != "adc" {
+			return Config{}, fmt.Errorf("invalid VERTEX_AI_AUTH_MODE %q (expected \"api_key\" or \"adc\")", cfg.VertexAIAuthMode)
+		}
+		if cfg.MockAPIURL == "" {
+			if strings.TrimSpace(cfg.VertexAIProjectID) == "" {
+				return Config{}, fmt.Errorf("VERTEX_AI_PROJECT_ID is required when AI_PROVIDER=vertex")
+			}
+			if cfg.VertexAIAuthMode == "api_key" && strings.TrimSpace(cfg.VertexAIAPIKey) == "" {
+				return Config{}, fmt.Errorf("VERTEX_AI_API_KEY is required when AI_PROVIDER=vertex and VERTEX_AI_AUTH_MODE=api_key")
+			}
 		}
 	}
 
@@ -386,6 +421,12 @@ func (c Config) LogLoaded() {
 		"report_prompt_len", len(c.AIReportPrompt),
 		"unstructured_report_output_format_prompt_len", len(c.UnstructuredReportOutputFormatPrompt),
 		"report_max_tokens", c.AIReportMaxTokens,
+		"vertex_ai_auth_mode", c.VertexAIAuthMode,
+		"vertex_ai_project_id", c.VertexAIProjectID,
+		"vertex_ai_location", c.VertexAILocation,
+		"vertex_ai_explicit_cache_enabled", c.VertexAIExplicitCacheEnabled,
+		"vertex_ai_context_cache_ttl_seconds", c.VertexAIContextCacheTTLSeconds,
+		"vertex_ai_api_key_set", c.VertexAIAPIKey != "",
 		"interview_opening_disclaimer_en_len", len(c.InterviewOpeningDisclaimerEn),
 		"interview_opening_disclaimer_es_len", len(c.InterviewOpeningDisclaimerEs),
 		"interview_readiness_question_en_len", len(c.InterviewReadinessQuestionEn),

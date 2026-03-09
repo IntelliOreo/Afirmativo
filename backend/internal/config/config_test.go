@@ -52,6 +52,12 @@ func setBaseValidEnv(t *testing.T) {
 		"AI_INTERVIEW_PROMPT_OPENING_TURN":            "",
 		"UNSTRUCTURED_INTERVIEW_OUTPUT_FORMAT_PROMPT": "",
 		"UNSTRUCTURED_REPORT_OUTPUT_FORMAT_PROMPT":    "",
+		"VERTEX_AI_AUTH_MODE":                         "api_key",
+		"VERTEX_AI_API_KEY":                           "",
+		"VERTEX_AI_PROJECT_ID":                        "",
+		"VERTEX_AI_LOCATION":                          "global",
+		"VERTEX_AI_EXPLICIT_CACHE_ENABLED":            "true",
+		"VERTEX_AI_CONTEXT_CACHE_TTL_SECONDS":         "300",
 	}
 
 	for key, value := range env {
@@ -118,6 +124,44 @@ func TestLoad_ParsesInterviewPromptCachingFlag(t *testing.T) {
 	}
 	if cfg.AIInterviewPromptCachingEnabled {
 		t.Fatalf("AIInterviewPromptCachingEnabled = %v, want false", cfg.AIInterviewPromptCachingEnabled)
+	}
+}
+
+func TestLoad_AcceptsVertexProviderWithAPIKeyAuth(t *testing.T) {
+	setBaseValidEnv(t)
+	t.Setenv("AI_PROVIDER", "vertex")
+	t.Setenv("VERTEX_AI_API_KEY", "vertex-test-key")
+	t.Setenv("VERTEX_AI_PROJECT_ID", "afirmativo-dev")
+	t.Setenv("VERTEX_AI_CONTEXT_CACHE_TTL_SECONDS", "300")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.AIProvider != "vertex" {
+		t.Fatalf("AIProvider = %q, want vertex", cfg.AIProvider)
+	}
+	if cfg.VertexAIAuthMode != "api_key" {
+		t.Fatalf("VertexAIAuthMode = %q, want api_key", cfg.VertexAIAuthMode)
+	}
+	if cfg.VertexAIContextCacheTTLSeconds != 300 {
+		t.Fatalf("VertexAIContextCacheTTLSeconds = %d, want 300", cfg.VertexAIContextCacheTTLSeconds)
+	}
+}
+
+func TestLoad_RejectsInvalidVertexAuthMode(t *testing.T) {
+	setBaseValidEnv(t)
+	t.Setenv("AI_PROVIDER", "vertex")
+	t.Setenv("VERTEX_AI_AUTH_MODE", "invalid")
+	t.Setenv("VERTEX_AI_PROJECT_ID", "afirmativo-dev")
+	t.Setenv("VERTEX_AI_API_KEY", "vertex-test-key")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatalf("Load() expected error for invalid VERTEX_AI_AUTH_MODE")
+	}
+	if !strings.Contains(err.Error(), `invalid VERTEX_AI_AUTH_MODE`) {
+		t.Fatalf("error = %v, want VERTEX_AI_AUTH_MODE validation message", err)
 	}
 }
 

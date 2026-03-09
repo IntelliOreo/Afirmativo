@@ -358,8 +358,33 @@ func parseAIResponse(apiResp *ClaudeAPIResponse) (*AIResponse, error) {
 		}
 	}
 
-	jsonStr := apiResp.Content[0].Text
+	return parseAIResponseJSON(apiResp.Content[0].Text)
+}
 
+func validateAIResponse(result *AIResponse) error {
+	if strings.TrimSpace(result.NextQuestion) == "" {
+		return fmt.Errorf("invalid AI response: next_question is empty")
+	}
+	if result.Evaluation == nil {
+		return nil
+	}
+
+	switch result.Evaluation.CurrentCriterion.Status {
+	case CriterionStatusSufficient, CriterionStatusPartial, CriterionStatusInsufficient:
+	default:
+		return fmt.Errorf("invalid AI response: unsupported current_criterion.status %q", result.Evaluation.CurrentCriterion.Status)
+	}
+
+	switch result.Evaluation.CurrentCriterion.Recommendation {
+	case CriterionRecFollowUp, CriterionRecMoveOn:
+	default:
+		return fmt.Errorf("invalid AI response: unsupported current_criterion.recommendation %q", result.Evaluation.CurrentCriterion.Recommendation)
+	}
+
+	return nil
+}
+
+func parseAIResponseJSON(jsonStr string) (*AIResponse, error) {
 	var result AIResponse
 	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
 		return nil, &AIProviderFailure{
@@ -392,29 +417,6 @@ func parseAIResponse(apiResp *ClaudeAPIResponse) (*AIResponse, error) {
 	}
 
 	return &result, nil
-}
-
-func validateAIResponse(result *AIResponse) error {
-	if strings.TrimSpace(result.NextQuestion) == "" {
-		return fmt.Errorf("invalid AI response: next_question is empty")
-	}
-	if result.Evaluation == nil {
-		return nil
-	}
-
-	switch result.Evaluation.CurrentCriterion.Status {
-	case CriterionStatusSufficient, CriterionStatusPartial, CriterionStatusInsufficient:
-	default:
-		return fmt.Errorf("invalid AI response: unsupported current_criterion.status %q", result.Evaluation.CurrentCriterion.Status)
-	}
-
-	switch result.Evaluation.CurrentCriterion.Recommendation {
-	case CriterionRecFollowUp, CriterionRecMoveOn:
-	default:
-		return fmt.Errorf("invalid AI response: unsupported current_criterion.recommendation %q", result.Evaluation.CurrentCriterion.Recommendation)
-	}
-
-	return nil
 }
 
 // buildOutputSchema creates the static JSON schema for Claude's output_config.
