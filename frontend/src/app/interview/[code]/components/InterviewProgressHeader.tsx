@@ -25,7 +25,7 @@ export function InterviewProgressHeader({
   isWrapup,
   isWarning,
   timerLabel,
-  question,
+  question: _question,
   progressPct,
 }: InterviewProgressHeaderProps) {
   return (
@@ -34,13 +34,8 @@ export function InterviewProgressHeader({
         className={`flex flex-col items-start gap-1 px-4 py-2 text-sm font-semibold sm:flex-row sm:items-center sm:justify-between ${getTimerBannerTone(isWrapup, isWarning)}`}
       >
         <span>
-          {lang === "es" ? "Tiempo restante" : "Time remaining"}: {timerLabel}
+          {lang === "es" ? "Tiempo máximo restante" : "Maximum interview time remaining"}: {timerLabel}
         </span>
-        {question && (
-          <span>
-            {lang === "es" ? "Pregunta" : "Question"} {question.questionNumber} / {question.totalQuestions}
-          </span>
-        )}
       </div>
 
       <div className="h-1 bg-base-lighter">

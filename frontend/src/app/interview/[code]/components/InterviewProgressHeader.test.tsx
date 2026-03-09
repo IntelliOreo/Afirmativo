@@ -4,7 +4,7 @@ import { toTurnId } from "../models";
 import { InterviewProgressHeader } from "./InterviewProgressHeader";
 
 describe("InterviewProgressHeader", () => {
-  it("uses wrapup tone over warning and shows the question counter", () => {
+  it("uses wrapup tone over warning and hides the question counter", () => {
     const { container } = render(
       <InterviewProgressHeader
         lang="en"
@@ -30,8 +30,8 @@ describe("InterviewProgressHeader", () => {
 
     expect(outer).toHaveClass("animate-pulse");
     expect(banner).toHaveClass("bg-error");
-    expect(screen.getByText("Time remaining: 04:59")).toBeInTheDocument();
-    expect(screen.getByText("Question 3 / 25")).toBeInTheDocument();
+    expect(screen.getByText("Maximum interview time remaining: 04:59")).toBeInTheDocument();
+    expect(screen.queryByText("Question 3 / 25")).not.toBeInTheDocument();
   });
 
   it("uses warning tone when wrapup is false", () => {
@@ -49,6 +49,7 @@ describe("InterviewProgressHeader", () => {
 
     const banner = container.firstElementChild?.firstElementChild;
     expect(banner).toHaveClass("bg-accent-warm");
+    expect(screen.getByText("Tiempo máximo restante: 10:00")).toBeInTheDocument();
     expect(screen.queryByText(/Pregunta/)).not.toBeInTheDocument();
   });
 
