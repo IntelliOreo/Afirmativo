@@ -14,7 +14,10 @@ describe("interview mappers", () => {
       status: "ready",
       content_en: "English content",
       content_es: "Contenido",
+      areas_of_clarity_es: ["Punto claro"],
+      areas_to_develop_further_es: ["Mas fechas"],
       recommendation: "Practice timelines",
+      recommendation_es: "Practique las lineas de tiempo",
       question_count: 12,
       duration_minutes: 25,
     });
@@ -23,7 +26,10 @@ describe("interview mappers", () => {
     expect(report.contentEn).toBe("English content");
     expect(report.contentEs).toBe("Contenido");
     expect(report.areasOfClarity).toEqual([]);
+    expect(report.areasOfClarityEs).toEqual(["Punto claro"]);
     expect(report.areasToDevelopFurther).toEqual([]);
+    expect(report.areasToDevelopFurtherEs).toEqual(["Mas fechas"]);
+    expect(report.recommendationEs).toBe("Practique las lineas de tiempo");
     expect(report.questionCount).toBe(12);
     expect(report.durationMinutes).toBe(25);
   });

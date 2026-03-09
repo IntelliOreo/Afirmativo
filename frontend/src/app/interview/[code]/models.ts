@@ -74,8 +74,11 @@ export interface InterviewReport {
   contentEn: string;
   contentEs: string;
   areasOfClarity: string[];
+  areasOfClarityEs: string[];
   areasToDevelopFurther: string[];
+  areasToDevelopFurtherEs: string[];
   recommendation: string;
+  recommendationEs: string;
   questionCount: number;
   durationMinutes: number;
 }

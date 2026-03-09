@@ -25,7 +25,7 @@ func TestHTTPReportAIClientGenerateReport_ParsesUsageAndLogsIt(t *testing.T) {
 			"content": [
 				{
 					"type": "text",
-					"text": "{\"content_en\":\"English summary\",\"content_es\":\"Resumen en espanol\",\"areas_of_clarity\":[\"clear point\"],\"areas_to_develop_further\":[\"develop point\"],\"recommendation\":\"Keep practicing.\"}"
+					"text": "{\"content_en\":\"English summary\",\"content_es\":\"Resumen en espanol\",\"areas_of_clarity\":[\"clear point\"],\"areas_of_clarity_es\":[\"punto claro\"],\"areas_to_develop_further\":[\"develop point\"],\"areas_to_develop_further_es\":[\"desarrollar punto\"],\"recommendation\":\"Keep practicing.\",\"recommendation_es\":\"Siga practicando.\"}"
 				}
 			],
 			"stop_reason": "end_turn",
@@ -62,6 +62,18 @@ func TestHTTPReportAIClientGenerateReport_ParsesUsageAndLogsIt(t *testing.T) {
 	}
 	if result.ContentEn != "English summary" {
 		t.Fatalf("result.ContentEn = %q, want English summary", result.ContentEn)
+	}
+	if result.ContentEs != "Resumen en espanol" {
+		t.Fatalf("result.ContentEs = %q, want Resumen en espanol", result.ContentEs)
+	}
+	if len(result.AreasOfClarityEs) != 1 || result.AreasOfClarityEs[0] != "punto claro" {
+		t.Fatalf("result.AreasOfClarityEs = %#v, want [\"punto claro\"]", result.AreasOfClarityEs)
+	}
+	if len(result.AreasToDevelopFurtherEs) != 1 || result.AreasToDevelopFurtherEs[0] != "desarrollar punto" {
+		t.Fatalf("result.AreasToDevelopFurtherEs = %#v, want [\"desarrollar punto\"]", result.AreasToDevelopFurtherEs)
+	}
+	if result.RecommendationEs != "Siga practicando." {
+		t.Fatalf("result.RecommendationEs = %q, want Siga practicando.", result.RecommendationEs)
 	}
 
 	logOutput := logBuf.String()

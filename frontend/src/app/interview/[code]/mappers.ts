@@ -76,8 +76,11 @@ export function mapReport(raw: InterviewReportDto): InterviewReport {
     contentEn: raw.content_en,
     contentEs: raw.content_es,
     areasOfClarity: raw.areas_of_clarity ?? [],
+    areasOfClarityEs: raw.areas_of_clarity_es ?? [],
     areasToDevelopFurther: raw.areas_to_develop_further ?? [],
+    areasToDevelopFurtherEs: raw.areas_to_develop_further_es ?? [],
     recommendation: raw.recommendation,
+    recommendationEs: raw.recommendation_es ?? "",
     questionCount: raw.question_count,
     durationMinutes: raw.duration_minutes,
   };

@@ -33,6 +33,7 @@ func TestServiceGetOrGenerateReport_LanguageTranscriptFlowAndBilingualReport(t *
 		englishReport    = "English final analysis"
 		spanishReport    = "Analisis final en espanol"
 		recommendationEn = "Keep practicing with concise timelines."
+		recommendationEs = "Siga practicando con lineas de tiempo concisas."
 	)
 
 	evaluation := &AnswerEvaluation{
@@ -73,7 +74,7 @@ func TestServiceGetOrGenerateReport_LanguageTranscriptFlowAndBilingualReport(t *
 			wantTranscript: "Q: Open floor prompt #1\nA: EN open floor answer 1\n\nQ: Open floor prompt #2\nA: EN open floor answer 2",
 		},
 		{
-			name:              "spanish_user_uses_spanish_open_floor_transcript_but_keeps_english_analysis",
+			name:              "spanish_user_uses_spanish_open_floor_transcript_and_persists_bilingual_analysis",
 			preferredLanguage: "es",
 			answers: []InterviewAnswerSnapshot{
 				{
@@ -123,7 +124,9 @@ func TestServiceGetOrGenerateReport_LanguageTranscriptFlowAndBilingualReport(t *
 				updateReportFn: func(_ context.Context, r *Report) error {
 					reportCopy := *r
 					reportCopy.AreasOfClarity = append([]string(nil), r.AreasOfClarity...)
+					reportCopy.AreasOfClarityEs = append([]string(nil), r.AreasOfClarityEs...)
 					reportCopy.AreasToDevelopFurther = append([]string(nil), r.AreasToDevelopFurther...)
+					reportCopy.AreasToDevelopFurtherEs = append([]string(nil), r.AreasToDevelopFurtherEs...)
 					updatedReport = &reportCopy
 					return nil
 				},
@@ -155,11 +158,14 @@ func TestServiceGetOrGenerateReport_LanguageTranscriptFlowAndBilingualReport(t *
 					capturedSummaries = append([]AreaSummary(nil), summaries...)
 					capturedTranscript = transcript
 					return &ReportAIResponse{
-						ContentEn:             englishReport,
-						ContentEs:             spanishReport,
-						AreasOfClarity:        []string{"Clear chronology in key events"},
-						AreasToDevelopFurther: []string{"Clarify exact dates for each event"},
-						Recommendation:        recommendationEn,
+						ContentEn:               englishReport,
+						ContentEs:               spanishReport,
+						AreasOfClarity:          []string{"Clear chronology in key events"},
+						AreasOfClarityEs:        []string{"Cronologia clara en eventos clave"},
+						AreasToDevelopFurther:   []string{"Clarify exact dates for each event"},
+						AreasToDevelopFurtherEs: []string{"Aclare las fechas exactas de cada evento"},
+						Recommendation:          recommendationEn,
+						RecommendationEs:        recommendationEs,
 					}, nil
 				},
 			}
@@ -199,8 +205,14 @@ func TestServiceGetOrGenerateReport_LanguageTranscriptFlowAndBilingualReport(t *
 			if updatedReport.Recommendation != recommendationEn {
 				t.Fatalf("recommendation = %q, want %q", updatedReport.Recommendation, recommendationEn)
 			}
+			if updatedReport.RecommendationEs != recommendationEs {
+				t.Fatalf("recommendation_es = %q, want %q", updatedReport.RecommendationEs, recommendationEs)
+			}
 			if len(updatedReport.AreasOfClarity) == 0 || len(updatedReport.AreasToDevelopFurther) == 0 {
 				t.Fatalf("english analysis bullets should be preserved: clarity=%v develop=%v", updatedReport.AreasOfClarity, updatedReport.AreasToDevelopFurther)
+			}
+			if len(updatedReport.AreasOfClarityEs) == 0 || len(updatedReport.AreasToDevelopFurtherEs) == 0 {
+				t.Fatalf("spanish analysis bullets should be preserved: clarity=%v develop=%v", updatedReport.AreasOfClarityEs, updatedReport.AreasToDevelopFurtherEs)
 			}
 			if len(capturedSummaries) != 2 {
 				t.Fatalf("area summaries count = %d, want 2", len(capturedSummaries))

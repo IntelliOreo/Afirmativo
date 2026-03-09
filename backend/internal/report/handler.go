@@ -27,15 +27,18 @@ type reportGeneratingResponse struct {
 }
 
 type reportReadyResponse struct {
-	SessionCode           string   `json:"session_code"`
-	Status                string   `json:"status"`
-	ContentEn             string   `json:"content_en"`
-	ContentEs             string   `json:"content_es"`
-	AreasOfClarity        []string `json:"areas_of_clarity"`
-	AreasToDevelopFurther []string `json:"areas_to_develop_further"`
-	Recommendation        string   `json:"recommendation"`
-	QuestionCount         int      `json:"question_count"`
-	DurationMinutes       int      `json:"duration_minutes"`
+	SessionCode             string   `json:"session_code"`
+	Status                  string   `json:"status"`
+	ContentEn               string   `json:"content_en"`
+	ContentEs               string   `json:"content_es"`
+	AreasOfClarity          []string `json:"areas_of_clarity"`
+	AreasOfClarityEs        []string `json:"areas_of_clarity_es"`
+	AreasToDevelopFurther   []string `json:"areas_to_develop_further"`
+	AreasToDevelopFurtherEs []string `json:"areas_to_develop_further_es"`
+	Recommendation          string   `json:"recommendation"`
+	RecommendationEs        string   `json:"recommendation_es"`
+	QuestionCount           int      `json:"question_count"`
+	DurationMinutes         int      `json:"duration_minutes"`
 }
 
 // HandleGetReport returns the report JSON for a session.
@@ -92,15 +95,18 @@ func (h *Handler) HandleGetReport(w http.ResponseWriter, r *http.Request) {
 
 	// Report is ready.
 	shared.WriteJSON(w, http.StatusOK, reportReadyResponse{
-		SessionCode:           report.SessionCode,
-		Status:                string(report.Status),
-		ContentEn:             report.ContentEn,
-		ContentEs:             report.ContentEs,
-		AreasOfClarity:        report.AreasOfClarity,
-		AreasToDevelopFurther: report.AreasToDevelopFurther,
-		Recommendation:        report.Recommendation,
-		QuestionCount:         report.QuestionCount,
-		DurationMinutes:       report.DurationMinutes,
+		SessionCode:             report.SessionCode,
+		Status:                  string(report.Status),
+		ContentEn:               report.ContentEn,
+		ContentEs:               report.ContentEs,
+		AreasOfClarity:          report.AreasOfClarity,
+		AreasOfClarityEs:        report.AreasOfClarityEs,
+		AreasToDevelopFurther:   report.AreasToDevelopFurther,
+		AreasToDevelopFurtherEs: report.AreasToDevelopFurtherEs,
+		Recommendation:          report.Recommendation,
+		RecommendationEs:        report.RecommendationEs,
+		QuestionCount:           report.QuestionCount,
+		DurationMinutes:         report.DurationMinutes,
 	})
 }
 

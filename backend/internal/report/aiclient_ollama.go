@@ -153,6 +153,9 @@ func (c *OllamaReportAIClient) GenerateReport(ctx context.Context, areaSummaries
 		"areas_of_clarity_count", len(result.AreasOfClarity),
 		"areas_to_develop_further_count", len(result.AreasToDevelopFurther),
 		"recommendation_len", len(result.Recommendation),
+		"areas_of_clarity_es_count", len(result.AreasOfClarityEs),
+		"areas_to_develop_further_es_count", len(result.AreasToDevelopFurtherEs),
+		"recommendation_es_len", len(result.RecommendationEs),
 	)
 
 	return &result, nil
@@ -168,15 +171,24 @@ func validateReportAIResponse(result *ReportAIResponse) error {
 	if result.AreasOfClarity == nil {
 		return fmt.Errorf("invalid report AI response: areas_of_clarity must be an array")
 	}
+	if result.AreasOfClarityEs == nil {
+		return fmt.Errorf("invalid report AI response: areas_of_clarity_es must be an array")
+	}
 	if result.AreasToDevelopFurther == nil {
 		return fmt.Errorf("invalid report AI response: areas_to_develop_further must be an array")
 	}
+	if result.AreasToDevelopFurtherEs == nil {
+		return fmt.Errorf("invalid report AI response: areas_to_develop_further_es must be an array")
+	}
 	if strings.TrimSpace(result.Recommendation) == "" {
 		return fmt.Errorf("invalid report AI response: recommendation is empty")
+	}
+	if strings.TrimSpace(result.RecommendationEs) == "" {
+		return fmt.Errorf("invalid report AI response: recommendation_es is empty")
 	}
 	return nil
 }
 
 func (c *OllamaReportAIClient) buildReportFieldInstruction() string {
-	return `Use JSON keys "areas_of_clarity" and "areas_to_develop_further".`
+	return `Use JSON keys "areas_of_clarity", "areas_of_clarity_es", "areas_to_develop_further", "areas_to_develop_further_es", "recommendation", and "recommendation_es".`
 }

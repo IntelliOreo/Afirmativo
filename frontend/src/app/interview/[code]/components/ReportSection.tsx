@@ -28,6 +28,11 @@ export function ReportSection({
   onLoadReport,
   onPrintReport,
 }: ReportSectionProps) {
+  const clarityItems = lang === "es" ? report?.areasOfClarityEs ?? [] : report?.areasOfClarity ?? [];
+  const developItems =
+    lang === "es" ? report?.areasToDevelopFurtherEs ?? [] : report?.areasToDevelopFurther ?? [];
+  const recommendation = lang === "es" ? report?.recommendationEs ?? "" : report?.recommendation ?? "";
+
   return (
     <>
       <Card className="mb-6">
@@ -113,9 +118,9 @@ export function ReportSection({
               <h3 className="text-xl font-bold text-primary-dark mb-3">
                 {lang === "es" ? "Áreas de claridad" : "Areas of clarity"}
               </h3>
-              {report.areasOfClarity.length > 0 ? (
+              {clarityItems.length > 0 ? (
                 <ul className="list-disc list-inside space-y-1 text-primary-darkest">
-                  {report.areasOfClarity.map((strength, index) => (
+                  {clarityItems.map((strength, index) => (
                     <li key={index}>{strength}</li>
                   ))}
                 </ul>
@@ -130,9 +135,9 @@ export function ReportSection({
               <h3 className="text-xl font-bold text-primary-dark mb-3">
                 {lang === "es" ? "Áreas para desarrollar más" : "Areas to develop further"}
               </h3>
-              {report.areasToDevelopFurther.length > 0 ? (
+              {developItems.length > 0 ? (
                 <ul className="list-disc list-inside space-y-1 text-primary-darkest">
-                  {report.areasToDevelopFurther.map((area, index) => (
+                  {developItems.map((area, index) => (
                     <li key={index}>{area}</li>
                   ))}
                 </ul>
@@ -147,7 +152,7 @@ export function ReportSection({
               <h3 className="text-xl font-bold text-primary-dark mb-3">
                 {lang === "es" ? "Recomendación" : "Recommendation"}
               </h3>
-              <p className="text-primary-darkest">{report.recommendation}</p>
+              <p className="text-primary-darkest">{recommendation}</p>
             </Card>
 
             <Card className="mb-6">

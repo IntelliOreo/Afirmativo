@@ -162,11 +162,14 @@ func TestServiceGetOrGenerateReport_RetriesFailedReport(t *testing.T) {
 		generateReportFn: func(context.Context, []AreaSummary, string) (*ReportAIResponse, error) {
 			aiCalls++
 			return &ReportAIResponse{
-				ContentEn:             "English report",
-				ContentEs:             "Reporte en español",
-				AreasOfClarity:        []string{"clarity"},
-				AreasToDevelopFurther: []string{"pace"},
-				Recommendation:        "continue practice",
+				ContentEn:               "English report",
+				ContentEs:               "Reporte en español",
+				AreasOfClarity:          []string{"clarity"},
+				AreasOfClarityEs:        []string{"claridad"},
+				AreasToDevelopFurther:   []string{"pace"},
+				AreasToDevelopFurtherEs: []string{"ritmo"},
+				Recommendation:          "continue practice",
+				RecommendationEs:        "continúe practicando",
 			}, nil
 		},
 	}
@@ -325,15 +328,18 @@ func TestHandleGetReport_TypedResponseContracts(t *testing.T) {
 			&fakeReportStore{
 				getReportBySessionFn: func(context.Context, string) (*Report, error) {
 					return &Report{
-						SessionCode:           "AP-AAAA-BBBB",
-						Status:                "ready",
-						ContentEn:             "English report",
-						ContentEs:             "Reporte en español",
-						AreasOfClarity:        []string{"clarity"},
-						AreasToDevelopFurther: []string{"pace"},
-						Recommendation:        "continue practice",
-						QuestionCount:         12,
-						DurationMinutes:       31,
+						SessionCode:             "AP-AAAA-BBBB",
+						Status:                  "ready",
+						ContentEn:               "English report",
+						ContentEs:               "Reporte en español",
+						AreasOfClarity:          []string{"clarity"},
+						AreasOfClarityEs:        []string{"claridad"},
+						AreasToDevelopFurther:   []string{"pace"},
+						AreasToDevelopFurtherEs: []string{"ritmo"},
+						Recommendation:          "continue practice",
+						RecommendationEs:        "continúe practicando",
+						QuestionCount:           12,
+						DurationMinutes:         31,
 					}, nil
 				},
 			},
@@ -350,15 +356,18 @@ func TestHandleGetReport_TypedResponseContracts(t *testing.T) {
 			t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
 		}
 		var got struct {
-			SessionCode           string   `json:"session_code"`
-			Status                string   `json:"status"`
-			ContentEn             string   `json:"content_en"`
-			ContentEs             string   `json:"content_es"`
-			AreasOfClarity        []string `json:"areas_of_clarity"`
-			AreasToDevelopFurther []string `json:"areas_to_develop_further"`
-			Recommendation        string   `json:"recommendation"`
-			QuestionCount         int      `json:"question_count"`
-			DurationMinutes       int      `json:"duration_minutes"`
+			SessionCode             string   `json:"session_code"`
+			Status                  string   `json:"status"`
+			ContentEn               string   `json:"content_en"`
+			ContentEs               string   `json:"content_es"`
+			AreasOfClarity          []string `json:"areas_of_clarity"`
+			AreasOfClarityEs        []string `json:"areas_of_clarity_es"`
+			AreasToDevelopFurther   []string `json:"areas_to_develop_further"`
+			AreasToDevelopFurtherEs []string `json:"areas_to_develop_further_es"`
+			Recommendation          string   `json:"recommendation"`
+			RecommendationEs        string   `json:"recommendation_es"`
+			QuestionCount           int      `json:"question_count"`
+			DurationMinutes         int      `json:"duration_minutes"`
 		}
 		decodeReportBody(t, rr, &got)
 
@@ -370,6 +379,15 @@ func TestHandleGetReport_TypedResponseContracts(t *testing.T) {
 		}
 		if got.ContentEn != "English report" || got.ContentEs != "Reporte en español" {
 			t.Fatalf("content mismatch: en=%q es=%q", got.ContentEn, got.ContentEs)
+		}
+		if got.RecommendationEs != "continúe practicando" {
+			t.Fatalf("recommendation_es = %q, want continúe practicando", got.RecommendationEs)
+		}
+		if len(got.AreasOfClarityEs) != 1 || got.AreasOfClarityEs[0] != "claridad" {
+			t.Fatalf("areas_of_clarity_es = %#v, want [\"claridad\"]", got.AreasOfClarityEs)
+		}
+		if len(got.AreasToDevelopFurtherEs) != 1 || got.AreasToDevelopFurtherEs[0] != "ritmo" {
+			t.Fatalf("areas_to_develop_further_es = %#v, want [\"ritmo\"]", got.AreasToDevelopFurtherEs)
 		}
 		if got.QuestionCount != 12 || got.DurationMinutes != 31 {
 			t.Fatalf("question_count/duration_minutes = %d/%d, want 12/31", got.QuestionCount, got.DurationMinutes)

@@ -169,15 +169,18 @@ func (s *Service) generateReport(ctx context.Context, sessionCode string, sess *
 
 	// 6. Build and persist report.
 	report := &Report{
-		SessionCode:           sessionCode,
-		Status:                ReportStatusReady,
-		ContentEn:             aiResp.ContentEn,
-		ContentEs:             aiResp.ContentEs,
-		AreasOfClarity:        aiResp.AreasOfClarity,
-		AreasToDevelopFurther: aiResp.AreasToDevelopFurther,
-		Recommendation:        aiResp.Recommendation,
-		QuestionCount:         answerCount,
-		DurationMinutes:       durationMinutes,
+		SessionCode:             sessionCode,
+		Status:                  ReportStatusReady,
+		ContentEn:               aiResp.ContentEn,
+		ContentEs:               aiResp.ContentEs,
+		AreasOfClarity:          aiResp.AreasOfClarity,
+		AreasOfClarityEs:        aiResp.AreasOfClarityEs,
+		AreasToDevelopFurther:   aiResp.AreasToDevelopFurther,
+		AreasToDevelopFurtherEs: aiResp.AreasToDevelopFurtherEs,
+		Recommendation:          aiResp.Recommendation,
+		RecommendationEs:        aiResp.RecommendationEs,
+		QuestionCount:           answerCount,
+		DurationMinutes:         durationMinutes,
 	}
 
 	if err := s.store.UpdateReport(ctx, report); err != nil {

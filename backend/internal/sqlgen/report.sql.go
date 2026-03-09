@@ -12,21 +12,24 @@ import (
 )
 
 const createReport = `-- name: CreateReport :one
-INSERT INTO reports (session_code, status, content_en, content_es, strengths, weaknesses, recommendation, question_count, duration_minutes)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, session_code, status, content_en, content_es, strengths, weaknesses, recommendation, question_count, duration_minutes, created_at, updated_at
+INSERT INTO reports (session_code, status, content_en, content_es, strengths, strengths_es, weaknesses, weaknesses_es, recommendation, recommendation_es, question_count, duration_minutes)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING id, session_code, status, content_en, content_es, strengths, strengths_es, weaknesses, weaknesses_es, recommendation, recommendation_es, question_count, duration_minutes, created_at, updated_at
 `
 
 type CreateReportParams struct {
-	SessionCode     string      `json:"session_code"`
-	Status          string      `json:"status"`
-	ContentEn       pgtype.Text `json:"content_en"`
-	ContentEs       pgtype.Text `json:"content_es"`
-	Strengths       []byte      `json:"strengths"`
-	Weaknesses      []byte      `json:"weaknesses"`
-	Recommendation  pgtype.Text `json:"recommendation"`
-	QuestionCount   int32       `json:"question_count"`
-	DurationMinutes int32       `json:"duration_minutes"`
+	SessionCode      string      `json:"session_code"`
+	Status           string      `json:"status"`
+	ContentEn        pgtype.Text `json:"content_en"`
+	ContentEs        pgtype.Text `json:"content_es"`
+	Strengths        []byte      `json:"strengths"`
+	StrengthsEs      []byte      `json:"strengths_es"`
+	Weaknesses       []byte      `json:"weaknesses"`
+	WeaknessesEs     []byte      `json:"weaknesses_es"`
+	Recommendation   pgtype.Text `json:"recommendation"`
+	RecommendationEs pgtype.Text `json:"recommendation_es"`
+	QuestionCount    int32       `json:"question_count"`
+	DurationMinutes  int32       `json:"duration_minutes"`
 }
 
 func (q *Queries) CreateReport(ctx context.Context, arg CreateReportParams) (Report, error) {
@@ -36,8 +39,11 @@ func (q *Queries) CreateReport(ctx context.Context, arg CreateReportParams) (Rep
 		arg.ContentEn,
 		arg.ContentEs,
 		arg.Strengths,
+		arg.StrengthsEs,
 		arg.Weaknesses,
+		arg.WeaknessesEs,
 		arg.Recommendation,
+		arg.RecommendationEs,
 		arg.QuestionCount,
 		arg.DurationMinutes,
 	)
@@ -49,8 +55,11 @@ func (q *Queries) CreateReport(ctx context.Context, arg CreateReportParams) (Rep
 		&i.ContentEn,
 		&i.ContentEs,
 		&i.Strengths,
+		&i.StrengthsEs,
 		&i.Weaknesses,
+		&i.WeaknessesEs,
 		&i.Recommendation,
+		&i.RecommendationEs,
 		&i.QuestionCount,
 		&i.DurationMinutes,
 		&i.CreatedAt,
@@ -60,7 +69,7 @@ func (q *Queries) CreateReport(ctx context.Context, arg CreateReportParams) (Rep
 }
 
 const getReportBySession = `-- name: GetReportBySession :one
-SELECT id, session_code, status, content_en, content_es, strengths, weaknesses, recommendation, question_count, duration_minutes, created_at, updated_at FROM reports WHERE session_code = $1
+SELECT id, session_code, status, content_en, content_es, strengths, strengths_es, weaknesses, weaknesses_es, recommendation, recommendation_es, question_count, duration_minutes, created_at, updated_at FROM reports WHERE session_code = $1
 `
 
 func (q *Queries) GetReportBySession(ctx context.Context, sessionCode string) (Report, error) {
@@ -73,8 +82,11 @@ func (q *Queries) GetReportBySession(ctx context.Context, sessionCode string) (R
 		&i.ContentEn,
 		&i.ContentEs,
 		&i.Strengths,
+		&i.StrengthsEs,
 		&i.Weaknesses,
+		&i.WeaknessesEs,
 		&i.Recommendation,
+		&i.RecommendationEs,
 		&i.QuestionCount,
 		&i.DurationMinutes,
 		&i.CreatedAt,
@@ -89,24 +101,30 @@ SET status = $2,
     content_en = $3,
     content_es = $4,
     strengths = $5,
-    weaknesses = $6,
-    recommendation = $7,
-    question_count = $8,
-    duration_minutes = $9,
+    strengths_es = $6,
+    weaknesses = $7,
+    weaknesses_es = $8,
+    recommendation = $9,
+    recommendation_es = $10,
+    question_count = $11,
+    duration_minutes = $12,
     updated_at = now()
 WHERE session_code = $1
 `
 
 type UpdateReportParams struct {
-	SessionCode     string      `json:"session_code"`
-	Status          string      `json:"status"`
-	ContentEn       pgtype.Text `json:"content_en"`
-	ContentEs       pgtype.Text `json:"content_es"`
-	Strengths       []byte      `json:"strengths"`
-	Weaknesses      []byte      `json:"weaknesses"`
-	Recommendation  pgtype.Text `json:"recommendation"`
-	QuestionCount   int32       `json:"question_count"`
-	DurationMinutes int32       `json:"duration_minutes"`
+	SessionCode      string      `json:"session_code"`
+	Status           string      `json:"status"`
+	ContentEn        pgtype.Text `json:"content_en"`
+	ContentEs        pgtype.Text `json:"content_es"`
+	Strengths        []byte      `json:"strengths"`
+	StrengthsEs      []byte      `json:"strengths_es"`
+	Weaknesses       []byte      `json:"weaknesses"`
+	WeaknessesEs     []byte      `json:"weaknesses_es"`
+	Recommendation   pgtype.Text `json:"recommendation"`
+	RecommendationEs pgtype.Text `json:"recommendation_es"`
+	QuestionCount    int32       `json:"question_count"`
+	DurationMinutes  int32       `json:"duration_minutes"`
 }
 
 func (q *Queries) UpdateReport(ctx context.Context, arg UpdateReportParams) error {
@@ -116,8 +134,11 @@ func (q *Queries) UpdateReport(ctx context.Context, arg UpdateReportParams) erro
 		arg.ContentEn,
 		arg.ContentEs,
 		arg.Strengths,
+		arg.StrengthsEs,
 		arg.Weaknesses,
+		arg.WeaknessesEs,
 		arg.Recommendation,
+		arg.RecommendationEs,
 		arg.QuestionCount,
 		arg.DurationMinutes,
 	)

@@ -41,8 +41,11 @@ describe("useInterviewReport", () => {
         content_en: "English content",
         content_es: "Contenido",
         areas_of_clarity: ["Strong chronology"],
+        areas_of_clarity_es: ["Cronologia solida"],
         areas_to_develop_further: ["More dates"],
+        areas_to_develop_further_es: ["Mas fechas"],
         recommendation: "Practice timeline details",
+        recommendation_es: "Practique los detalles de la cronologia",
         question_count: 12,
         duration_minutes: 25,
       },
@@ -56,7 +59,10 @@ describe("useInterviewReport", () => {
 
     expect(result.current.reportStatus).toBe("ready");
     expect(result.current.report?.areasOfClarity).toEqual(["Strong chronology"]);
+    expect(result.current.report?.areasOfClarityEs).toEqual(["Cronologia solida"]);
     expect(result.current.report?.areasToDevelopFurther).toEqual(["More dates"]);
+    expect(result.current.report?.areasToDevelopFurtherEs).toEqual(["Mas fechas"]);
+    expect(result.current.report?.recommendationEs).toBe("Practique los detalles de la cronologia");
   });
 
   it("normalizes missing canonical arrays to empty arrays", async () => {
@@ -69,6 +75,7 @@ describe("useInterviewReport", () => {
         content_en: "English content",
         content_es: "Contenido",
         recommendation: "Practice timeline details",
+        recommendation_es: "Practique los detalles de la cronologia",
         question_count: 12,
         duration_minutes: 25,
       },
@@ -82,7 +89,9 @@ describe("useInterviewReport", () => {
 
     expect(result.current.reportStatus).toBe("ready");
     expect(result.current.report?.areasOfClarity).toEqual([]);
+    expect(result.current.report?.areasOfClarityEs).toEqual([]);
     expect(result.current.report?.areasToDevelopFurther).toEqual([]);
+    expect(result.current.report?.areasToDevelopFurtherEs).toEqual([]);
   });
 
   it("does not backfill legacy strengths and weaknesses into canonical arrays", async () => {
@@ -97,6 +106,7 @@ describe("useInterviewReport", () => {
         strengths: ["Legacy strength"],
         weaknesses: ["Legacy weakness"],
         recommendation: "Practice timeline details",
+        recommendation_es: "Practique los detalles de la cronologia",
         question_count: 12,
         duration_minutes: 25,
       },
@@ -110,7 +120,9 @@ describe("useInterviewReport", () => {
 
     expect(result.current.reportStatus).toBe("ready");
     expect(result.current.report?.areasOfClarity).toEqual([]);
+    expect(result.current.report?.areasOfClarityEs).toEqual([]);
     expect(result.current.report?.areasToDevelopFurther).toEqual([]);
+    expect(result.current.report?.areasToDevelopFurtherEs).toEqual([]);
   });
 
   it("surfaces API failures as report errors", async () => {

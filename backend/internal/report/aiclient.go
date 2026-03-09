@@ -164,6 +164,9 @@ func (c *HTTPReportAIClient) GenerateReport(ctx context.Context, areaSummaries [
 		"areas_of_clarity_count", len(result.AreasOfClarity),
 		"areas_to_develop_further_count", len(result.AreasToDevelopFurther),
 		"recommendation_len", len(result.Recommendation),
+		"areas_of_clarity_es_count", len(result.AreasOfClarityEs),
+		"areas_to_develop_further_es_count", len(result.AreasToDevelopFurtherEs),
+		"recommendation_es_len", len(result.RecommendationEs),
 	)
 	slog.Info("Claude API usage",
 		"phase", "report",
@@ -247,24 +250,38 @@ func buildReportOutputSchema() map[string]interface{} {
 						"type":        "string",
 						"description": "Full preparation feedback summary in Spanish. Same content as content_en but translated to Spanish.",
 					},
-					"areas_of_clarity": map[string]interface{}{
-						"type":        "array",
-						"items":       map[string]interface{}{"type": "string"},
-						"description": "Array of 'areas of clarity' bullet points (in English). Keep each point specific and actionable.",
+						"areas_of_clarity": map[string]interface{}{
+							"type":        "array",
+							"items":       map[string]interface{}{"type": "string"},
+							"description": "Array of 'areas of clarity' bullet points (in English). Keep each point specific and actionable.",
+						},
+						"areas_of_clarity_es": map[string]interface{}{
+							"type":        "array",
+							"items":       map[string]interface{}{"type": "string"},
+							"description": "Spanish translation of areas_of_clarity. Keep each point aligned with the English version.",
+						},
+						"areas_to_develop_further": map[string]interface{}{
+							"type":        "array",
+							"items":       map[string]interface{}{"type": "string"},
+							"description": "Array of 'areas to develop further' bullet points (in English). Each should identify a gap and suggest how to address it.",
+						},
+						"areas_to_develop_further_es": map[string]interface{}{
+							"type":        "array",
+							"items":       map[string]interface{}{"type": "string"},
+							"description": "Spanish translation of areas_to_develop_further. Keep each point aligned with the English version.",
+						},
+						"recommendation": map[string]interface{}{
+							"type":        "string",
+							"description": "Overall recommendation (in English). Focus on preparation quality and whether key elements were articulated clearly.",
+						},
+						"recommendation_es": map[string]interface{}{
+							"type":        "string",
+							"description": "Spanish translation of recommendation. Keep the same meaning and tone as the English version.",
+						},
 					},
-					"areas_to_develop_further": map[string]interface{}{
-						"type":        "array",
-						"items":       map[string]interface{}{"type": "string"},
-						"description": "Array of 'areas to develop further' bullet points (in English). Each should identify a gap and suggest how to address it.",
-					},
-					"recommendation": map[string]interface{}{
-						"type":        "string",
-						"description": "Overall recommendation (in English). Focus on preparation quality and whether key elements were articulated clearly.",
-					},
+					"required":             []string{"content_en", "content_es", "areas_of_clarity", "areas_of_clarity_es", "areas_to_develop_further", "areas_to_develop_further_es", "recommendation", "recommendation_es"},
+					"additionalProperties": false,
 				},
-				"required":             []string{"content_en", "content_es", "areas_of_clarity", "areas_to_develop_further", "recommendation"},
-				"additionalProperties": false,
 			},
-		},
 	}
 }

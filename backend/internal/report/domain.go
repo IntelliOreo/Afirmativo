@@ -19,15 +19,18 @@ const (
 
 // Report represents a completed assessment report.
 type Report struct {
-	SessionCode           string
-	Status                ReportStatus
-	ContentEn             string
-	ContentEs             string
-	AreasOfClarity        []string
-	AreasToDevelopFurther []string
-	Recommendation        string
-	QuestionCount         int
-	DurationMinutes       int
+	SessionCode             string
+	Status                  ReportStatus
+	ContentEn               string
+	ContentEs               string
+	AreasOfClarity          []string
+	AreasOfClarityEs        []string
+	AreasToDevelopFurther   []string
+	AreasToDevelopFurtherEs []string
+	Recommendation          string
+	RecommendationEs        string
+	QuestionCount           int
+	DurationMinutes         int
 }
 
 // AreaSummary is a compact representation of one area's evaluation result,
@@ -42,9 +45,12 @@ type AreaSummary struct {
 
 // ReportAIResponse is the structured response from the AI report generation call.
 type ReportAIResponse struct {
-	ContentEn             string   `json:"content_en"`
-	ContentEs             string   `json:"content_es"`
-	AreasOfClarity        []string `json:"areas_of_clarity"`
-	AreasToDevelopFurther []string `json:"areas_to_develop_further"`
-	Recommendation        string   `json:"recommendation"`
+	ContentEn               string   `json:"content_en"`
+	ContentEs               string   `json:"content_es"`
+	AreasOfClarity          []string `json:"areas_of_clarity"`
+	AreasOfClarityEs        []string `json:"areas_of_clarity_es"`
+	AreasToDevelopFurther   []string `json:"areas_to_develop_further"`
+	AreasToDevelopFurtherEs []string `json:"areas_to_develop_further_es"`
+	Recommendation          string   `json:"recommendation"`
+	RecommendationEs        string   `json:"recommendation_es"`
 }

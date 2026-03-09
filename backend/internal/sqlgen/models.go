@@ -45,18 +45,21 @@ type QuestionArea struct {
 }
 
 type Report struct {
-	ID              pgtype.UUID        `json:"id"`
-	SessionCode     string             `json:"session_code"`
-	Status          string             `json:"status"`
-	ContentEn       pgtype.Text        `json:"content_en"`
-	ContentEs       pgtype.Text        `json:"content_es"`
-	Strengths       []byte             `json:"strengths"`
-	Weaknesses      []byte             `json:"weaknesses"`
-	Recommendation  pgtype.Text        `json:"recommendation"`
-	QuestionCount   int32              `json:"question_count"`
-	DurationMinutes int32              `json:"duration_minutes"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	ID               pgtype.UUID        `json:"id"`
+	SessionCode      string             `json:"session_code"`
+	Status           string             `json:"status"`
+	ContentEn        pgtype.Text        `json:"content_en"`
+	ContentEs        pgtype.Text        `json:"content_es"`
+	Strengths        []byte             `json:"strengths"`
+	StrengthsEs      []byte             `json:"strengths_es"`
+	Weaknesses       []byte             `json:"weaknesses"`
+	WeaknessesEs     []byte             `json:"weaknesses_es"`
+	Recommendation   pgtype.Text        `json:"recommendation"`
+	RecommendationEs pgtype.Text        `json:"recommendation_es"`
+	QuestionCount    int32              `json:"question_count"`
+	DurationMinutes  int32              `json:"duration_minutes"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Session struct {

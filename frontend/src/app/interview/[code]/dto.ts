@@ -65,8 +65,11 @@ export interface InterviewReportDto {
   content_en: string;
   content_es: string;
   areas_of_clarity?: string[];
+  areas_of_clarity_es?: string[];
   areas_to_develop_further?: string[];
+  areas_to_develop_further_es?: string[];
   recommendation: string;
+  recommendation_es?: string;
   question_count: number;
   duration_minutes: number;
 }

@@ -38,18 +38,23 @@ func (s *PostgresStore) GetReportBySession(ctx context.Context, sessionCode stri
 // CreateReport inserts a new report row.
 func (s *PostgresStore) CreateReport(ctx context.Context, r *Report) error {
 	strengthsJSON, _ := json.Marshal(r.AreasOfClarity)
+	strengthsEsJSON, _ := json.Marshal(r.AreasOfClarityEs)
 	weaknessesJSON, _ := json.Marshal(r.AreasToDevelopFurther)
+	weaknessesEsJSON, _ := json.Marshal(r.AreasToDevelopFurtherEs)
 
 	_, err := sqlgen.New(s.pool).CreateReport(ctx, sqlgen.CreateReportParams{
-		SessionCode:     r.SessionCode,
-		Status:          string(r.Status),
-		ContentEn:       pgtype.Text{String: r.ContentEn, Valid: r.ContentEn != ""},
-		ContentEs:       pgtype.Text{String: r.ContentEs, Valid: r.ContentEs != ""},
-		Strengths:       strengthsJSON,
-		Weaknesses:      weaknessesJSON,
-		Recommendation:  pgtype.Text{String: r.Recommendation, Valid: r.Recommendation != ""},
-		QuestionCount:   int32(r.QuestionCount),
-		DurationMinutes: int32(r.DurationMinutes),
+		SessionCode:      r.SessionCode,
+		Status:           string(r.Status),
+		ContentEn:        pgtype.Text{String: r.ContentEn, Valid: r.ContentEn != ""},
+		ContentEs:        pgtype.Text{String: r.ContentEs, Valid: r.ContentEs != ""},
+		Strengths:        strengthsJSON,
+		StrengthsEs:      strengthsEsJSON,
+		Weaknesses:       weaknessesJSON,
+		WeaknessesEs:     weaknessesEsJSON,
+		Recommendation:   pgtype.Text{String: r.Recommendation, Valid: r.Recommendation != ""},
+		RecommendationEs: pgtype.Text{String: r.RecommendationEs, Valid: r.RecommendationEs != ""},
+		QuestionCount:    int32(r.QuestionCount),
+		DurationMinutes:  int32(r.DurationMinutes),
 	})
 	if err != nil {
 		return fmt.Errorf("create report: %w", err)
@@ -60,18 +65,23 @@ func (s *PostgresStore) CreateReport(ctx context.Context, r *Report) error {
 // UpdateReport updates a report with the generated content.
 func (s *PostgresStore) UpdateReport(ctx context.Context, r *Report) error {
 	strengthsJSON, _ := json.Marshal(r.AreasOfClarity)
+	strengthsEsJSON, _ := json.Marshal(r.AreasOfClarityEs)
 	weaknessesJSON, _ := json.Marshal(r.AreasToDevelopFurther)
+	weaknessesEsJSON, _ := json.Marshal(r.AreasToDevelopFurtherEs)
 
 	err := sqlgen.New(s.pool).UpdateReport(ctx, sqlgen.UpdateReportParams{
-		SessionCode:     r.SessionCode,
-		Status:          string(r.Status),
-		ContentEn:       pgtype.Text{String: r.ContentEn, Valid: r.ContentEn != ""},
-		ContentEs:       pgtype.Text{String: r.ContentEs, Valid: r.ContentEs != ""},
-		Strengths:       strengthsJSON,
-		Weaknesses:      weaknessesJSON,
-		Recommendation:  pgtype.Text{String: r.Recommendation, Valid: r.Recommendation != ""},
-		QuestionCount:   int32(r.QuestionCount),
-		DurationMinutes: int32(r.DurationMinutes),
+		SessionCode:      r.SessionCode,
+		Status:           string(r.Status),
+		ContentEn:        pgtype.Text{String: r.ContentEn, Valid: r.ContentEn != ""},
+		ContentEs:        pgtype.Text{String: r.ContentEs, Valid: r.ContentEs != ""},
+		Strengths:        strengthsJSON,
+		StrengthsEs:      strengthsEsJSON,
+		Weaknesses:       weaknessesJSON,
+		WeaknessesEs:     weaknessesEsJSON,
+		Recommendation:   pgtype.Text{String: r.Recommendation, Valid: r.Recommendation != ""},
+		RecommendationEs: pgtype.Text{String: r.RecommendationEs, Valid: r.RecommendationEs != ""},
+		QuestionCount:    int32(r.QuestionCount),
+		DurationMinutes:  int32(r.DurationMinutes),
 	})
 	if err != nil {
 		return fmt.Errorf("update report: %w", err)
@@ -97,17 +107,32 @@ func reportFromRow(row sqlgen.Report) *Report {
 	if row.Recommendation.Valid {
 		r.Recommendation = row.Recommendation.String
 	}
+	if row.RecommendationEs.Valid {
+		r.RecommendationEs = row.RecommendationEs.String
+	}
 	if row.Strengths != nil {
 		_ = json.Unmarshal(row.Strengths, &r.AreasOfClarity)
 	}
 	if r.AreasOfClarity == nil {
 		r.AreasOfClarity = []string{}
 	}
+	if row.StrengthsEs != nil {
+		_ = json.Unmarshal(row.StrengthsEs, &r.AreasOfClarityEs)
+	}
+	if r.AreasOfClarityEs == nil {
+		r.AreasOfClarityEs = []string{}
+	}
 	if row.Weaknesses != nil {
 		_ = json.Unmarshal(row.Weaknesses, &r.AreasToDevelopFurther)
 	}
 	if r.AreasToDevelopFurther == nil {
 		r.AreasToDevelopFurther = []string{}
+	}
+	if row.WeaknessesEs != nil {
+		_ = json.Unmarshal(row.WeaknessesEs, &r.AreasToDevelopFurtherEs)
+	}
+	if r.AreasToDevelopFurtherEs == nil {
+		r.AreasToDevelopFurtherEs = []string{}
 	}
 	return r
 }
