@@ -98,7 +98,8 @@ export function isReloadRecoveryErrorCode(errorCode: string): boolean {
     || errorCode === "IDEMPOTENCY_CONFLICT"
     || errorCode === "ASYNC_POLL_TIMEOUT"
     || errorCode === "ASYNC_POLL_CIRCUIT_OPEN"
-    || errorCode === "AI_RETRY_EXHAUSTED";
+    || errorCode === "AI_RETRY_EXHAUSTED"
+    || errorCode === "FINAL_AUTO_RECOVERY_REQUIRED";
 }
 
 export function shouldClearPendingAnswerOnError(errorCode: string): boolean {

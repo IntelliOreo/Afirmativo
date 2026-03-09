@@ -197,10 +197,15 @@ export function useInterviewMachine({
   const [state, dispatch] = useReducer(interviewReducer, { phase: "guard" });
   const startRequestKeyRef = useRef<string>("");
   const activeSubmissionKeyRef = useRef<string>("");
+  const langRef = useRef<Lang>(lang);
   const { submitPendingAnswerJob } = useAsyncAnswerPolling({ code });
   const submissionPendingJob = state.phase === "submitting" ? state.pendingJob : null;
   const submissionRequestKind = state.phase === "submitting" ? state.requestKind : null;
   const submissionMode = state.phase === "submitting" ? state.submitMode : null;
+
+  useEffect(() => {
+    langRef.current = lang;
+  }, [lang]);
 
   const requestSubmit = useCallback((answerText: string, submitMode: SubmitMode = "question") => {
     if (state.phase !== "active") return;
@@ -329,13 +334,12 @@ export function useInterviewMachine({
         if (submissionMode === "finalAuto") {
           pendingAnswerStore.clear(code);
           dispatch({
-            type: "SUBMIT_SUCCEEDED",
+            type: "SUBMIT_FAILED",
             payload: {
-              result: {
-                done: true,
-                timerRemainingS: 0,
-                answerSubmitWindowRemainingS: 0,
-              },
+              message: langRef.current === "es"
+                ? "No se pudo confirmar el envío final automático. Recargue para continuar."
+                : "Automatic final submission could not be confirmed. Reload to continue.",
+              code: "FINAL_AUTO_RECOVERY_REQUIRED",
             },
           });
           return;

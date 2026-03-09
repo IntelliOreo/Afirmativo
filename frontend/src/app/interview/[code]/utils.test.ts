@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getVoiceCapabilities,
   isCompletedResponse,
+  isReloadRecoveryErrorCode,
   isUnauthorizedResponse,
 } from "./utils";
 
@@ -105,5 +106,16 @@ describe("getVoiceCapabilities", () => {
     expect(caps.canReviewTranscript).toBe(false);
     expect(caps.canSubmitAnswer).toBe(false);
     expect(caps.canPreviewRecording).toBe(false);
+  });
+});
+
+describe("isReloadRecoveryErrorCode", () => {
+  it("treats final auto recovery as reloadable", () => {
+    expect(isReloadRecoveryErrorCode("FINAL_AUTO_RECOVERY_REQUIRED")).toBe(true);
+    expect(isReloadRecoveryErrorCode("AI_RETRY_EXHAUSTED")).toBe(true);
+  });
+
+  it("does not mark unrelated codes as reload-only", () => {
+    expect(isReloadRecoveryErrorCode("INTERNAL_ERROR")).toBe(false);
   });
 });

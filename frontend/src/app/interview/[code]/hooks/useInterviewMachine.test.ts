@@ -26,6 +26,16 @@ vi.mock("./useAsyncAnswerPolling", () => ({
   }),
 }));
 
+const pendingAnswerStoreReadMock = vi.fn();
+const pendingAnswerStoreWriteMock = vi.fn();
+const pendingAnswerStoreClearMock = vi.fn();
+
+vi.mock("@/lib/storage/pendingAnswerStore", () => ({
+  read: (...args: unknown[]) => pendingAnswerStoreReadMock(...args),
+  write: (...args: unknown[]) => pendingAnswerStoreWriteMock(...args),
+  clear: (...args: unknown[]) => pendingAnswerStoreClearMock(...args),
+}));
+
 const question = {
   textEs: "Pregunta",
   textEn: "Question",
@@ -183,6 +193,10 @@ describe("useInterviewMachine", () => {
   beforeEach(() => {
     apiMock.mockReset();
     submitPendingAnswerJobMock.mockReset();
+    pendingAnswerStoreReadMock.mockReset();
+    pendingAnswerStoreWriteMock.mockReset();
+    pendingAnswerStoreClearMock.mockReset();
+    pendingAnswerStoreReadMock.mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -314,6 +328,58 @@ describe("useInterviewMachine", () => {
         turnId: "turn-2",
         questionNumber: 3,
       },
+    });
+  });
+
+  it("routes final auto submit failures into reload recovery instead of fake completion", async () => {
+    vi.useFakeTimers();
+    apiMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: {
+        question: {
+          text_es: "Pregunta",
+          text_en: "Question",
+          area: "protected_ground",
+          kind: "criterion",
+          turn_id: "turn-1",
+          question_number: 2,
+          total_questions: 10,
+        },
+        timer_remaining_s: 5,
+        answer_submit_window_remaining_s: 240,
+        language: "en",
+      },
+    });
+    submitPendingAnswerJobMock.mockRejectedValue(new Error("backend uncertain"));
+
+    const setLang = vi.fn();
+    const { result } = renderHook(() => useInterviewMachine({
+      code: "AP-123",
+      lang: "en",
+      langInitialized: true,
+      setLang,
+    }));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    act(() => {
+      result.current.requestSubmit("Last answer", "finalAuto");
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(pendingAnswerStoreClearMock).toHaveBeenCalledWith("AP-123");
+    expect(result.current.state).toEqual({
+      phase: "error",
+      message: "Automatic final submission could not be confirmed. Reload to continue.",
+      code: "FINAL_AUTO_RECOVERY_REQUIRED",
     });
   });
 });
