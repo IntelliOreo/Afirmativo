@@ -1,0 +1,85 @@
+# Ignore all markdown files in the project root
+/*.md
+
+# Design docs (specs, analysis docs — tracked separately from source code)
+design/*.md
+
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Next.js build output
+frontend/.next/
+frontend/out/
+
+# TypeScript build cache
+*.tsbuildinfo
+
+# Production
+frontend/build/
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+backend/.env.example
+frontend/.env.example
+
+# Database migration tool secrets
+database/.env
+database/
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# Go build artifacts
+backend/bin/
+*.exe
+*.test
+
+# Terraform
+infra/.terraform/
+infra/terraform.tfstate
+infra/terraform.tfstate.backup
+infra/.terraform.lock.hcl
+infra/*.tfvars
+
+# GCP credentials
+service-account*.json
+gcp-key*.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/settings.json
+*.swp
+*.swo
+
+# Claude 
+memory/
+
+# Docker
+.dockerignore
+
+#mock APIs
+mockThirdpartyAPIs/
+
+#design docs
+design/
+
+.vscode/    
+
+# Local dev helper script
+dev-all.sh
+
+
+backend/server
