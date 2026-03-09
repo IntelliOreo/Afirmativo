@@ -60,10 +60,10 @@ func (f *fakeInterviewStore) GetAnswerCount(context.Context, string) (int, error
 func (f *fakeInterviewStore) GetFlowState(context.Context, string) (*FlowState, error) {
 	return nil, nil
 }
-func (f *fakeInterviewStore) PrepareDisclaimerStep(context.Context, string, string) (*FlowState, error) {
+func (f *fakeInterviewStore) PrepareDisclaimerStep(context.Context, string, *IssuedQuestion) (*FlowState, error) {
 	return nil, nil
 }
-func (f *fakeInterviewStore) PrepareReadinessStep(context.Context, string, string) (*FlowState, error) {
+func (f *fakeInterviewStore) PrepareReadinessStep(context.Context, string, *IssuedQuestion) (*FlowState, error) {
 	return nil, nil
 }
 func (f *fakeInterviewStore) AdvanceNonCriterionStep(context.Context, AdvanceNonCriterionStepParams) (*FlowState, error) {

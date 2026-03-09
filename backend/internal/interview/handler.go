@@ -49,10 +49,11 @@ type questionResponse struct {
 }
 
 type startResponse struct {
-	Question        questionResponse `json:"question"`
-	TimerRemainingS int              `json:"timer_remaining_s"`
-	Resuming        bool             `json:"resuming"`
-	Language        string           `json:"language"`
+	Question                     questionResponse `json:"question"`
+	TimerRemainingS              int              `json:"timer_remaining_s"`
+	AnswerSubmitWindowRemainingS int              `json:"answer_submit_window_remaining_s"`
+	Resuming                     bool             `json:"resuming"`
+	Language                     string           `json:"language"`
 }
 
 // HandleStart transitions a session to interviewing and returns the first question.
@@ -109,9 +110,10 @@ func (h *Handler) HandleStart(w http.ResponseWriter, r *http.Request) {
 			QuestionNumber: q.QuestionNumber,
 			TotalQuestions: q.TotalQuestions,
 		},
-		TimerRemainingS: result.TimerRemainingS,
-		Resuming:        result.Resuming,
-		Language:        result.Language,
+		TimerRemainingS:              result.TimerRemainingS,
+		AnswerSubmitWindowRemainingS: result.AnswerSubmitWindowRemainingS,
+		Resuming:                     result.Resuming,
+		Language:                     result.Language,
 	})
 }
 
@@ -132,14 +134,15 @@ type answerAsyncAcceptedResponse struct {
 }
 
 type answerJobStatusResponse struct {
-	JobID           string            `json:"job_id"`
-	ClientRequestID string            `json:"client_request_id"`
-	Status          string            `json:"status"`
-	Done            bool              `json:"done"`
-	NextQuestion    *questionResponse `json:"next_question"`
-	TimerRemainingS int               `json:"timer_remaining_s"`
-	ErrorCode       string            `json:"error_code,omitempty"`
-	ErrorMessage    string            `json:"error_message,omitempty"`
+	JobID                        string            `json:"job_id"`
+	ClientRequestID              string            `json:"client_request_id"`
+	Status                       string            `json:"status"`
+	Done                         bool              `json:"done"`
+	NextQuestion                 *questionResponse `json:"next_question"`
+	TimerRemainingS              int               `json:"timer_remaining_s"`
+	AnswerSubmitWindowRemainingS int               `json:"answer_submit_window_remaining_s"`
+	ErrorCode                    string            `json:"error_code,omitempty"`
+	ErrorMessage                 string            `json:"error_message,omitempty"`
 }
 
 func normalizeRequestLanguage(language string) (string, bool) {
@@ -351,13 +354,14 @@ func (h *Handler) HandleAnswerJobStatus(w http.ResponseWriter, r *http.Request) 
 	}
 
 	shared.WriteJSON(w, http.StatusOK, answerJobStatusResponse{
-		JobID:           result.JobID,
-		ClientRequestID: result.ClientRequestID,
-		Status:          string(result.Status),
-		Done:            result.Done,
-		NextQuestion:    nextQuestion,
-		TimerRemainingS: result.TimerRemainingS,
-		ErrorCode:       result.ErrorCode,
-		ErrorMessage:    result.ErrorMessage,
+		JobID:                        result.JobID,
+		ClientRequestID:              result.ClientRequestID,
+		Status:                       string(result.Status),
+		Done:                         result.Done,
+		NextQuestion:                 nextQuestion,
+		TimerRemainingS:              result.TimerRemainingS,
+		AnswerSubmitWindowRemainingS: result.AnswerSubmitWindowRemainingS,
+		ErrorCode:                    result.ErrorCode,
+		ErrorMessage:                 result.ErrorMessage,
 	})
 }

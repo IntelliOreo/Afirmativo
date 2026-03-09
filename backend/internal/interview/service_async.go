@@ -172,20 +172,22 @@ type SubmitAnswerAsyncResult struct {
 
 // AnswerJobStatusResult is returned by polling for async answer job state.
 type AnswerJobStatusResult struct {
-	JobID           string
-	ClientRequestID string
-	Status          AsyncAnswerJobStatus
-	Done            bool
-	NextQuestion    *Question
-	TimerRemainingS int
-	ErrorCode       string
-	ErrorMessage    string
+	JobID                        string
+	ClientRequestID              string
+	Status                       AsyncAnswerJobStatus
+	Done                         bool
+	NextQuestion                 *Question
+	TimerRemainingS              int
+	AnswerSubmitWindowRemainingS int
+	ErrorCode                    string
+	ErrorMessage                 string
 }
 
 type answerJobPayload struct {
-	Done            bool                    `json:"done"`
-	NextQuestion    *answerJobQuestionShape `json:"next_question"`
-	TimerRemainingS int                     `json:"timer_remaining_s"`
+	Done                         bool                    `json:"done"`
+	NextQuestion                 *answerJobQuestionShape `json:"next_question"`
+	TimerRemainingS              int                     `json:"timer_remaining_s"`
+	AnswerSubmitWindowRemainingS int                     `json:"answer_submit_window_remaining_s"`
 }
 
 type answerJobQuestionShape struct {
@@ -294,6 +296,7 @@ func (s *Service) GetAnswerJobResult(ctx context.Context, sessionCode, jobID str
 
 	result.Done = payload.Done
 	result.TimerRemainingS = payload.TimerRemainingS
+	result.AnswerSubmitWindowRemainingS = payload.AnswerSubmitWindowRemainingS
 	if payload.NextQuestion != nil {
 		result.NextQuestion = &Question{
 			TextEs:         payload.NextQuestion.TextEs,
@@ -463,8 +466,9 @@ func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
 
 func toAnswerJobPayload(result *AnswerResult) *answerJobPayload {
 	payload := &answerJobPayload{
-		Done:            result.Done,
-		TimerRemainingS: result.TimerRemainingS,
+		Done:                         result.Done,
+		TimerRemainingS:              result.TimerRemainingS,
+		AnswerSubmitWindowRemainingS: result.AnswerSubmitWindowRemainingS,
 	}
 	if result.NextQuestion != nil {
 		payload.NextQuestion = &answerJobQuestionShape{

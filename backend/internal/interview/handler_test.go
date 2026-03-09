@@ -208,6 +208,7 @@ func TestHandleAnswerJobStatus_ValidationAndContract(t *testing.T) {
 					ResultPayload: []byte(`{
 						"done": false,
 						"timer_remaining_s": 3540,
+						"answer_submit_window_remaining_s": 240,
 						"next_question": {
 							"text_es": "¿Cómo se siente hoy?",
 							"text_en": "How are you feeling today?",
@@ -232,10 +233,11 @@ func TestHandleAnswerJobStatus_ValidationAndContract(t *testing.T) {
 			t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
 		}
 		var got struct {
-			Status          string `json:"status"`
-			Done            bool   `json:"done"`
-			TimerRemainingS int    `json:"timer_remaining_s"`
-			NextQuestion    *struct {
+			Status                       string `json:"status"`
+			Done                         bool   `json:"done"`
+			TimerRemainingS              int    `json:"timer_remaining_s"`
+			AnswerSubmitWindowRemainingS int    `json:"answer_submit_window_remaining_s"`
+			NextQuestion                 *struct {
 				Kind   string `json:"kind"`
 				TurnID string `json:"turn_id"`
 			} `json:"next_question"`
@@ -250,6 +252,9 @@ func TestHandleAnswerJobStatus_ValidationAndContract(t *testing.T) {
 		}
 		if got.TimerRemainingS != 3540 {
 			t.Fatalf("timerRemainingS = %d, want 3540", got.TimerRemainingS)
+		}
+		if got.AnswerSubmitWindowRemainingS != 240 {
+			t.Fatalf("answerSubmitWindowRemainingS = %d, want 240", got.AnswerSubmitWindowRemainingS)
 		}
 		if got.NextQuestion == nil {
 			t.Fatalf("nextQuestion = nil, want non-nil")

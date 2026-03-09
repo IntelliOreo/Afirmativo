@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 func TestPostgresStoreAdvanceNonCriterionStepRecordsEventAndAdvancesFlow(t *testing.T) {
@@ -25,9 +26,17 @@ func TestPostgresStoreAdvanceNonCriterionStepRecordsEventAndAdvancesFlow(t *test
 		ExpectedTurnID: "turn-disclaimer",
 		CurrentStep:    FlowStepDisclaimer,
 		NextStep:       FlowStepReadiness,
-		NextTurnID:     "turn-readiness",
 		EventType:      "disclaimer_ack",
 		AnswerText:     "Yes, I understand.",
+		NextIssuedQuestion: NewIssuedQuestion(&Question{
+			TextEs:         "Listo para continuar",
+			TextEn:         "Ready to continue",
+			Area:           "history",
+			Kind:           QuestionKindReadiness,
+			TurnID:         "turn-readiness",
+			QuestionNumber: 1,
+			TotalQuestions: EstimatedTotalQuestions,
+		}, time.Now().UTC()),
 	})
 	if err != nil {
 		t.Fatalf("AdvanceNonCriterionStep() error = %v", err)
@@ -41,6 +50,9 @@ func TestPostgresStoreAdvanceNonCriterionStepRecordsEventAndAdvancesFlow(t *test
 	if got.QuestionNumber != 1 {
 		t.Fatalf("got.QuestionNumber = %d, want 1", got.QuestionNumber)
 	}
+	if got.ActiveQuestion == nil || got.ActiveQuestion.Question.TurnID != "turn-readiness" {
+		t.Fatalf("got.ActiveQuestion = %#v, want readiness turn", got.ActiveQuestion)
+	}
 
 	flowState, err := store.GetFlowState(ctx, sessionCode)
 	if err != nil {
@@ -51,6 +63,9 @@ func TestPostgresStoreAdvanceNonCriterionStepRecordsEventAndAdvancesFlow(t *test
 	}
 	if flowState.ExpectedTurnID != "turn-readiness" {
 		t.Fatalf("flowState.ExpectedTurnID = %q, want turn-readiness", flowState.ExpectedTurnID)
+	}
+	if flowState.ActiveQuestion == nil || flowState.ActiveQuestion.Question.Kind != QuestionKindReadiness {
+		t.Fatalf("flowState.ActiveQuestion = %#v, want persisted readiness question", flowState.ActiveQuestion)
 	}
 
 	events := loadPostgresIntegrationEvents(t, store.pool, sessionCode)
@@ -84,9 +99,17 @@ func TestPostgresStoreAdvanceNonCriterionStepConflictRollsBack(t *testing.T) {
 		ExpectedTurnID: "wrong-turn",
 		CurrentStep:    FlowStepDisclaimer,
 		NextStep:       FlowStepReadiness,
-		NextTurnID:     "turn-readiness",
 		EventType:      "disclaimer_ack",
 		AnswerText:     "This should not persist.",
+		NextIssuedQuestion: NewIssuedQuestion(&Question{
+			TextEs:         "Listo para continuar",
+			TextEn:         "Ready to continue",
+			Area:           "history",
+			Kind:           QuestionKindReadiness,
+			TurnID:         "turn-readiness",
+			QuestionNumber: 1,
+			TotalQuestions: EstimatedTotalQuestions,
+		}, time.Now().UTC()),
 	})
 	assertPostgresIntegrationConflict(t, err)
 
@@ -157,21 +180,23 @@ func TestPostgresStoreProcessCriterionTurnMovesToNextArea(t *testing.T) {
 		PreAddressed: []PreAddressedArea{
 			{Slug: "nexus", Evidence: "Opinion-based harm already described."},
 		},
-		OrderedAreaSlugs:    []string{"history", "nexus", "harm"},
-		MaxQuestionsPerArea: MaxQuestionsPerArea,
-		NextTurnID:          "turn-next",
+		Decision: CriterionTurnDecision{
+			Action:        CriterionTurnActionNext,
+			MarkCurrentAs: AreaStatusComplete,
+		},
+		NextArea: "nexus",
+		NextIssuedQuestion: NewIssuedQuestion(&Question{
+			TextEs:         "Why does the harm connect to a protected ground?",
+			TextEn:         "Why does the harm connect to a protected ground?",
+			Area:           "nexus",
+			Kind:           QuestionKindCriterion,
+			TurnID:         "turn-next",
+			QuestionNumber: 4,
+			TotalQuestions: EstimatedTotalQuestions,
+		}, time.Now().UTC()),
 	})
 	if err != nil {
 		t.Fatalf("ProcessCriterionTurn() error = %v", err)
-	}
-	if got.Action != CriterionTurnActionNext {
-		t.Fatalf("got.Action = %q, want %q", got.Action, CriterionTurnActionNext)
-	}
-	if got.NextArea != "nexus" {
-		t.Fatalf("got.NextArea = %q, want nexus", got.NextArea)
-	}
-	if got.QuestionNumber != 4 {
-		t.Fatalf("got.QuestionNumber = %d, want 4", got.QuestionNumber)
 	}
 	if got.NewCount != 1 {
 		t.Fatalf("got.NewCount = %d, want 1", got.NewCount)
@@ -244,6 +269,9 @@ func TestPostgresStoreProcessCriterionTurnMovesToNextArea(t *testing.T) {
 	if flowState.QuestionNumber != 4 {
 		t.Fatalf("flowState.QuestionNumber = %d, want 4", flowState.QuestionNumber)
 	}
+	if flowState.ActiveQuestion == nil || flowState.ActiveQuestion.Question.Area != "nexus" {
+		t.Fatalf("flowState.ActiveQuestion = %#v, want persisted next-area question", flowState.ActiveQuestion)
+	}
 }
 
 func TestPostgresStoreProcessCriterionTurnMarksDoneWhenNoAreasRemain(t *testing.T) {
@@ -276,28 +304,20 @@ func TestPostgresStoreProcessCriterionTurnMarksDoneWhenNoAreasRemain(t *testing.
 	}
 
 	got, err := store.ProcessCriterionTurn(ctx, ProcessCriterionTurnParams{
-		SessionCode:         sessionCode,
-		ExpectedTurnID:      "turn-final",
-		CurrentArea:         "history",
-		QuestionText:        "Why are you seeking protection?",
-		AnswerText:          "Porque tengo miedo de regresar.",
-		PreferredLanguage:   "es",
-		Evaluation:          evaluation,
-		OrderedAreaSlugs:    []string{"history"},
-		MaxQuestionsPerArea: 1,
-		NextTurnID:          "unused-next-turn",
+		SessionCode:       sessionCode,
+		ExpectedTurnID:    "turn-final",
+		CurrentArea:       "history",
+		QuestionText:      "Why are you seeking protection?",
+		AnswerText:        "Porque tengo miedo de regresar.",
+		PreferredLanguage: "es",
+		Evaluation:        evaluation,
+		Decision: CriterionTurnDecision{
+			Action:        CriterionTurnActionNext,
+			MarkCurrentAs: AreaStatusInsufficient,
+		},
 	})
 	if err != nil {
 		t.Fatalf("ProcessCriterionTurn() error = %v", err)
-	}
-	if got.Action != CriterionTurnActionNext {
-		t.Fatalf("got.Action = %q, want %q", got.Action, CriterionTurnActionNext)
-	}
-	if got.NextArea != "" {
-		t.Fatalf("got.NextArea = %q, want empty", got.NextArea)
-	}
-	if got.QuestionNumber != 6 {
-		t.Fatalf("got.QuestionNumber = %d, want 6", got.QuestionNumber)
 	}
 	if got.NewCount != 1 {
 		t.Fatalf("got.NewCount = %d, want 1", got.NewCount)
@@ -348,6 +368,9 @@ func TestPostgresStoreProcessCriterionTurnMarksDoneWhenNoAreasRemain(t *testing.
 	if flowState.QuestionNumber != 6 {
 		t.Fatalf("flowState.QuestionNumber = %d, want 6", flowState.QuestionNumber)
 	}
+	if flowState.ActiveQuestion != nil {
+		t.Fatalf("flowState.ActiveQuestion = %#v, want nil after flow completion", flowState.ActiveQuestion)
+	}
 }
 
 func TestPostgresStoreProcessCriterionTurnConflictRollsBack(t *testing.T) {
@@ -376,16 +399,27 @@ func TestPostgresStoreProcessCriterionTurnConflictRollsBack(t *testing.T) {
 	})
 
 	_, err := store.ProcessCriterionTurn(ctx, ProcessCriterionTurnParams{
-		SessionCode:         sessionCode,
-		ExpectedTurnID:      "wrong-turn",
-		CurrentArea:         "history",
-		QuestionText:        "What happened?",
-		AnswerText:          "Nothing should save.",
-		PreferredLanguage:   "en",
-		Evaluation:          &Evaluation{CurrentCriterion: CurrentCriterion{Status: "sufficient"}},
-		OrderedAreaSlugs:    []string{"history", "harm"},
-		MaxQuestionsPerArea: MaxQuestionsPerArea,
-		NextTurnID:          "turn-next",
+		SessionCode:       sessionCode,
+		ExpectedTurnID:    "wrong-turn",
+		CurrentArea:       "history",
+		QuestionText:      "What happened?",
+		AnswerText:        "Nothing should save.",
+		PreferredLanguage: "en",
+		Evaluation:        &Evaluation{CurrentCriterion: CurrentCriterion{Status: "sufficient"}},
+		Decision: CriterionTurnDecision{
+			Action:        CriterionTurnActionNext,
+			MarkCurrentAs: AreaStatusComplete,
+		},
+		NextArea: "harm",
+		NextIssuedQuestion: NewIssuedQuestion(&Question{
+			TextEs:         "What harm do you fear?",
+			TextEn:         "What harm do you fear?",
+			Area:           "harm",
+			Kind:           QuestionKindCriterion,
+			TurnID:         "turn-next",
+			QuestionNumber: 3,
+			TotalQuestions: EstimatedTotalQuestions,
+		}, time.Now().UTC()),
 	})
 	assertPostgresIntegrationConflict(t, err)
 

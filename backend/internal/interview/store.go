@@ -33,11 +33,11 @@ type InterviewStateStore interface {
 	// GetFlowState returns the session's interview flow pointer.
 	GetFlowState(ctx context.Context, sessionCode string) (*FlowState, error)
 
-	// PrepareDisclaimerStep sets flow_step=disclaimer and assigns the expected turn id.
-	PrepareDisclaimerStep(ctx context.Context, sessionCode, turnID string) (*FlowState, error)
+	// PrepareDisclaimerStep sets flow_step=disclaimer and persists the issued question snapshot.
+	PrepareDisclaimerStep(ctx context.Context, sessionCode string, issuedQuestion *IssuedQuestion) (*FlowState, error)
 
-	// PrepareReadinessStep sets flow_step=readiness and assigns the expected turn id.
-	PrepareReadinessStep(ctx context.Context, sessionCode, turnID string) (*FlowState, error)
+	// PrepareReadinessStep sets flow_step=readiness and persists the issued question snapshot.
+	PrepareReadinessStep(ctx context.Context, sessionCode string, issuedQuestion *IssuedQuestion) (*FlowState, error)
 
 	// AdvanceNonCriterionStep records a non-criterion event and advances flow state atomically.
 	AdvanceNonCriterionStep(ctx context.Context, params AdvanceNonCriterionStepParams) (*FlowState, error)
@@ -97,27 +97,27 @@ type SaveAnswerParams struct {
 }
 
 type AdvanceNonCriterionStepParams struct {
-	SessionCode    string
-	ExpectedTurnID string
-	CurrentStep    FlowStep
-	NextStep       FlowStep
-	NextTurnID     string
-	EventType      string
-	AnswerText     string
+	SessionCode        string
+	ExpectedTurnID     string
+	CurrentStep        FlowStep
+	NextStep           FlowStep
+	EventType          string
+	AnswerText         string
+	NextIssuedQuestion *IssuedQuestion
 }
 
 type ProcessCriterionTurnParams struct {
-	SessionCode         string
-	ExpectedTurnID      string
-	CurrentArea         string
-	QuestionText        string
-	AnswerText          string
-	PreferredLanguage   string
-	Evaluation          *Evaluation
-	PreAddressed        []PreAddressedArea
-	OrderedAreaSlugs    []string
-	MaxQuestionsPerArea int
-	NextTurnID          string
+	SessionCode        string
+	ExpectedTurnID     string
+	CurrentArea        string
+	QuestionText       string
+	AnswerText         string
+	PreferredLanguage  string
+	Evaluation         *Evaluation
+	PreAddressed       []PreAddressedArea
+	Decision           CriterionTurnDecision
+	NextArea           string
+	NextIssuedQuestion *IssuedQuestion
 }
 
 type PreAddressedArea struct {
@@ -126,10 +126,7 @@ type PreAddressedArea struct {
 }
 
 type ProcessCriterionTurnResult struct {
-	Action         CriterionTurnAction
-	NextArea       string
-	QuestionNumber int
-	NewCount       int
+	NewCount int
 }
 
 type UpsertAnswerJobParams struct {

@@ -4,7 +4,6 @@ import type {
   VoiceCapabilities,
   VoiceRecorderState,
   InterviewPhase,
-  SubmitMode,
 } from "./viewTypes";
 
 export function parseDisclaimerBlocks(rawText: string): DisclaimerBlock[] {
@@ -108,57 +107,76 @@ export function shouldClearPendingAnswerOnError(errorCode: string): boolean {
 
 export function getVoiceCapabilities(params: {
   phase: InterviewPhase;
-  submitMode: SubmitMode | null;
   voiceRecorderState: VoiceRecorderState;
   voiceBlob: Blob | null;
   voicePreviewUrl: string | null;
+  hasDraftText: boolean;
+  isFinalReviewWindow: boolean;
 }): VoiceCapabilities {
   const {
     phase,
-    submitMode,
     voiceRecorderState,
     voiceBlob,
     voicePreviewUrl,
+    hasDraftText,
+    isFinalReviewWindow,
   } = params;
+
+  const isRecordingState = voiceRecorderState === "recording" || voiceRecorderState === "paused";
+  const isBusyState =
+    voiceRecorderState === "transcribing_for_review"
+    || voiceRecorderState === "forced_finalizing";
 
   return {
     canSwitchModes:
       phase === "active"
-      && voiceRecorderState !== "recording"
-      && voiceRecorderState !== "paused"
-      && voiceRecorderState !== "sending",
+      && !isFinalReviewWindow
+      && !isRecordingState
+      && !isBusyState,
     canToggleRecording:
-      phase === "active"
-      && (
-        voiceRecorderState === "idle"
-        || voiceRecorderState === "recording"
-        || voiceRecorderState === "paused"
-      ),
-    canCompleteRecording:
-      phase === "active"
-      && (voiceRecorderState === "recording" || voiceRecorderState === "paused"),
-    canDiscardRecording:
       phase === "active"
       && (
         voiceRecorderState === "recording"
         || voiceRecorderState === "paused"
-        || voiceRecorderState === "stopped"
+        || (voiceRecorderState === "idle" && !isFinalReviewWindow)
       ),
-    canSendRecording:
+    canCompleteRecording:
       phase === "active"
-      && voiceRecorderState === "stopped"
+      && isRecordingState,
+    canDiscardRecording:
+      phase === "active"
+      && !isFinalReviewWindow
+      && (
+        voiceRecorderState === "recording"
+        || voiceRecorderState === "paused"
+        || voiceRecorderState === "audio_ready"
+        || voiceRecorderState === "review_ready"
+      ),
+    canReviewTranscript:
+      phase === "active"
+      && voiceRecorderState === "audio_ready"
       && !!voiceBlob
       && voiceBlob.size > 0,
+    canSubmitAnswer:
+      phase === "active"
+      && voiceRecorderState === "review_ready"
+      && hasDraftText,
     canPreviewRecording:
       phase === "active"
-      && (voiceRecorderState === "paused" || voiceRecorderState === "stopped")
+      && (
+        voiceRecorderState === "paused"
+        || voiceRecorderState === "audio_ready"
+        || voiceRecorderState === "review_ready"
+      )
       && !!voicePreviewUrl,
     centerControlLabel:
       voiceRecorderState === "idle"
         ? "Record"
         : voiceRecorderState === "recording"
           ? "Pause"
-          : "Resume",
+          : voiceRecorderState === "paused"
+            ? "Resume"
+            : "Record",
   };
 }
 

@@ -5,6 +5,7 @@ package interview
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"time"
 )
@@ -145,6 +146,38 @@ func SelectNextPendingArea(orderedAreaSlugs []string, statusByArea map[string]Ar
 	return ""
 }
 
+func DetermineNextAreaAfterCriterionTurn(
+	areas []QuestionArea,
+	currentArea string,
+	decision CriterionTurnDecision,
+	preAddressed []PreAddressedArea,
+	orderedAreaSlugs []string,
+) string {
+	if decision.Action != CriterionTurnActionNext {
+		return currentArea
+	}
+
+	statusByArea := make(map[string]AreaStatus, len(areas))
+	for _, area := range areas {
+		statusByArea[area.Area] = area.Status
+	}
+
+	if decision.MarkCurrentAs != "" {
+		statusByArea[currentArea] = decision.MarkCurrentAs
+	}
+
+	for _, flag := range preAddressed {
+		if strings.TrimSpace(flag.Slug) == "" {
+			continue
+		}
+		if statusByArea[flag.Slug] == AreaStatusPending {
+			statusByArea[flag.Slug] = AreaStatusPreAddressed
+		}
+	}
+
+	return SelectNextPendingArea(orderedAreaSlugs, statusByArea)
+}
+
 // ── Domain types ───────────────────────────────────────────────────
 
 // Question represents a single interview question sent to the client.
@@ -158,11 +191,66 @@ type Question struct {
 	TotalQuestions int
 }
 
+type IssuedQuestion struct {
+	Question         Question
+	IssuedAt         time.Time
+	AnswerDeadlineAt time.Time
+	BufferDeadlineAt time.Time
+}
+
+func NewIssuedQuestion(question *Question, now time.Time) *IssuedQuestion {
+	if question == nil {
+		return nil
+	}
+	issuedAt := now.UTC()
+	return &IssuedQuestion{
+		Question:         *question,
+		IssuedAt:         issuedAt,
+		AnswerDeadlineAt: issuedAt.Add(AnswerSubmitWindow),
+		BufferDeadlineAt: issuedAt.Add(AnswerSubmitWindow + AnswerSubmitBuffer),
+	}
+}
+
+func (q *IssuedQuestion) SubmitWindowRemaining(now time.Time) int {
+	if q == nil {
+		return 0
+	}
+	remaining := int(math.Ceil(q.AnswerDeadlineAt.Sub(now.UTC()).Seconds()))
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
+func (q *IssuedQuestion) BufferExpired(now time.Time) bool {
+	if q == nil {
+		return false
+	}
+	return !now.UTC().Before(q.BufferDeadlineAt)
+}
+
+func (q *IssuedQuestion) TextForLanguage(preferredLanguage string) string {
+	if q == nil {
+		return ""
+	}
+	if strings.EqualFold(strings.TrimSpace(preferredLanguage), "en") {
+		if q.Question.TextEn != "" {
+			return q.Question.TextEn
+		}
+		return q.Question.TextEs
+	}
+	if q.Question.TextEs != "" {
+		return q.Question.TextEs
+	}
+	return q.Question.TextEn
+}
+
 // FlowState represents the interview flow pointer persisted on sessions.
 type FlowState struct {
 	Step           FlowStep
 	ExpectedTurnID string
 	QuestionNumber int
+	ActiveQuestion *IssuedQuestion
 }
 
 // QuestionArea represents a focus area in the interview.
@@ -183,6 +271,11 @@ const EstimatedTotalQuestions = 25
 // MaxQuestionsPerArea is the maximum questions (initial + follow-ups) per criterion
 // before the backend marks it complete or insufficient and moves on.
 const MaxQuestionsPerArea = 6
+
+const (
+	AnswerSubmitWindow = 4 * time.Minute
+	AnswerSubmitBuffer = 30 * time.Second
+)
 
 // ── AI response types ───────────────────────────────────────────────
 // These map to the json_schema enforced via output_config in the Claude API call.

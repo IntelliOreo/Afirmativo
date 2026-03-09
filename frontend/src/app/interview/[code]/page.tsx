@@ -1,13 +1,12 @@
 "use client";
 
-import { Suspense, useCallback, useEffect } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { NavHeader } from "@components/NavHeader";
 import { Footer } from "@components/Footer";
 import { Button } from "@components/Button";
 import { Card } from "@components/Card";
-import { Alert } from "@components/Alert";
 import { beforeYouStartContent } from "../../../../content/beforeYouStart";
 import { DisclaimerConsentPanel } from "./components/DisclaimerConsentPanel";
 import { InterviewErrorState } from "./components/InterviewErrorState";
@@ -18,7 +17,6 @@ import { ReportSection } from "./components/ReportSection";
 import { TextAnswerPanel } from "./components/TextAnswerPanel";
 import { VoiceRecorderPanel } from "./components/VoiceRecorderPanel";
 import {
-  AUTOSUBMIT_SECONDS,
   TEXT_ANSWER_MAX_CHARS,
   VOICE_MAX_SECONDS,
   WARNING_AT_SECONDS,
@@ -31,6 +29,7 @@ import { useInterviewReport } from "./hooks/useInterviewReport";
 import { useInterviewWaitingStatus } from "./hooks/useInterviewWaitingStatus";
 import { useVoiceRecorder } from "./hooks/useVoiceRecorder";
 import type { InputMode } from "./viewTypes";
+import * as answerDraftStore from "@/lib/storage/answerDraftStore";
 import {
   formatClock,
   getVoiceCapabilities,
@@ -72,12 +71,19 @@ function InterviewPageContent() {
     state.phase === "active" || state.phase === "submitting"
       ? state.secondsLeft
       : 0;
+  const answerSecondsLeft =
+    state.phase === "active" || state.phase === "submitting"
+      ? state.answerSecondsLeft
+      : 0;
   const textAnswer = state.phase === "active" ? state.textAnswer : "";
   const inputMode = state.phase === "active" ? state.inputMode : "text";
   const submitMode = state.phase === "submitting" ? state.submitMode : null;
   const completionSource = state.phase === "done" ? state.completionSource : "finished";
   const error = state.phase === "error" ? state.message : "";
   const errorCode = state.phase === "error" ? state.code ?? "" : "";
+  const [forceFinalizingVoice, setForceFinalizingVoice] = useState(false);
+  const restoredDraftTurnRef = useRef("");
+  const autoFinalizeTurnRef = useRef("");
 
   const {
     disclaimerScrollRef,
@@ -100,17 +106,56 @@ function InterviewPageContent() {
     completeVoiceRecording,
     discardVoiceRecording,
     toggleVoicePreviewPlayback,
-    sendVoiceRecording,
+    reviewVoiceRecording,
+    finalizeVoiceRecording,
     setVoiceErrorMessage,
   } = useVoiceRecorder({
     lang,
-    isActive: state.phase === "active",
+    isActive: state.phase === "active" || forceFinalizingVoice,
   });
 
   useEffect(() => {
     if (!currentQuestion?.turnId) return;
+    restoredDraftTurnRef.current = "";
+    autoFinalizeTurnRef.current = "";
+    setForceFinalizingVoice(false);
     discardVoiceRecording();
   }, [currentQuestion?.turnId, discardVoiceRecording]);
+
+  useEffect(() => {
+    if (state.phase !== "active" || !currentQuestion) return;
+
+    answerDraftStore.clearStale(code, currentQuestion.turnId);
+    if (restoredDraftTurnRef.current === currentQuestion.turnId) return;
+    restoredDraftTurnRef.current = currentQuestion.turnId;
+
+    const savedDraft = answerDraftStore.read(code, currentQuestion.turnId);
+    if (!savedDraft) return;
+
+    dispatch({ type: "TEXT_CHANGED", payload: { value: savedDraft.draftText } });
+    if (savedDraft.source === "voice_review" && currentQuestion.kind !== "disclaimer") {
+      dispatch({ type: "INPUT_MODE_CHANGED", payload: { mode: "voice" } });
+    }
+  }, [code, currentQuestion, dispatch, state.phase]);
+
+  useEffect(() => {
+    if (state.phase !== "active" || !currentQuestion) return;
+
+    if (!textAnswer.trim()) {
+      answerDraftStore.clear(code, currentQuestion.turnId);
+      return;
+    }
+
+    answerDraftStore.write(code, {
+      turnId: currentQuestion.turnId,
+      questionText: getQuestionText(currentQuestion, lang),
+      draftText: textAnswer,
+      source: inputMode === "voice" && voiceRecorderState === "review_ready"
+        ? "voice_review"
+        : "text",
+      updatedAt: Date.now(),
+    });
+  }, [code, currentQuestion, inputMode, lang, state.phase, textAnswer, voiceRecorderState]);
 
   const handleInputModeSwitch = useCallback((nextMode: InputMode) => {
     if (state.phase !== "active" || nextMode === state.inputMode) return;
@@ -118,7 +163,8 @@ function InterviewPageContent() {
     if (
       voiceRecorderState === "recording"
       || voiceRecorderState === "paused"
-      || voiceRecorderState === "sending"
+      || voiceRecorderState === "transcribing_for_review"
+      || voiceRecorderState === "forced_finalizing"
     ) {
       setVoiceErrorMessage(
         lang === "es"
@@ -128,21 +174,18 @@ function InterviewPageContent() {
       return;
     }
 
-    const hasUnsentText = state.inputMode === "text" && state.textAnswer.trim().length > 0;
-    const hasUnsentVoice = state.inputMode === "voice" && !!voiceBlob;
-    if ((hasUnsentText || hasUnsentVoice) && typeof window !== "undefined") {
+    const hasUnreviewedVoice =
+      state.inputMode === "voice"
+      && !!voiceBlob
+      && voiceRecorderState === "audio_ready";
+    if (hasUnreviewedVoice && typeof window !== "undefined") {
       const confirmed = window.confirm(
         lang === "es"
-          ? "Tiene una respuesta sin enviar. ¿Desea descartarla y cambiar de modo?"
-          : "You have an unsent answer. Discard it and switch modes?",
+          ? "Tiene audio sin revisar. ¿Desea descartarlo y cambiar de modo?"
+          : "You have audio that has not been reviewed yet. Discard it and switch modes?",
       );
       if (!confirmed) return;
-    }
-
-    if (state.inputMode === "voice") {
       discardVoiceRecording();
-    } else {
-      dispatch({ type: "TEXT_CHANGED", payload: { value: "" } });
     }
     dispatch({ type: "INPUT_MODE_CHANGED", payload: { mode: nextMode } });
   }, [
@@ -160,12 +203,55 @@ function InterviewPageContent() {
     requestSubmit(state.textAnswer);
   }, [requestSubmit, state]);
 
-  const handleSendVoiceAnswer = useCallback(async () => {
+  const handleReviewVoiceAnswer = useCallback(async () => {
     if (state.phase !== "active") return;
-    const transcript = await sendVoiceRecording(code);
+    const transcript = await reviewVoiceRecording(code);
     if (!transcript) return;
-    requestSubmit(transcript);
-  }, [code, requestSubmit, sendVoiceRecording, state.phase]);
+    dispatch({ type: "TEXT_CHANGED", payload: { value: transcript } });
+  }, [code, dispatch, reviewVoiceRecording, state.phase]);
+
+  const handleSubmitReviewedVoiceAnswer = useCallback(() => {
+    if (state.phase !== "active" || !state.textAnswer.trim()) return;
+    requestSubmit(state.textAnswer);
+  }, [requestSubmit, state]);
+
+  useEffect(() => {
+    if (state.phase !== "active" || !currentQuestion) return;
+    if (answerSecondsLeft > 0) return;
+    if (autoFinalizeTurnRef.current === currentQuestion.turnId) return;
+    autoFinalizeTurnRef.current = currentQuestion.turnId;
+
+    void (async () => {
+      const draftText = state.textAnswer.trim();
+      if (draftText) {
+        requestSubmit(draftText, "finalAuto");
+        return;
+      }
+
+      const hasVoiceInProgress =
+        voiceRecorderState === "recording"
+        || voiceRecorderState === "paused"
+        || voiceRecorderState === "audio_ready"
+        || voiceRecorderState === "review_ready";
+
+      if (!hasVoiceInProgress) {
+        requestSubmit("", "finalAuto");
+        return;
+      }
+
+      setForceFinalizingVoice(true);
+      const transcript = await finalizeVoiceRecording(code);
+      requestSubmit((transcript ?? "").trim(), "finalAuto");
+    })();
+  }, [
+    answerSecondsLeft,
+    code,
+    currentQuestion,
+    finalizeVoiceRecording,
+    requestSubmit,
+    state,
+    voiceRecorderState,
+  ]);
 
   const handleAgreeAndContinue = useCallback(() => {
     if (state.phase !== "active") return;
@@ -178,15 +264,12 @@ function InterviewPageContent() {
   }, []);
 
   const timerLabel = formatClock(secondsLeft);
+  const answerTimerLabel = formatClock(answerSecondsLeft);
   const textAnswerCharCount = textAnswer.length;
   const isWarning = secondsLeft <= WARNING_AT_SECONDS;
   const isWrapup = secondsLeft <= WRAPUP_AT_SECONDS;
   const isBlinkingTimer = secondsLeft <= 30 && secondsLeft > 0;
   const isSubmittingInQuestionFlow = state.phase === "submitting" && state.submitMode === "question";
-  const isAutoSubmitCountdown =
-    secondsLeft <= AUTOSUBMIT_SECONDS
-    && secondsLeft > 0
-    && (state.phase === "active" || state.phase === "submitting");
   const isConsentQuestion = currentQuestion?.kind === "disclaimer";
   const consentQuestionText = getQuestionText(currentQuestion, lang);
   const consentBlocks = parseDisclaimerBlocks(consentQuestionText);
@@ -202,12 +285,36 @@ function InterviewPageContent() {
   const voiceWarningRemaining = voiceWarningSeconds == null
     ? null
     : Math.max(0, VOICE_MAX_SECONDS - voiceWarningSeconds);
+  const isAnswerFinalReviewWindow = answerSecondsLeft > 0 && answerSecondsLeft <= 30;
+  const answerTimerTone = answerSecondsLeft <= 30
+    ? "danger"
+    : answerSecondsLeft <= 60
+      ? "warning"
+      : "normal";
+  const answerTimerMessage = answerSecondsLeft <= 30
+    ? (lang === "es"
+      ? "Quedan 0:30 o menos. Su respuesta se finalizará automáticamente cuando llegue a 0:00."
+      : "0:30 or less remain. Your answer will be finalized automatically when the timer reaches 0:00.")
+    : answerSecondsLeft <= 60
+      ? (lang === "es"
+        ? "Queda 1:00 o menos. Termine y envíe su respuesta."
+        : "1:00 or less remain. Finish and submit your answer.")
+      : (lang === "es"
+        ? "Use este tiempo para revisar y enviar su respuesta final."
+        : "Use this time to review and submit your final answer.");
+  const voiceReviewWarning =
+    (voiceRecorderState === "recording" || voiceRecorderState === "paused") && answerSecondsLeft <= 60
+      ? (lang === "es"
+        ? "Deténgase pronto para dejar tiempo para revisar antes de enviar."
+        : "Stop soon to leave time to review before submit.")
+      : "";
   const voiceCaps = getVoiceCapabilities({
     phase: state.phase,
-    submitMode,
     voiceRecorderState,
     voiceBlob,
     voicePreviewUrl,
+    hasDraftText: textAnswer.trim().length > 0,
+    isFinalReviewWindow: isAnswerFinalReviewWindow,
   });
   const {
     startupWaitStatus,
@@ -285,31 +392,15 @@ function InterviewPageContent() {
             </>
           )}
 
-          {state.phase === "submitting" && state.submitMode === "finalAuto" && (
+          {(forceFinalizingVoice || (state.phase === "submitting" && state.submitMode === "finalAuto")) && (
             <InterviewFinalSubmitState
               lang={lang}
               finalSubmitWaitStatus={finalSubmitWaitStatus}
             />
           )}
 
-          {(state.phase === "active" || isSubmittingInQuestionFlow) && currentQuestion && (
+          {(state.phase === "active" || isSubmittingInQuestionFlow) && currentQuestion && !forceFinalizingVoice && (
             <>
-              {isAutoSubmitCountdown && (
-                <Alert variant="error" className="mb-4">
-                  {lang === "es"
-                    ? `Se enviará automáticamente en ${secondsLeft}s...`
-                    : `Auto-submitting in ${secondsLeft}s...`}
-                </Alert>
-              )}
-
-              {isWrapup && !isAutoSubmitCountdown && (
-                <Alert variant="error" className="mb-4">
-                  {lang === "es"
-                    ? "Quedan menos de 5 minutos. Concluya su respuesta actual."
-                    : "Less than 5 minutes remaining. Please wrap up your current answer."}
-                </Alert>
-              )}
-
               {!isConsentQuestion && (
                 <Card className="mb-6">
                   <p className="text-lg font-semibold text-primary-dark whitespace-pre-line">
@@ -364,6 +455,9 @@ function InterviewPageContent() {
                   {!isVoiceMode ? (
                     <TextAnswerPanel
                       lang={lang}
+                      answerTimerLabel={answerTimerLabel}
+                      answerTimerTone={answerTimerTone}
+                      answerTimerMessage={answerTimerMessage}
                       textAnswer={textAnswer}
                       textAnswerCharCount={textAnswerCharCount}
                       maxChars={TEXT_ANSWER_MAX_CHARS}
@@ -375,6 +469,9 @@ function InterviewPageContent() {
                   ) : (
                     <VoiceRecorderPanel
                       lang={lang}
+                      answerTimerLabel={answerTimerLabel}
+                      answerTimerTone={answerTimerTone}
+                      answerTimerMessage={answerTimerMessage}
                       voiceTimerLabel={voiceTimerLabel}
                       canPreviewRecording={voiceCaps.canPreviewRecording}
                       isVoicePreviewPlaying={isVoicePreviewPlaying}
@@ -382,6 +479,7 @@ function InterviewPageContent() {
                       voiceIsRecordingActive={voiceIsRecordingActive}
                       voiceProgressPct={voiceProgressPct}
                       voiceWarningRemaining={voiceWarningRemaining}
+                      voiceReviewWarning={voiceReviewWarning}
                       voiceError={voiceError}
                       voiceInfo={voiceInfo}
                       voiceRecorderState={voiceRecorderState}
@@ -394,8 +492,14 @@ function InterviewPageContent() {
                       centerControlLabel={voiceCaps.centerControlLabel}
                       canCompleteRecording={voiceCaps.canCompleteRecording}
                       onCompleteVoiceRecording={completeVoiceRecording}
-                      canSendRecording={voiceCaps.canSendRecording}
-                      onSendVoiceAnswer={handleSendVoiceAnswer}
+                      canReviewTranscript={voiceCaps.canReviewTranscript}
+                      onReviewVoiceAnswer={handleReviewVoiceAnswer}
+                      canSubmitAnswer={voiceCaps.canSubmitAnswer}
+                      transcriptText={textAnswer}
+                      onTranscriptChange={(nextValue) => {
+                        dispatch({ type: "TEXT_CHANGED", payload: { value: nextValue } });
+                      }}
+                      onSubmitAnswer={handleSubmitReviewedVoiceAnswer}
                     />
                   )}
                 </>

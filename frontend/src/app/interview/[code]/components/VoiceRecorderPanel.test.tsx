@@ -8,6 +8,9 @@ function renderPanel(
   return render(
     <VoiceRecorderPanel
       lang="en"
+      answerTimerLabel="04:00"
+      answerTimerTone="normal"
+      answerTimerMessage="Use this time to review and submit your final answer."
       voiceTimerLabel="00:12"
       canPreviewRecording={false}
       isVoicePreviewPlaying={false}
@@ -15,6 +18,7 @@ function renderPanel(
       voiceIsRecordingActive={false}
       voiceProgressPct={10}
       voiceWarningRemaining={null}
+      voiceReviewWarning=""
       voiceError=""
       voiceInfo=""
       voiceRecorderState="idle"
@@ -27,8 +31,12 @@ function renderPanel(
       centerControlLabel="Record"
       canCompleteRecording={false}
       onCompleteVoiceRecording={vi.fn()}
-      canSendRecording={false}
-      onSendVoiceAnswer={vi.fn(async () => {})}
+      canReviewTranscript={false}
+      onReviewVoiceAnswer={vi.fn(async () => {})}
+      canSubmitAnswer={false}
+      transcriptText=""
+      onTranscriptChange={vi.fn()}
+      onSubmitAnswer={vi.fn(async () => {})}
       {...props}
     />,
   );
@@ -49,14 +57,15 @@ describe("VoiceRecorderPanel", () => {
 
   it("shows paused messaging and exposes preview, discard, complete, and send when provided", () => {
     renderPanel({
-      voiceRecorderState: "stopped",
+      voiceRecorderState: "review_ready",
       voiceIsRecordingPaused: true,
       voiceBlob: new Blob(["audio"]),
       canPreviewRecording: true,
       canDiscardRecording: true,
-      canCompleteRecording: true,
-      canSendRecording: true,
+      canCompleteRecording: false,
+      canSubmitAnswer: true,
       centerControlLabel: "Resume",
+      transcriptText: "Transcript ready",
     });
 
     expect(screen.getByText("Recording paused.")).toBeInTheDocument();
@@ -64,7 +73,7 @@ describe("VoiceRecorderPanel", () => {
     const buttons = screen.getAllByRole("button");
     expect(buttons[0]).toBeEnabled();
     expect(buttons[1]).toBeEnabled();
-    expect(buttons[3]).toBeEnabled();
+    expect(buttons[3]).toBeDisabled();
     expect(buttons[4]).toBeEnabled();
   });
 
@@ -86,6 +95,9 @@ describe("VoiceRecorderPanel", () => {
     render(
       <VoiceRecorderPanel
         lang="es"
+        answerTimerLabel="04:00"
+        answerTimerTone="normal"
+        answerTimerMessage="Use este tiempo para revisar y enviar su respuesta final."
         voiceTimerLabel="00:12"
         canPreviewRecording
         isVoicePreviewPlaying={false}
@@ -93,9 +105,10 @@ describe("VoiceRecorderPanel", () => {
         voiceIsRecordingActive={false}
         voiceProgressPct={10}
         voiceWarningRemaining={null}
+        voiceReviewWarning=""
         voiceError=""
         voiceInfo=""
-        voiceRecorderState="stopped"
+        voiceRecorderState="audio_ready"
         voiceIsRecordingPaused={false}
         voiceBlob={new Blob(["audio"])}
         canDiscardRecording
@@ -105,11 +118,15 @@ describe("VoiceRecorderPanel", () => {
         centerControlLabel="Resume"
         canCompleteRecording={false}
         onCompleteVoiceRecording={vi.fn()}
-        canSendRecording
-        onSendVoiceAnswer={vi.fn(async () => {})}
+        canReviewTranscript
+        onReviewVoiceAnswer={vi.fn(async () => {})}
+        canSubmitAnswer={false}
+        transcriptText=""
+        onTranscriptChange={vi.fn()}
+        onSubmitAnswer={vi.fn(async () => {})}
       />,
     );
 
-    expect(screen.getByText("Grabación completa. Envíe cuando esté listo.")).toBeInTheDocument();
+    expect(screen.getByText("Audio listo. Revise la transcripción antes de enviar.")).toBeInTheDocument();
   });
 });

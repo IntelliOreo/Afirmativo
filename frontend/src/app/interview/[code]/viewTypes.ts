@@ -3,14 +3,22 @@ export type SubmitMode = "question" | "finalAuto";
 export type ReportStatus = "idle" | "loading" | "generating" | "ready" | "error";
 export type CompletionSource = "finished" | "already_completed";
 export type InputMode = "text" | "voice";
-export type VoiceRecorderState = "idle" | "recording" | "paused" | "stopped" | "sending";
+export type VoiceRecorderState =
+  | "idle"
+  | "recording"
+  | "paused"
+  | "audio_ready"
+  | "transcribing_for_review"
+  | "review_ready"
+  | "forced_finalizing";
 
 export interface VoiceCapabilities {
   canSwitchModes: boolean;
   canToggleRecording: boolean;
   canCompleteRecording: boolean;
   canDiscardRecording: boolean;
-  canSendRecording: boolean;
+  canReviewTranscript: boolean;
+  canSubmitAnswer: boolean;
   canPreviewRecording: boolean;
   centerControlLabel: string;
 }

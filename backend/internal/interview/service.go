@@ -105,11 +105,12 @@ func NewService(
 
 // StartResult holds the output of a successful interview start.
 type StartResult struct {
-	Question        *Question
-	TimerRemainingS int
-	Area            string
-	Resuming        bool
-	Language        string
+	Question                     *Question
+	TimerRemainingS              int
+	AnswerSubmitWindowRemainingS int
+	Area                         string
+	Resuming                     bool
+	Language                     string
 }
 
 // StartInterview transitions the session to interviewing,
@@ -133,93 +134,131 @@ func (s *Service) StartInterview(ctx context.Context, sessionCode, preferredLang
 	}
 	effectiveLanguage := normalizePreferredLanguage(sess.PreferredLanguage)
 
-	remaining := sess.InterviewBudgetSeconds - sess.InterviewLapsedSeconds
-
-	answersCount, err := s.stateStore.GetAnswerCount(dbCtx, sessionCode)
-	if err != nil {
-		return nil, fmt.Errorf("get answer count: %w", err)
-	}
-	currentFlow, err := s.stateStore.GetFlowState(dbCtx, sessionCode)
-	if err != nil {
-		return nil, fmt.Errorf("get flow state: %w", err)
-	}
-
-	// Resume only after there is actual prior progress. This avoids showing
-	// "Welcome back" on first entry if the start endpoint is called twice.
-	resuming := answersCount > 0 || currentFlow.Step != FlowStepDisclaimer
-
-	// Pre-create all 8 question area rows (idempotent — ON CONFLICT DO NOTHING).
-	for _, area := range s.areaConfigs {
-		if _, err := s.stateStore.CreateQuestionArea(dbCtx, sessionCode, area.Slug); err != nil {
-			return nil, fmt.Errorf("create question area %s: %w", area.Slug, err)
-		}
-	}
-
-	// Set the first area to in_progress (no-op if already in_progress from a prior start).
-	firstArea := s.areaConfigs[0].Slug
-	if err := s.stateStore.SetAreaInProgress(dbCtx, sessionCode, firstArea); err != nil {
-		return nil, fmt.Errorf("set first area in_progress: %w", err)
-	}
-
-	activeArea := firstArea
-	inProgressArea, err := s.stateStore.GetInProgressArea(dbCtx, sessionCode)
-	if err != nil {
-		return nil, fmt.Errorf("get in-progress area: %w", err)
-	}
-	if inProgressArea != nil && strings.TrimSpace(inProgressArea.Area) != "" {
-		activeArea = inProgressArea.Area
-	}
-
-	turnID, err := newTurnID()
-	if err != nil {
-		return nil, fmt.Errorf("new turn id: %w", err)
-	}
-	var (
-		flowState *FlowState
-		q         *Question
-	)
-	if resuming {
-		flowState, err = s.stateStore.PrepareReadinessStep(dbCtx, sessionCode, turnID)
+	for {
+		flowCtx, flowCancel := context.WithTimeout(ctx, dbTimeout)
+		answersCount, err := s.stateStore.GetAnswerCount(flowCtx, sessionCode)
 		if err != nil {
-			return nil, fmt.Errorf("prepare readiness step: %w", err)
+			flowCancel()
+			return nil, fmt.Errorf("get answer count: %w", err)
 		}
-		resumeQuestion := ResumeQuestion(activeArea)
-		q = ReadinessQuestion(
-			activeArea,
-			resumeQuestion.TextEs,
-			resumeQuestion.TextEn,
-			flowState.QuestionNumber,
-			turnID,
-		)
-	} else {
-		flowState, err = s.stateStore.PrepareDisclaimerStep(dbCtx, sessionCode, turnID)
+		currentFlow, err := s.stateStore.GetFlowState(flowCtx, sessionCode)
+		flowCancel()
 		if err != nil {
-			return nil, fmt.Errorf("prepare disclaimer step: %w", err)
+			return nil, fmt.Errorf("get flow state: %w", err)
 		}
-		q = OpeningDisclaimerQuestion(
-			activeArea,
-			s.openingTextEs,
-			s.openingTextEn,
-			flowState.QuestionNumber,
-			turnID,
-		)
-	}
 
-	return &StartResult{
-		Question:        q,
-		TimerRemainingS: remaining,
-		Area:            activeArea,
-		Resuming:        resuming,
-		Language:        effectiveLanguage,
-	}, nil
+		resuming := answersCount > 0 || currentFlow.Step != FlowStepDisclaimer
+		if currentFlow.ActiveQuestion != nil {
+			if currentFlow.ActiveQuestion.BufferExpired(s.nowFn()) {
+				questionText := currentFlow.ActiveQuestion.TextForLanguage(effectiveLanguage)
+				if _, err := s.processTurn(ctx, sessionCode, "", questionText, currentFlow.ExpectedTurnID); err != nil {
+					return nil, fmt.Errorf("finalize expired active turn: %w", err)
+				}
+				continue
+			}
+
+			overallRemaining := s.calcTimeRemaining(sess)
+			if overallRemaining < 0 {
+				overallRemaining = 0
+			}
+			return &StartResult{
+				Question:                     &currentFlow.ActiveQuestion.Question,
+				TimerRemainingS:              overallRemaining,
+				AnswerSubmitWindowRemainingS: currentFlow.ActiveQuestion.SubmitWindowRemaining(s.nowFn()),
+				Area:                         currentFlow.ActiveQuestion.Question.Area,
+				Resuming:                     resuming,
+				Language:                     effectiveLanguage,
+			}, nil
+		}
+
+		// Pre-create all question area rows (idempotent — ON CONFLICT DO NOTHING).
+		for _, area := range s.areaConfigs {
+			createCtx, createCancel := context.WithTimeout(ctx, dbTimeout)
+			_, err := s.stateStore.CreateQuestionArea(createCtx, sessionCode, area.Slug)
+			createCancel()
+			if err != nil {
+				return nil, fmt.Errorf("create question area %s: %w", area.Slug, err)
+			}
+		}
+
+		firstArea := s.areaConfigs[0].Slug
+		setAreaCtx, setAreaCancel := context.WithTimeout(ctx, dbTimeout)
+		if err := s.stateStore.SetAreaInProgress(setAreaCtx, sessionCode, firstArea); err != nil {
+			setAreaCancel()
+			return nil, fmt.Errorf("set first area in_progress: %w", err)
+		}
+		setAreaCancel()
+
+		activeArea := firstArea
+		activeAreaCtx, activeAreaCancel := context.WithTimeout(ctx, dbTimeout)
+		inProgressArea, err := s.stateStore.GetInProgressArea(activeAreaCtx, sessionCode)
+		activeAreaCancel()
+		if err != nil {
+			return nil, fmt.Errorf("get in-progress area: %w", err)
+		}
+		if inProgressArea != nil && strings.TrimSpace(inProgressArea.Area) != "" {
+			activeArea = inProgressArea.Area
+		}
+
+		turnID, err := newTurnID()
+		if err != nil {
+			return nil, fmt.Errorf("new turn id: %w", err)
+		}
+
+		var q *Question
+		if resuming {
+			resumeQuestion := ResumeQuestion(activeArea)
+			q = ReadinessQuestion(
+				activeArea,
+				resumeQuestion.TextEs,
+				resumeQuestion.TextEn,
+				currentFlow.QuestionNumber,
+				turnID,
+			)
+			persistCtx, persistCancel := context.WithTimeout(ctx, dbTimeout)
+			_, err = s.stateStore.PrepareReadinessStep(persistCtx, sessionCode, NewIssuedQuestion(q, s.nowFn()))
+			persistCancel()
+			if err != nil {
+				return nil, fmt.Errorf("prepare readiness step: %w", err)
+			}
+		} else {
+			q = OpeningDisclaimerQuestion(
+				activeArea,
+				s.openingTextEs,
+				s.openingTextEn,
+				currentFlow.QuestionNumber,
+				turnID,
+			)
+			persistCtx, persistCancel := context.WithTimeout(ctx, dbTimeout)
+			_, err = s.stateStore.PrepareDisclaimerStep(persistCtx, sessionCode, NewIssuedQuestion(q, s.nowFn()))
+			persistCancel()
+			if err != nil {
+				return nil, fmt.Errorf("prepare disclaimer step: %w", err)
+			}
+		}
+
+		overallRemaining := s.calcTimeRemaining(sess)
+		if overallRemaining < 0 {
+			overallRemaining = 0
+		}
+		return &StartResult{
+			Question:                     q,
+			TimerRemainingS:              overallRemaining,
+			AnswerSubmitWindowRemainingS: int(AnswerSubmitWindow / time.Second),
+			Area:                         activeArea,
+			Resuming:                     resuming,
+			Language:                     effectiveLanguage,
+		}, nil
+	}
 }
 
 // AnswerResult holds the output of a submitted answer.
 type AnswerResult struct {
-	Done            bool
-	NextQuestion    *Question
-	TimerRemainingS int
-	Substituted     bool
+	Done                         bool
+	NextQuestion                 *Question
+	TimerRemainingS              int
+	AnswerSubmitWindowRemainingS int
+	Substituted                  bool
 }
 
 // processTurn processes one answer according to the explicit flow step.
@@ -244,9 +283,8 @@ func (s *Service) processTurnCore(
 	failureRecorder aiRetryFailureRecorder,
 ) (*AnswerResult, error) {
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
-	defer dbCancel()
-
 	sess, err := s.sessionGetter.GetSessionByCode(dbCtx, sessionCode)
+	dbCancel()
 	if err != nil {
 		return nil, fmt.Errorf("get session: %w", err)
 	}
@@ -254,19 +292,22 @@ func (s *Service) processTurnCore(
 		slog.Debug("submit answer rejected: session expired", "session_code", sessionCode)
 		return nil, session.ErrSessionExpired
 	}
+
+	dbCtx, dbCancel = context.WithTimeout(ctx, dbTimeout)
 	flowState, err := s.stateStore.GetFlowState(dbCtx, sessionCode)
+	dbCancel()
 	if err != nil {
 		return nil, fmt.Errorf("get flow state: %w", err)
 	}
 
-	areas, currentArea, err := s.refreshAreaState(dbCtx, sessionCode)
+	areas, currentArea, err := s.refreshAreaState(ctx, sessionCode)
 	if err != nil {
 		return nil, fmt.Errorf("refresh area state: %w", err)
 	}
 
 	if flowState.Step == FlowStepDone {
 		s.finishSession(ctx, sessionCode)
-		return &AnswerResult{Done: true, TimerRemainingS: 0}, nil
+		return &AnswerResult{Done: true, TimerRemainingS: 0, AnswerSubmitWindowRemainingS: 0}, nil
 	}
 	if strings.TrimSpace(turnID) == "" || turnID != flowState.ExpectedTurnID {
 		return nil, ErrTurnConflict
@@ -282,71 +323,65 @@ func (s *Service) processTurnCore(
 	switch flowState.Step {
 	case FlowStepDisclaimer:
 		if s.finishIfNoCurrentArea(ctx, sessionCode, currentArea, false) {
-			return &AnswerResult{Done: true, TimerRemainingS: 0}, nil
-		}
-
-		nextTurnID, err := newTurnID()
-		if err != nil {
-			return nil, fmt.Errorf("new turn id: %w", err)
-		}
-		nextFlow, err := s.stateStore.AdvanceNonCriterionStep(dbCtx, AdvanceNonCriterionStepParams{
-			SessionCode:    sessionCode,
-			ExpectedTurnID: turnID,
-			CurrentStep:    FlowStepDisclaimer,
-			NextStep:       FlowStepReadiness,
-			NextTurnID:     nextTurnID,
-			EventType:      "disclaimer_ack",
-			AnswerText:     answerText,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("advance disclaimer step: %w", err)
+			return &AnswerResult{Done: true, TimerRemainingS: 0, AnswerSubmitWindowRemainingS: 0}, nil
 		}
 
 		readinessTextEs := s.readinessTextEs
 		readinessTextEn := s.readinessTextEn
-		// If question number is already beyond the first turn, this disclaimer
-		// is part of a resumed interview path. Use explicit resume wording.
 		if flowState.QuestionNumber > 1 {
 			resumeQuestion := ResumeQuestion(currentArea.Area)
 			readinessTextEs = resumeQuestion.TextEs
 			readinessTextEn = resumeQuestion.TextEn
 		}
 
-		return &AnswerResult{
-			Done: false,
-			NextQuestion: ReadinessQuestion(
-				currentArea.Area,
-				readinessTextEs,
-				readinessTextEn,
-				nextFlow.QuestionNumber,
-				nextTurnID,
-			),
-			TimerRemainingS: timeRemainingS,
-		}, nil
-
-	case FlowStepReadiness:
-		if s.finishIfNoCurrentArea(ctx, sessionCode, currentArea, false) {
-			return &AnswerResult{Done: true, TimerRemainingS: 0}, nil
-		}
-
 		nextTurnID, err := newTurnID()
 		if err != nil {
 			return nil, fmt.Errorf("new turn id: %w", err)
 		}
-		nextFlow, err := s.stateStore.AdvanceNonCriterionStep(dbCtx, AdvanceNonCriterionStepParams{
-			SessionCode:    sessionCode,
-			ExpectedTurnID: turnID,
-			CurrentStep:    FlowStepReadiness,
-			NextStep:       FlowStepCriterion,
-			NextTurnID:     nextTurnID,
-			EventType:      "readiness_ack",
-			AnswerText:     answerText,
+		nextQuestion := ReadinessQuestion(
+			currentArea.Area,
+			readinessTextEs,
+			readinessTextEn,
+			flowState.QuestionNumber,
+			nextTurnID,
+		)
+		issuedQuestion := NewIssuedQuestion(nextQuestion, s.nowFn())
+
+		advanceCtx, advanceCancel := context.WithTimeout(ctx, dbTimeout)
+		nextFlow, err := s.stateStore.AdvanceNonCriterionStep(advanceCtx, AdvanceNonCriterionStepParams{
+			SessionCode:        sessionCode,
+			ExpectedTurnID:     turnID,
+			CurrentStep:        FlowStepDisclaimer,
+			NextStep:           FlowStepReadiness,
+			EventType:          "disclaimer_ack",
+			AnswerText:         answerText,
+			NextIssuedQuestion: issuedQuestion,
 		})
+		advanceCancel()
 		if err != nil {
-			return nil, fmt.Errorf("advance readiness step: %w", err)
+			return nil, fmt.Errorf("advance disclaimer step: %w", err)
 		}
 
-		answers, err := s.stateStore.GetAnswersBySession(dbCtx, sessionCode)
+		return &AnswerResult{
+			Done: false,
+			NextQuestion: func() *Question {
+				if nextFlow.ActiveQuestion != nil {
+					return &nextFlow.ActiveQuestion.Question
+				}
+				return nextQuestion
+			}(),
+			TimerRemainingS:              timeRemainingS,
+			AnswerSubmitWindowRemainingS: issuedQuestion.SubmitWindowRemaining(s.nowFn()),
+		}, nil
+
+	case FlowStepReadiness:
+		if s.finishIfNoCurrentArea(ctx, sessionCode, currentArea, false) {
+			return &AnswerResult{Done: true, TimerRemainingS: 0, AnswerSubmitWindowRemainingS: 0}, nil
+		}
+
+		answersCtx, answersCancel := context.WithTimeout(ctx, dbTimeout)
+		answers, err := s.stateStore.GetAnswersBySession(answersCtx, sessionCode)
+		answersCancel()
 		if err != nil {
 			return nil, fmt.Errorf("get answers: %w", err)
 		}
@@ -355,7 +390,7 @@ func (s *Service) processTurnCore(
 		criteriaRemaining := s.countCriteriaRemaining(areas)
 		historyTurns := s.buildHistoryTurns(answers, preferredLanguage)
 
-		nextQuestion := s.fallbackQuestionForArea(currentArea.Area)
+		nextQuestionText := s.fallbackQuestionForArea(currentArea.Area)
 		turnCtx := &AITurnContext{
 			PreferredLanguage:  preferredLanguage,
 			CurrentAreaSlug:    currentArea.Area,
@@ -386,33 +421,63 @@ func (s *Service) processTurnCore(
 			substituted = true
 			slog.Warn("AI retries exhausted on first criterion question, using fallback", "error", err, "area", currentArea.Area)
 		} else if candidate := strings.TrimSpace(aiResult.NextQuestion); candidate != "" {
-			nextQuestion = candidate
+			nextQuestionText = candidate
 		} else {
 			substituted = true
 			slog.Warn("AI returned empty first criterion question, using fallback", "session", sessionCode, "area", currentArea.Area)
 		}
 
+		nextTurnID, err := newTurnID()
+		if err != nil {
+			return nil, fmt.Errorf("new turn id: %w", err)
+		}
+
+		nextQuestion := &Question{
+			TextEs:         nextQuestionText,
+			TextEn:         nextQuestionText,
+			Area:           currentArea.Area,
+			Kind:           QuestionKindCriterion,
+			TurnID:         nextTurnID,
+			QuestionNumber: flowState.QuestionNumber + 1,
+			TotalQuestions: EstimatedTotalQuestions,
+		}
+		issuedQuestion := NewIssuedQuestion(nextQuestion, s.nowFn())
+		advanceCtx, advanceCancel := context.WithTimeout(ctx, dbTimeout)
+		nextFlow, err := s.stateStore.AdvanceNonCriterionStep(advanceCtx, AdvanceNonCriterionStepParams{
+			SessionCode:        sessionCode,
+			ExpectedTurnID:     turnID,
+			CurrentStep:        FlowStepReadiness,
+			NextStep:           FlowStepCriterion,
+			EventType:          "readiness_ack",
+			AnswerText:         answerText,
+			NextIssuedQuestion: issuedQuestion,
+		})
+		advanceCancel()
+		if err != nil {
+			return nil, fmt.Errorf("advance readiness step: %w", err)
+		}
+
 		return &AnswerResult{
 			Done: false,
-			NextQuestion: &Question{
-				TextEs:         nextQuestion,
-				TextEn:         nextQuestion,
-				Area:           currentArea.Area,
-				Kind:           QuestionKindCriterion,
-				TurnID:         nextTurnID,
-				QuestionNumber: nextFlow.QuestionNumber,
-				TotalQuestions: EstimatedTotalQuestions,
-			},
-			TimerRemainingS: timeRemainingS,
-			Substituted:     substituted,
+			NextQuestion: func() *Question {
+				if nextFlow.ActiveQuestion != nil {
+					return &nextFlow.ActiveQuestion.Question
+				}
+				return nextQuestion
+			}(),
+			TimerRemainingS:              timeRemainingS,
+			AnswerSubmitWindowRemainingS: issuedQuestion.SubmitWindowRemaining(s.nowFn()),
+			Substituted:                  substituted,
 		}, nil
 
 	case FlowStepCriterion:
 		if s.finishIfNoCurrentArea(ctx, sessionCode, currentArea, true) {
-			return &AnswerResult{Done: true, TimerRemainingS: 0}, nil
+			return &AnswerResult{Done: true, TimerRemainingS: 0, AnswerSubmitWindowRemainingS: 0}, nil
 		}
 
-		answers, err := s.stateStore.GetAnswersBySession(dbCtx, sessionCode)
+		answersCtx, answersCancel := context.WithTimeout(ctx, dbTimeout)
+		answers, err := s.stateStore.GetAnswersBySession(answersCtx, sessionCode)
+		answersCancel()
 		if err != nil {
 			return nil, fmt.Errorf("get answers: %w", err)
 		}
@@ -472,25 +537,85 @@ func (s *Service) processTurnCore(
 			substituted = true
 		}
 
-		nextTurnID, err := newTurnID()
-		if err != nil {
-			return nil, fmt.Errorf("new turn id: %w", err)
+		preAddressed := s.extractPreAddressed(aiResult.Evaluation.OtherCriteriaAddressed)
+		decision := DecideCriterionTurn(
+			aiResult.Evaluation.CurrentCriterion,
+			currentArea.QuestionsCount+1,
+			MaxQuestionsPerArea,
+		)
+		projectedAreas := s.projectAreasForNextAreaOpening(areas, currentArea.Area, decision, preAddressed)
+		projectedAnswers := buildAnswersWithCurrentTurn(answers, questionText, answerText, preferredLanguage)
+		nextArea := DetermineNextAreaAfterCriterionTurn(
+			projectedAreas,
+			currentArea.Area,
+			decision,
+			preAddressed,
+			s.orderedAreaSlugs(),
+		)
+
+		timeRemainingS = s.calcTimeRemaining(sess)
+		if timeRemainingS <= 0 {
+			return s.finishOnTimeout(ctx, sessionCode, areas)
 		}
 
-		preAddressed := s.extractPreAddressed(aiResult.Evaluation.OtherCriteriaAddressed)
+		var nextQuestion *Question
+		var issuedQuestion *IssuedQuestion
+		if strings.TrimSpace(nextArea) != "" {
+			nextTurnID, err := newTurnID()
+			if err != nil {
+				return nil, fmt.Errorf("new turn id: %w", err)
+			}
+
+			nextQuestionText := strings.TrimSpace(aiResult.NextQuestion)
+			if decision.Action == CriterionTurnActionNext {
+				var nextAreaSubstituted bool
+				nextQuestionText, nextAreaSubstituted, err = s.generateNextAreaOpeningQuestion(
+					ctx,
+					sessionCode,
+					nextArea,
+					projectedAreas,
+					projectedAnswers,
+					sess,
+					preferredLanguage,
+					timeRemainingS,
+					failureRecorder,
+				)
+				if err != nil {
+					return nil, err
+				}
+				substituted = substituted || nextAreaSubstituted
+			}
+			if nextQuestionText == "" {
+				substituted = true
+				slog.Warn("next question is empty after AI processing, using fallback", "session", sessionCode, "area", nextArea)
+				nextQuestionText = s.fallbackQuestionForArea(nextArea)
+			}
+
+			nextQuestion = &Question{
+				TextEs:         nextQuestionText,
+				TextEn:         nextQuestionText,
+				Area:           nextArea,
+				Kind:           QuestionKindCriterion,
+				TurnID:         nextTurnID,
+				QuestionNumber: flowState.QuestionNumber + 1,
+				TotalQuestions: EstimatedTotalQuestions,
+			}
+			issuedQuestion = NewIssuedQuestion(nextQuestion, s.nowFn())
+		}
+
 		processCtx, processCancel := context.WithTimeout(ctx, dbTimeout)
-		result, err := s.stateStore.ProcessCriterionTurn(processCtx, ProcessCriterionTurnParams{
-			SessionCode:         sessionCode,
-			ExpectedTurnID:      turnID,
-			CurrentArea:         currentArea.Area,
-			QuestionText:        questionText,
-			AnswerText:          answerText,
-			PreferredLanguage:   preferredLanguage,
-			Evaluation:          aiResult.Evaluation,
-			PreAddressed:        preAddressed,
-			OrderedAreaSlugs:    s.orderedAreaSlugs(),
-			MaxQuestionsPerArea: MaxQuestionsPerArea,
-			NextTurnID:          nextTurnID,
+		_, err = s.stateStore.ProcessCriterionTurn(processCtx, ProcessCriterionTurnParams{
+			SessionCode:        sessionCode,
+			ExpectedTurnID:     turnID,
+			CurrentArea:        currentArea.Area,
+			QuestionText:       questionText,
+			AnswerText:         answerText,
+			PreferredLanguage:  preferredLanguage,
+			Evaluation:         aiResult.Evaluation,
+			PreAddressed:       preAddressed,
+			Decision:           decision,
+			NextArea:           nextArea,
+			NextIssuedQuestion: issuedQuestion,
 		})
 		processCancel()
 		if err != nil {
@@ -500,9 +625,7 @@ func (s *Service) processTurnCore(
 			return nil, fmt.Errorf("process criterion turn: %w", err)
 		}
 
-		refreshCtx, refreshCancel := context.WithTimeout(ctx, dbTimeout)
-		areas, _, err = s.refreshAreaState(refreshCtx, sessionCode)
-		refreshCancel()
+		areas, _, err = s.refreshAreaState(ctx, sessionCode)
 		if err != nil {
 			return nil, fmt.Errorf("refresh areas after criterion: %w", err)
 		}
@@ -512,51 +635,22 @@ func (s *Service) processTurnCore(
 			return s.finishOnTimeout(ctx, sessionCode, areas)
 		}
 
-		if strings.TrimSpace(result.NextArea) == "" {
-			if err := s.stateStore.MarkFlowDone(ctx, sessionCode); err != nil {
-				slog.Warn("failed to mark flow done on final criterion", "session", sessionCode, "error", err)
-			}
+		if strings.TrimSpace(nextArea) == "" {
 			s.finishSession(ctx, sessionCode)
-			return &AnswerResult{Done: true, TimerRemainingS: 0}, nil
-		}
-
-		nextQuestion := strings.TrimSpace(aiResult.NextQuestion)
-		if result.Action == CriterionTurnActionNext {
-			var nextAreaSubstituted bool
-			nextQuestion, nextAreaSubstituted, err = s.generateNextAreaOpeningQuestion(
-				ctx,
-				sessionCode,
-				result.NextArea,
-				areas,
-				sess,
-				preferredLanguage,
-				timeRemainingS,
-				failureRecorder,
-			)
-			if err != nil {
-				return nil, err
-			}
-			substituted = substituted || nextAreaSubstituted
-		}
-		if nextQuestion == "" {
-			substituted = true
-			slog.Warn("next question is empty after AI processing, using fallback", "session", sessionCode, "area", result.NextArea)
-			nextQuestion = s.fallbackQuestionForArea(result.NextArea)
+			return &AnswerResult{Done: true, TimerRemainingS: 0, AnswerSubmitWindowRemainingS: 0}, nil
 		}
 
 		return &AnswerResult{
 			Done: false,
-			NextQuestion: &Question{
-				TextEs:         nextQuestion,
-				TextEn:         nextQuestion,
-				Area:           result.NextArea,
-				Kind:           QuestionKindCriterion,
-				TurnID:         nextTurnID,
-				QuestionNumber: result.QuestionNumber,
-				TotalQuestions: EstimatedTotalQuestions,
-			},
-			TimerRemainingS: timeRemainingS,
-			Substituted:     substituted,
+			NextQuestion: func() *Question {
+				if issuedQuestion != nil {
+					return &issuedQuestion.Question
+				}
+				return nextQuestion
+			}(),
+			TimerRemainingS:              timeRemainingS,
+			AnswerSubmitWindowRemainingS: issuedQuestion.SubmitWindowRemaining(s.nowFn()),
+			Substituted:                  substituted,
 		}, nil
 	default:
 		return nil, ErrInvalidFlow
@@ -577,7 +671,7 @@ func (s *Service) finishOnTimeout(ctx context.Context, sessionCode string, areas
 		slog.Warn("failed to mark flow done on timeout", "session", sessionCode, "error", err)
 	}
 	s.finishSession(ctx, sessionCode)
-	return &AnswerResult{Done: true, TimerRemainingS: 0}, nil
+	return &AnswerResult{Done: true, TimerRemainingS: 0, AnswerSubmitWindowRemainingS: 0}, nil
 }
 
 func (s *Service) finishIfNoCurrentArea(ctx context.Context, sessionCode string, currentArea *QuestionArea, markDone bool) bool {
@@ -598,6 +692,7 @@ func (s *Service) generateNextAreaOpeningQuestion(
 	sessionCode string,
 	nextAreaSlug string,
 	areas []QuestionArea,
+	answers []Answer,
 	sess *session.Session,
 	preferredLanguage string,
 	timeRemainingS int,
@@ -616,14 +711,6 @@ func (s *Service) generateNextAreaOpeningQuestion(
 		return question, false, nil
 	}
 
-	answersCtx, answersCancel := context.WithTimeout(ctx, dbTimeout)
-	latestAnswers, err := s.stateStore.GetAnswersBySession(answersCtx, sessionCode)
-	answersCancel()
-	if err != nil {
-		slog.Warn("failed to load answers for next-area opening question", "session", sessionCode, "area", nextAreaSlug, "error", err)
-		return question, false, nil
-	}
-
 	nextAreaCfg, nextAreaIndex := s.findAreaConfig(nextAreaSlug)
 	openingTurnCtx := &AITurnContext{
 		PreferredLanguage:  preferredLanguage,
@@ -639,10 +726,10 @@ func (s *Service) generateNextAreaOpeningQuestion(
 		FollowUpsRemaining: MaxQuestionsPerArea - nextAreaState.QuestionsCount,
 		TotalBudgetS:       sess.InterviewBudgetSeconds,
 		TimeRemainingS:     timeRemainingS,
-		QuestionsRemaining: EstimatedTotalQuestions - len(latestAnswers),
+		QuestionsRemaining: EstimatedTotalQuestions - len(answers),
 		CriteriaRemaining:  s.countCriteriaRemaining(areas),
 		CriteriaCoverage:   s.buildCriteriaCoverage(areas),
-		HistoryTurns:       s.buildHistoryTurns(latestAnswers, preferredLanguage),
+		HistoryTurns:       s.buildHistoryTurns(answers, preferredLanguage),
 	}
 
 	slog.Debug("calling AI for next criterion opening question", "session", sessionCode, "area", nextAreaSlug)
@@ -661,6 +748,55 @@ func (s *Service) generateNextAreaOpeningQuestion(
 
 	slog.Warn("AI returned empty next criterion opening question, using fallback", "session", sessionCode, "area", nextAreaSlug)
 	return question, true, nil
+}
+
+func (s *Service) projectAreasForNextAreaOpening(
+	areas []QuestionArea,
+	currentArea string,
+	decision CriterionTurnDecision,
+	preAddressed []PreAddressedArea,
+) []QuestionArea {
+	projected := make([]QuestionArea, len(areas))
+	copy(projected, areas)
+
+	preAddressedEvidence := make(map[string]string, len(preAddressed))
+	for _, flag := range preAddressed {
+		if strings.TrimSpace(flag.Slug) == "" {
+			continue
+		}
+		preAddressedEvidence[flag.Slug] = flag.Evidence
+	}
+
+	for i := range projected {
+		switch {
+		case projected[i].Area == currentArea:
+			if decision.MarkCurrentAs != "" {
+				projected[i].Status = decision.MarkCurrentAs
+			}
+			projected[i].QuestionsCount++
+		case projected[i].Status == AreaStatusPending:
+			if evidence, ok := preAddressedEvidence[projected[i].Area]; ok {
+				projected[i].Status = AreaStatusPreAddressed
+				projected[i].PreAddressedEvidence = evidence
+			}
+		}
+	}
+
+	return projected
+}
+
+func buildAnswersWithCurrentTurn(answers []Answer, questionText, answerText, preferredLanguage string) []Answer {
+	history := make([]Answer, 0, len(answers)+1)
+	history = append(history, answers...)
+
+	latest := Answer{QuestionText: questionText}
+	if strings.EqualFold(strings.TrimSpace(preferredLanguage), "en") {
+		latest.TranscriptEn = answerText
+	} else {
+		latest.TranscriptEs = answerText
+	}
+	history = append(history, latest)
+	return history
 }
 
 func (s *Service) orderedAreaSlugs() []string {

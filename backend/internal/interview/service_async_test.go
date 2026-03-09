@@ -53,6 +53,7 @@ func TestGetAnswerJobResult_DecodesSucceededPayload(t *testing.T) {
 				ResultPayload: []byte(`{
 					"done": false,
 					"timer_remaining_s": 3540,
+					"answer_submit_window_remaining_s": 240,
 					"next_question": {
 						"text_es": "¿Cómo se siente hoy?",
 						"text_en": "How are you feeling today?",
@@ -81,6 +82,9 @@ func TestGetAnswerJobResult_DecodesSucceededPayload(t *testing.T) {
 	}
 	if got.TimerRemainingS != 3540 {
 		t.Fatalf("timerRemainingS = %d, want 3540", got.TimerRemainingS)
+	}
+	if got.AnswerSubmitWindowRemainingS != 240 {
+		t.Fatalf("answerSubmitWindowRemainingS = %d, want 240", got.AnswerSubmitWindowRemainingS)
 	}
 	if got.NextQuestion == nil {
 		t.Fatalf("nextQuestion = nil, want non-nil")

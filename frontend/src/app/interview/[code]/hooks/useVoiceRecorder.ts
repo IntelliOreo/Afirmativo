@@ -33,7 +33,8 @@ interface UseVoiceRecorderResult {
   completeVoiceRecording: () => void;
   discardVoiceRecording: () => void;
   toggleVoicePreviewPlayback: () => Promise<void>;
-  sendVoiceRecording: (sessionCode: string) => Promise<string | null>;
+  reviewVoiceRecording: (sessionCode: string) => Promise<string | null>;
+  finalizeVoiceRecording: (sessionCode: string) => Promise<string | null>;
   setVoiceErrorMessage: (message: string) => void;
 }
 
@@ -46,8 +47,11 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const voiceChunksRef = useRef<BlobPart[]>([]);
+  const stopRecordingResolverRef = useRef<((blob: Blob | null) => void) | null>(null);
   const langRef = useRef(lang);
   langRef.current = lang;
+  const voiceBlobRef = useRef<Blob | null>(voiceBlob);
+  voiceBlobRef.current = voiceBlob;
 
   const stopVoiceStreamTracks = useCallback(() => {
     if (!mediaStreamRef.current) return;
@@ -95,6 +99,12 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
     }
   }, []);
 
+  const resolvePendingStop = useCallback((blob: Blob | null) => {
+    if (!stopRecordingResolverRef.current) return;
+    stopRecordingResolverRef.current(blob);
+    stopRecordingResolverRef.current = null;
+  }, []);
+
   const discardVoiceRecording = useCallback(() => {
     const recorder = mediaRecorderRef.current;
     if (recorder) {
@@ -110,24 +120,42 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
 
     stopVoiceStreamTracks();
     voiceChunksRef.current = [];
+    resolvePendingStop(null);
     resetVoiceTicker();
     clearPreview();
     setVoiceBlob(null);
     setVoiceRecorderState("idle");
     setVoiceError("");
     setVoiceInfo("");
-  }, [clearPreview, detachRecorder, resetVoiceTicker, stopVoiceStreamTracks]);
+  }, [clearPreview, detachRecorder, resetVoiceTicker, resolvePendingStop, stopVoiceStreamTracks]);
+
+  const stopVoiceRecordingAndWaitForBlob = useCallback(async (): Promise<Blob | null> => {
+    if (
+      (voiceRecorderState === "audio_ready" || voiceRecorderState === "review_ready")
+      && voiceBlobRef.current
+    ) {
+      return voiceBlobRef.current;
+    }
+
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state === "inactive") {
+      return voiceBlobRef.current;
+    }
+
+    return new Promise<Blob | null>((resolve) => {
+      stopRecordingResolverRef.current = resolve;
+      stopVoiceTicker();
+      try {
+        recorder.stop();
+      } catch {
+        resolvePendingStop(null);
+      }
+    });
+  }, [resolvePendingStop, stopVoiceTicker, voiceRecorderState]);
 
   const completeVoiceRecording = useCallback(() => {
-    const recorder = mediaRecorderRef.current;
-    if (!recorder || recorder.state === "inactive") return;
-    stopVoiceTicker();
-    try {
-      recorder.stop();
-    } catch {
-      // Ignore recorder stop errors.
-    }
-  }, [stopVoiceTicker]);
+    void stopVoiceRecordingAndWaitForBlob();
+  }, [stopVoiceRecordingAndWaitForBlob]);
   completeVoiceRecordingRef.current = completeVoiceRecording;
 
   const pauseVoiceRecording = useCallback(() => {
@@ -237,6 +265,7 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
           clearPreview();
           setVoiceRecorderState("idle");
           setVoiceBlob(null);
+          resolvePendingStop(null);
           setVoiceError(
             langRef.current === "es"
               ? "No se detecto audio. Intente grabar de nuevo."
@@ -250,6 +279,7 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
           clearPreview();
           setVoiceRecorderState("idle");
           setVoiceBlob(null);
+          resolvePendingStop(null);
           setVoiceError(
             langRef.current === "es"
               ? "No se detecto audio. Intente grabar de nuevo."
@@ -260,7 +290,13 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
 
         setVoiceBlob(blob);
         setPreviewBlob(blob);
-        setVoiceRecorderState("stopped");
+        setVoiceRecorderState("audio_ready");
+        setVoiceInfo(
+          langRef.current === "es"
+            ? "Audio listo. Revise la transcripción antes de enviar."
+            : "Audio ready. Review the transcript before submitting.",
+        );
+        resolvePendingStop(blob);
       };
 
       mediaRecorderRef.current = recorder;
@@ -313,13 +349,13 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
     }
   }, [togglePlayback]);
 
-  const sendVoiceRecording = useCallback(async (sessionCode: string): Promise<string | null> => {
-    if (!isActive || voiceRecorderState !== "stopped" || !voiceBlob) return null;
-    const audioBlob = voiceBlob;
+  const reviewVoiceRecording = useCallback(async (sessionCode: string): Promise<string | null> => {
+    if (!isActive || voiceRecorderState !== "audio_ready" || !voiceBlobRef.current) return null;
     const trimmedSessionCode = sessionCode.trim();
+    const audioBlob = voiceBlobRef.current;
 
-    log.debug("voice send requested", {
-      phase: "send_start",
+    log.debug("voice review requested", {
+      phase: "review_start",
       session_code: trimmedSessionCode,
       recorder_state: voiceRecorderState,
       blob_size_bytes: audioBlob.size,
@@ -328,45 +364,93 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
     });
 
     stopPlayback();
-    setVoiceRecorderState("sending");
+    setVoiceRecorderState("transcribing_for_review");
     setVoiceError("");
     setVoiceInfo(
       langRef.current === "es"
-        ? "Enviando audio para transcripcion..."
-        : "Uploading audio for transcription...",
+        ? "Preparando la transcripción para revisar..."
+        : "Preparing the transcript for review...",
     );
 
     try {
       const transcript = await transcribeAudio(audioBlob, langRef.current, trimmedSessionCode);
-      setVoiceRecorderState("stopped");
+      setVoiceRecorderState("review_ready");
       setVoiceInfo(
         langRef.current === "es"
-          ? "Transcripcion lista. Enviando respuesta..."
-          : "Transcript ready. Submitting answer...",
+          ? "Transcripción lista. Revísela y envíe su respuesta."
+          : "Transcript ready. Review it and submit your answer.",
       );
-      log.info("voice transcription completed", {
-        phase: "send_done",
+      log.info("voice review transcription completed", {
+        phase: "review_done",
         transcript_length: transcript.length,
       });
       return transcript;
     } catch (err) {
-      setVoiceRecorderState("stopped");
-      setVoiceInfo("");
-      log.error("voice send/transcription failed", {
-        phase: "send_error",
+      setVoiceRecorderState("audio_ready");
+      setVoiceInfo(
+        langRef.current === "es"
+          ? "Audio listo. Puede intentar revisar la transcripción otra vez."
+          : "Audio ready. You can try reviewing the transcript again.",
+      );
+      log.error("voice review transcription failed", {
+        phase: "review_error",
         error: err instanceof Error ? err.message : "unknown_error",
       });
       setVoiceError(
         err instanceof Error
           ? err.message
-          : (langRef.current === "es" ? "Error de transcripcion." : "Transcription error."),
+          : (langRef.current === "es" ? "Error de transcripción." : "Transcription error."),
       );
       return null;
     }
-  }, [isActive, stopPlayback, voiceBlob, voiceRecorderState]);
+  }, [isActive, stopPlayback, voiceRecorderState]);
+
+  const finalizeVoiceRecording = useCallback(async (sessionCode: string): Promise<string | null> => {
+    if (!isActive) return null;
+
+    const trimmedSessionCode = sessionCode.trim();
+    const audioBlob = await stopVoiceRecordingAndWaitForBlob();
+    if (!audioBlob) return null;
+
+    stopPlayback();
+    setVoiceRecorderState("forced_finalizing");
+    setVoiceError("");
+    setVoiceInfo(
+      langRef.current === "es"
+        ? "Finalizando su respuesta..."
+        : "Finalizing your answer...",
+    );
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const transcript = await transcribeAudio(audioBlob, langRef.current, trimmedSessionCode);
+        log.info("voice forced-finalization transcription completed", {
+          phase: "forced_finalization_done",
+          transcript_length: transcript.length,
+          attempt: attempt + 1,
+        });
+        return transcript;
+      } catch (err) {
+        log.error("voice forced-finalization transcription failed", {
+          phase: "forced_finalization_error",
+          attempt: attempt + 1,
+          error: err instanceof Error ? err.message : "unknown_error",
+        });
+        if (attempt === 1) {
+          setVoiceError(
+            err instanceof Error
+              ? err.message
+              : (langRef.current === "es" ? "Error de transcripción." : "Transcription error."),
+          );
+        }
+      }
+    }
+
+    return null;
+  }, [isActive, stopPlayback, stopVoiceRecordingAndWaitForBlob]);
 
   useEffect(() => {
-    if (isActive || voiceRecorderState === "idle") return;
+    if (isActive || voiceRecorderState === "idle" || voiceRecorderState === "forced_finalizing") return;
     discardVoiceRecording();
   }, [discardVoiceRecording, isActive, voiceRecorderState]);
 
@@ -402,7 +486,8 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
     completeVoiceRecording,
     discardVoiceRecording,
     toggleVoicePreviewPlayback,
-    sendVoiceRecording,
+    reviewVoiceRecording,
+    finalizeVoiceRecording,
     setVoiceErrorMessage: setVoiceError,
   };
 }

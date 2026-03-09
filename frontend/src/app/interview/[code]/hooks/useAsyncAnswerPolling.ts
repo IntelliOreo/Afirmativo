@@ -87,6 +87,7 @@ export function useAsyncAnswerPolling({ code }: UseAsyncAnswerPollingParams) {
             done: mapped.done,
             nextQuestion: mapped.nextQuestion,
             timerRemainingS: mapped.timerRemainingS,
+            answerSubmitWindowRemainingS: mapped.answerSubmitWindowRemainingS,
           };
         }
 

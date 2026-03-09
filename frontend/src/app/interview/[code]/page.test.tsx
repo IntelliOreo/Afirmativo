@@ -80,7 +80,8 @@ function makeVoiceRecorderState(overrides: Record<string, unknown> = {}) {
     completeVoiceRecording: vi.fn(),
     discardVoiceRecording: vi.fn(),
     toggleVoicePreviewPlayback: vi.fn(async () => {}),
-    sendVoiceRecording: vi.fn(async () => null),
+    reviewVoiceRecording: vi.fn(async () => null),
+    finalizeVoiceRecording: vi.fn(async () => null),
     setVoiceErrorMessage: vi.fn(),
     ...overrides,
   };
@@ -150,8 +151,8 @@ describe("InterviewPage", () => {
       makeMachineState({
         phase: "active",
         question: activeQuestion,
-        timerRemainingS: 600,
         secondsLeft: 600,
+        answerSecondsLeft: 240,
         textAnswer: "",
         inputMode: "text",
       }),
@@ -176,6 +177,7 @@ describe("InterviewPage", () => {
         phase: "active",
         question: activeQuestion,
         secondsLeft: 600,
+        answerSecondsLeft: 240,
         textAnswer: "",
         inputMode: "text",
       }),

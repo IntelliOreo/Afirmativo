@@ -209,10 +209,62 @@ func uuidToString(u pgtype.UUID) string {
 		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
+func issuedQuestionToDBFields(issuedQuestion *IssuedQuestion) (pgtype.Text, pgtype.Text, pgtype.Text, pgtype.Text, pgtype.Timestamptz, pgtype.Timestamptz, pgtype.Timestamptz) {
+	if issuedQuestion == nil {
+		return pgtype.Text{}, pgtype.Text{}, pgtype.Text{}, pgtype.Text{}, pgtype.Timestamptz{}, pgtype.Timestamptz{}, pgtype.Timestamptz{}
+	}
+	return pgtype.Text{String: issuedQuestion.Question.TextEs, Valid: issuedQuestion.Question.TextEs != ""},
+		pgtype.Text{String: issuedQuestion.Question.TextEn, Valid: issuedQuestion.Question.TextEn != ""},
+		pgtype.Text{String: issuedQuestion.Question.Area, Valid: issuedQuestion.Question.Area != ""},
+		pgtype.Text{String: string(issuedQuestion.Question.Kind), Valid: issuedQuestion.Question.Kind != ""},
+		pgtype.Timestamptz{Time: issuedQuestion.IssuedAt.UTC(), Valid: true},
+		pgtype.Timestamptz{Time: issuedQuestion.AnswerDeadlineAt.UTC(), Valid: true},
+		pgtype.Timestamptz{Time: issuedQuestion.BufferDeadlineAt.UTC(), Valid: true}
+}
+
+func issuedQuestionFromDB(
+	expectedTurnID string,
+	questionNumber int,
+	textEs pgtype.Text,
+	textEn pgtype.Text,
+	area pgtype.Text,
+	kind pgtype.Text,
+	issuedAt pgtype.Timestamptz,
+	answerDeadlineAt pgtype.Timestamptz,
+	bufferDeadlineAt pgtype.Timestamptz,
+) *IssuedQuestion {
+	if strings.TrimSpace(expectedTurnID) == "" || !kind.Valid || !issuedAt.Valid || !answerDeadlineAt.Valid || !bufferDeadlineAt.Valid {
+		return nil
+	}
+	return &IssuedQuestion{
+		Question: Question{
+			TextEs:         textEs.String,
+			TextEn:         textEn.String,
+			Area:           area.String,
+			Kind:           QuestionKind(kind.String),
+			TurnID:         expectedTurnID,
+			QuestionNumber: questionNumber,
+			TotalQuestions: EstimatedTotalQuestions,
+		},
+		IssuedAt:         issuedAt.Time.UTC(),
+		AnswerDeadlineAt: answerDeadlineAt.Time.UTC(),
+		BufferDeadlineAt: bufferDeadlineAt.Time.UTC(),
+	}
+}
+
 // GetFlowState returns the persisted interview flow pointer for a session.
 func (s *PostgresStore) GetFlowState(ctx context.Context, sessionCode string) (*FlowState, error) {
 	row := s.pool.QueryRow(ctx,
-		`SELECT flow_step, COALESCE(expected_turn_id, ''), display_question_number
+		`SELECT flow_step,
+		        COALESCE(expected_turn_id, ''),
+		        display_question_number,
+		        active_question_text_es,
+		        active_question_text_en,
+		        active_question_area,
+		        active_question_kind,
+		        active_question_issued_at,
+		        active_answer_deadline_at,
+		        active_answer_buffer_deadline_at
 		 FROM sessions
 		 WHERE session_code = $1`,
 		sessionCode,
@@ -221,7 +273,25 @@ func (s *PostgresStore) GetFlowState(ctx context.Context, sessionCode string) (*
 	var step string
 	var turnID string
 	var questionNumber int
-	if err := row.Scan(&step, &turnID, &questionNumber); err != nil {
+	var textEs pgtype.Text
+	var textEn pgtype.Text
+	var area pgtype.Text
+	var kind pgtype.Text
+	var issuedAt pgtype.Timestamptz
+	var answerDeadlineAt pgtype.Timestamptz
+	var bufferDeadlineAt pgtype.Timestamptz
+	if err := row.Scan(
+		&step,
+		&turnID,
+		&questionNumber,
+		&textEs,
+		&textEn,
+		&area,
+		&kind,
+		&issuedAt,
+		&answerDeadlineAt,
+		&bufferDeadlineAt,
+	); err != nil {
 		return nil, fmt.Errorf("get flow state: %w", err)
 	}
 
@@ -229,25 +299,78 @@ func (s *PostgresStore) GetFlowState(ctx context.Context, sessionCode string) (*
 		Step:           FlowStep(step),
 		ExpectedTurnID: turnID,
 		QuestionNumber: questionNumber,
+		ActiveQuestion: issuedQuestionFromDB(
+			turnID,
+			questionNumber,
+			textEs,
+			textEn,
+			area,
+			kind,
+			issuedAt,
+			answerDeadlineAt,
+			bufferDeadlineAt,
+		),
 	}, nil
 }
 
 // PrepareDisclaimerStep forces the flow pointer to disclaimer and sets turn id.
-func (s *PostgresStore) PrepareDisclaimerStep(ctx context.Context, sessionCode, turnID string) (*FlowState, error) {
+func (s *PostgresStore) PrepareDisclaimerStep(ctx context.Context, sessionCode string, issuedQuestion *IssuedQuestion) (*FlowState, error) {
+	textEs, textEn, area, kind, issuedAt, answerDeadlineAt, bufferDeadlineAt := issuedQuestionToDBFields(issuedQuestion)
 	row := s.pool.QueryRow(ctx,
 		`UPDATE sessions
 		 SET flow_step = 'disclaimer',
-		     expected_turn_id = $2
+		     expected_turn_id = $2,
+		     active_question_text_es = $3,
+		     active_question_text_en = $4,
+		     active_question_area = $5,
+		     active_question_kind = $6,
+		     active_question_issued_at = $7,
+		     active_answer_deadline_at = $8,
+		     active_answer_buffer_deadline_at = $9
 		 WHERE session_code = $1
-		 RETURNING flow_step, COALESCE(expected_turn_id, ''), display_question_number`,
+		 RETURNING flow_step,
+		           COALESCE(expected_turn_id, ''),
+		           display_question_number,
+		           active_question_text_es,
+		           active_question_text_en,
+		           active_question_area,
+		           active_question_kind,
+		           active_question_issued_at,
+		           active_answer_deadline_at,
+		           active_answer_buffer_deadline_at`,
 		sessionCode,
-		turnID,
+		issuedQuestion.Question.TurnID,
+		textEs,
+		textEn,
+		area,
+		kind,
+		issuedAt,
+		answerDeadlineAt,
+		bufferDeadlineAt,
 	)
 
 	var step string
 	var expectedTurnID string
 	var questionNumber int
-	if err := row.Scan(&step, &expectedTurnID, &questionNumber); err != nil {
+	var persistedTextEs pgtype.Text
+	var persistedTextEn pgtype.Text
+	var persistedArea pgtype.Text
+	var persistedKind pgtype.Text
+	var persistedIssuedAt pgtype.Timestamptz
+	var persistedAnswerDeadlineAt pgtype.Timestamptz
+	var persistedBufferDeadlineAt pgtype.Timestamptz
+	if err := row.Scan(
+		&step,
+		&expectedTurnID,
+		&questionNumber,
+		&persistedTextEs,
+		&persistedTextEn,
+		&persistedArea,
+		&persistedKind,
+		&persistedIssuedAt,
+		&persistedAnswerDeadlineAt,
+		&persistedBufferDeadlineAt,
+	); err != nil {
 		return nil, fmt.Errorf("prepare disclaimer step: %w", err)
 	}
 
@@ -255,25 +378,78 @@ func (s *PostgresStore) PrepareDisclaimerStep(ctx context.Context, sessionCode, 
 		Step:           FlowStep(step),
 		ExpectedTurnID: expectedTurnID,
 		QuestionNumber: questionNumber,
+		ActiveQuestion: issuedQuestionFromDB(
+			expectedTurnID,
+			questionNumber,
+			persistedTextEs,
+			persistedTextEn,
+			persistedArea,
+			persistedKind,
+			persistedIssuedAt,
+			persistedAnswerDeadlineAt,
+			persistedBufferDeadlineAt,
+		),
 	}, nil
 }
 
 // PrepareReadinessStep forces the flow pointer to readiness and sets turn id.
-func (s *PostgresStore) PrepareReadinessStep(ctx context.Context, sessionCode, turnID string) (*FlowState, error) {
+func (s *PostgresStore) PrepareReadinessStep(ctx context.Context, sessionCode string, issuedQuestion *IssuedQuestion) (*FlowState, error) {
+	textEs, textEn, area, kind, issuedAt, answerDeadlineAt, bufferDeadlineAt := issuedQuestionToDBFields(issuedQuestion)
 	row := s.pool.QueryRow(ctx,
 		`UPDATE sessions
 		 SET flow_step = 'readiness',
-		     expected_turn_id = $2
+		     expected_turn_id = $2,
+		     active_question_text_es = $3,
+		     active_question_text_en = $4,
+		     active_question_area = $5,
+		     active_question_kind = $6,
+		     active_question_issued_at = $7,
+		     active_answer_deadline_at = $8,
+		     active_answer_buffer_deadline_at = $9
 		 WHERE session_code = $1
-		 RETURNING flow_step, COALESCE(expected_turn_id, ''), display_question_number`,
+		 RETURNING flow_step,
+		           COALESCE(expected_turn_id, ''),
+		           display_question_number,
+		           active_question_text_es,
+		           active_question_text_en,
+		           active_question_area,
+		           active_question_kind,
+		           active_question_issued_at,
+		           active_answer_deadline_at,
+		           active_answer_buffer_deadline_at`,
 		sessionCode,
-		turnID,
+		issuedQuestion.Question.TurnID,
+		textEs,
+		textEn,
+		area,
+		kind,
+		issuedAt,
+		answerDeadlineAt,
+		bufferDeadlineAt,
 	)
 
 	var step string
 	var expectedTurnID string
 	var questionNumber int
-	if err := row.Scan(&step, &expectedTurnID, &questionNumber); err != nil {
+	var persistedTextEs pgtype.Text
+	var persistedTextEn pgtype.Text
+	var persistedArea pgtype.Text
+	var persistedKind pgtype.Text
+	var persistedIssuedAt pgtype.Timestamptz
+	var persistedAnswerDeadlineAt pgtype.Timestamptz
+	var persistedBufferDeadlineAt pgtype.Timestamptz
+	if err := row.Scan(
+		&step,
+		&expectedTurnID,
+		&questionNumber,
+		&persistedTextEs,
+		&persistedTextEn,
+		&persistedArea,
+		&persistedKind,
+		&persistedIssuedAt,
+		&persistedAnswerDeadlineAt,
+		&persistedBufferDeadlineAt,
+	); err != nil {
 		return nil, fmt.Errorf("prepare readiness step: %w", err)
 	}
 
@@ -281,11 +457,26 @@ func (s *PostgresStore) PrepareReadinessStep(ctx context.Context, sessionCode, t
 		Step:           FlowStep(step),
 		ExpectedTurnID: expectedTurnID,
 		QuestionNumber: questionNumber,
+		ActiveQuestion: issuedQuestionFromDB(
+			expectedTurnID,
+			questionNumber,
+			persistedTextEs,
+			persistedTextEn,
+			persistedArea,
+			persistedKind,
+			persistedIssuedAt,
+			persistedAnswerDeadlineAt,
+			persistedBufferDeadlineAt,
+		),
 	}, nil
 }
 
 // AdvanceNonCriterionStep records an event and advances flow atomically.
 func (s *PostgresStore) AdvanceNonCriterionStep(ctx context.Context, params AdvanceNonCriterionStepParams) (*FlowState, error) {
+	if params.NextIssuedQuestion == nil {
+		return nil, ErrInvalidFlow
+	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
@@ -320,21 +511,65 @@ func (s *PostgresStore) AdvanceNonCriterionStep(ctx context.Context, params Adva
 		return nil, fmt.Errorf("insert interview event: %w", err)
 	}
 
+	textEs, textEn, area, kind, issuedAt, answerDeadlineAt, bufferDeadlineAt := issuedQuestionToDBFields(params.NextIssuedQuestion)
 	updateRow := tx.QueryRow(ctx,
 		`UPDATE sessions
 		 SET flow_step = $2,
-		     expected_turn_id = $3
+		     expected_turn_id = $3,
+		     display_question_number = $4,
+		     active_question_text_es = $5,
+		     active_question_text_en = $6,
+		     active_question_area = $7,
+		     active_question_kind = $8,
+		     active_question_issued_at = $9,
+		     active_answer_deadline_at = $10,
+		     active_answer_buffer_deadline_at = $11
 		 WHERE session_code = $1
-		 RETURNING flow_step, COALESCE(expected_turn_id, ''), display_question_number`,
+		 RETURNING flow_step,
+		           COALESCE(expected_turn_id, ''),
+		           display_question_number,
+		           active_question_text_es,
+		           active_question_text_en,
+		           active_question_area,
+		           active_question_kind,
+		           active_question_issued_at,
+		           active_answer_deadline_at,
+		           active_answer_buffer_deadline_at`,
 		params.SessionCode,
 		string(params.NextStep),
-		params.NextTurnID,
+		params.NextIssuedQuestion.Question.TurnID,
+		params.NextIssuedQuestion.Question.QuestionNumber,
+		textEs,
+		textEn,
+		area,
+		kind,
+		issuedAt,
+		answerDeadlineAt,
+		bufferDeadlineAt,
 	)
 
 	var newStep string
 	var newTurnID string
 	var newQuestionNumber int
-	if err := updateRow.Scan(&newStep, &newTurnID, &newQuestionNumber); err != nil {
+	var persistedTextEs pgtype.Text
+	var persistedTextEn pgtype.Text
+	var persistedArea pgtype.Text
+	var persistedKind pgtype.Text
+	var persistedIssuedAt pgtype.Timestamptz
+	var persistedAnswerDeadlineAt pgtype.Timestamptz
+	var persistedBufferDeadlineAt pgtype.Timestamptz
+	if err := updateRow.Scan(
+		&newStep,
+		&newTurnID,
+		&newQuestionNumber,
+		&persistedTextEs,
+		&persistedTextEn,
+		&persistedArea,
+		&persistedKind,
+		&persistedIssuedAt,
+		&persistedAnswerDeadlineAt,
+		&persistedBufferDeadlineAt,
+	); err != nil {
 		return nil, fmt.Errorf("advance non-criterion flow: %w", err)
 	}
 
@@ -346,12 +581,26 @@ func (s *PostgresStore) AdvanceNonCriterionStep(ctx context.Context, params Adva
 		Step:           FlowStep(newStep),
 		ExpectedTurnID: newTurnID,
 		QuestionNumber: newQuestionNumber,
+		ActiveQuestion: issuedQuestionFromDB(
+			newTurnID,
+			newQuestionNumber,
+			persistedTextEs,
+			persistedTextEn,
+			persistedArea,
+			persistedKind,
+			persistedIssuedAt,
+			persistedAnswerDeadlineAt,
+			persistedBufferDeadlineAt,
+		),
 	}, nil
 }
 
 // ProcessCriterionTurn persists one scored criterion answer and transition atomically.
 func (s *PostgresStore) ProcessCriterionTurn(ctx context.Context, params ProcessCriterionTurnParams) (*ProcessCriterionTurnResult, error) {
 	if params.Evaluation == nil {
+		return nil, ErrInvalidFlow
+	}
+	if strings.TrimSpace(params.NextArea) != "" && params.NextIssuedQuestion == nil {
 		return nil, ErrInvalidFlow
 	}
 
@@ -412,8 +661,7 @@ func (s *PostgresStore) ProcessCriterionTurn(ctx context.Context, params Process
 		return nil, fmt.Errorf("increment area questions: %w", err)
 	}
 
-	decision := DecideCriterionTurn(params.Evaluation.CurrentCriterion, newCount, params.MaxQuestionsPerArea)
-	switch decision.MarkCurrentAs {
+	switch params.Decision.MarkCurrentAs {
 	case AreaStatusComplete:
 		if _, err := tx.Exec(ctx,
 			`UPDATE question_areas
@@ -454,64 +702,59 @@ func (s *PostgresStore) ProcessCriterionTurn(ctx context.Context, params Process
 		}
 	}
 
-	nextArea := params.CurrentArea
-	if decision.Action == CriterionTurnActionNext {
-		rows, err := tx.Query(ctx,
-			`SELECT area, status
-			 FROM question_areas
-			 WHERE session_code = $1`,
+	if strings.TrimSpace(params.NextArea) != "" && params.Decision.Action == CriterionTurnActionNext {
+		if _, err := tx.Exec(ctx,
+			`UPDATE question_areas
+			 SET status = 'in_progress', area_started_at = now()
+			 WHERE session_code = $1
+			   AND area = $2
+			   AND status IN ('pending', 'pre_addressed')`,
 			params.SessionCode,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("list areas for transition: %w", err)
-		}
-
-		statusByArea := make(map[string]AreaStatus)
-		for rows.Next() {
-			var area string
-			var status string
-			if err := rows.Scan(&area, &status); err != nil {
-				rows.Close()
-				return nil, fmt.Errorf("scan area status: %w", err)
-			}
-			statusByArea[area] = AreaStatus(status)
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return nil, fmt.Errorf("iterate area statuses: %w", err)
-		}
-		rows.Close()
-
-		nextArea = SelectNextPendingArea(params.OrderedAreaSlugs, statusByArea)
-
-		if nextArea != "" {
-			if _, err := tx.Exec(ctx,
-				`UPDATE question_areas
-				 SET status = 'in_progress', area_started_at = now()
-				 WHERE session_code = $1
-				   AND area = $2
-				   AND status IN ('pending', 'pre_addressed')`,
-				params.SessionCode,
-				nextArea,
-			); err != nil {
-				return nil, fmt.Errorf("set next area in_progress: %w", err)
-			}
+			params.NextArea,
+		); err != nil {
+			return nil, fmt.Errorf("set next area in_progress: %w", err)
 		}
 	}
 
+	textEs, textEn, area, kind, issuedAt, answerDeadlineAt, bufferDeadlineAt := issuedQuestionToDBFields(params.NextIssuedQuestion)
 	updateStateRow := tx.QueryRow(ctx,
 		`UPDATE sessions
 		 SET flow_step = CASE WHEN $2 = '' THEN 'done' ELSE 'criterion' END,
 		     expected_turn_id = CASE WHEN $2 = '' THEN NULL ELSE $3 END,
-		     display_question_number = display_question_number + 1
+		     display_question_number = CASE WHEN $2 = '' THEN display_question_number + 1 ELSE $4 END,
+		     active_question_text_es = $5,
+		     active_question_text_en = $6,
+		     active_question_area = $7,
+		     active_question_kind = $8,
+		     active_question_issued_at = $9,
+		     active_answer_deadline_at = $10,
+		     active_answer_buffer_deadline_at = $11
 		 WHERE session_code = $1
 		 RETURNING display_question_number`,
 		params.SessionCode,
-		nextArea,
-		params.NextTurnID,
+		params.NextArea,
+		nullIfEmpty(func() string {
+			if params.NextIssuedQuestion == nil {
+				return ""
+			}
+			return params.NextIssuedQuestion.Question.TurnID
+		}()),
+		func() int {
+			if params.NextIssuedQuestion == nil {
+				return 0
+			}
+			return params.NextIssuedQuestion.Question.QuestionNumber
+		}(),
+		textEs,
+		textEn,
+		area,
+		kind,
+		issuedAt,
+		answerDeadlineAt,
+		bufferDeadlineAt,
 	)
-	var questionNumber int
-	if err := updateStateRow.Scan(&questionNumber); err != nil {
+	var persistedQuestionNumber int
+	if err := updateStateRow.Scan(&persistedQuestionNumber); err != nil {
 		return nil, fmt.Errorf("advance flow state after criterion: %w", err)
 	}
 
@@ -520,10 +763,7 @@ func (s *PostgresStore) ProcessCriterionTurn(ctx context.Context, params Process
 	}
 
 	return &ProcessCriterionTurnResult{
-		Action:         decision.Action,
-		NextArea:       nextArea,
-		QuestionNumber: questionNumber,
-		NewCount:       newCount,
+		NewCount: newCount,
 	}, nil
 }
 
@@ -532,7 +772,14 @@ func (s *PostgresStore) MarkFlowDone(ctx context.Context, sessionCode string) er
 	_, err := s.pool.Exec(ctx,
 		`UPDATE sessions
 		 SET flow_step = 'done',
-		     expected_turn_id = NULL
+		     expected_turn_id = NULL,
+		     active_question_text_es = NULL,
+		     active_question_text_en = NULL,
+		     active_question_area = NULL,
+		     active_question_kind = NULL,
+		     active_question_issued_at = NULL,
+		     active_answer_deadline_at = NULL,
+		     active_answer_buffer_deadline_at = NULL
 		 WHERE session_code = $1`,
 		sessionCode,
 	)

@@ -14,6 +14,7 @@ export interface AnswerResponseDto {
   done: boolean;
   next_question?: QuestionDto;
   timer_remaining_s: number;
+  answer_submit_window_remaining_s: number;
   error?: string;
   code?: string;
 }
@@ -21,7 +22,9 @@ export interface AnswerResponseDto {
 export interface StartResponseDto {
   question: QuestionDto;
   timer_remaining_s: number;
+  answer_submit_window_remaining_s: number;
   language: Lang;
+  resuming?: boolean;
   error?: string;
   code?: string;
 }
@@ -49,6 +52,7 @@ export interface AnswerJobStatusResponseDto {
   done: boolean;
   next_question?: QuestionDto;
   timer_remaining_s: number;
+  answer_submit_window_remaining_s: number;
   error_code?: string;
   error_message?: string;
   error?: string;

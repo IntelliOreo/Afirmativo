@@ -19,8 +19,8 @@ type qaServiceStore struct {
 	getAnswersBySessionFn     func(ctx context.Context, sessionCode string) ([]Answer, error)
 	getAnswerCountFn          func(ctx context.Context, sessionCode string) (int, error)
 	getFlowStateFn            func(ctx context.Context, sessionCode string) (*FlowState, error)
-	prepareDisclaimerStepFn   func(ctx context.Context, sessionCode, turnID string) (*FlowState, error)
-	prepareReadinessStepFn    func(ctx context.Context, sessionCode, turnID string) (*FlowState, error)
+	prepareDisclaimerStepFn   func(ctx context.Context, sessionCode string, issuedQuestion *IssuedQuestion) (*FlowState, error)
+	prepareReadinessStepFn    func(ctx context.Context, sessionCode string, issuedQuestion *IssuedQuestion) (*FlowState, error)
 	advanceNonCriterionStepFn func(ctx context.Context, params AdvanceNonCriterionStepParams) (*FlowState, error)
 }
 
@@ -77,18 +77,18 @@ func (s *qaServiceStore) GetFlowState(ctx context.Context, sessionCode string) (
 	return s.fakeInterviewStore.GetFlowState(ctx, sessionCode)
 }
 
-func (s *qaServiceStore) PrepareDisclaimerStep(ctx context.Context, sessionCode, turnID string) (*FlowState, error) {
+func (s *qaServiceStore) PrepareDisclaimerStep(ctx context.Context, sessionCode string, issuedQuestion *IssuedQuestion) (*FlowState, error) {
 	if s.prepareDisclaimerStepFn != nil {
-		return s.prepareDisclaimerStepFn(ctx, sessionCode, turnID)
+		return s.prepareDisclaimerStepFn(ctx, sessionCode, issuedQuestion)
 	}
-	return s.fakeInterviewStore.PrepareDisclaimerStep(ctx, sessionCode, turnID)
+	return s.fakeInterviewStore.PrepareDisclaimerStep(ctx, sessionCode, issuedQuestion)
 }
 
-func (s *qaServiceStore) PrepareReadinessStep(ctx context.Context, sessionCode, turnID string) (*FlowState, error) {
+func (s *qaServiceStore) PrepareReadinessStep(ctx context.Context, sessionCode string, issuedQuestion *IssuedQuestion) (*FlowState, error) {
 	if s.prepareReadinessStepFn != nil {
-		return s.prepareReadinessStepFn(ctx, sessionCode, turnID)
+		return s.prepareReadinessStepFn(ctx, sessionCode, issuedQuestion)
 	}
-	return s.fakeInterviewStore.PrepareReadinessStep(ctx, sessionCode, turnID)
+	return s.fakeInterviewStore.PrepareReadinessStep(ctx, sessionCode, issuedQuestion)
 }
 
 func (s *qaServiceStore) AdvanceNonCriterionStep(ctx context.Context, params AdvanceNonCriterionStepParams) (*FlowState, error) {
@@ -168,8 +168,13 @@ func TestStartInterview_FirstEntryStillReturnsDisclaimer(t *testing.T) {
 	store.getInProgressAreaFn = func(context.Context, string) (*QuestionArea, error) {
 		return &QuestionArea{Area: "protected_ground", Status: AreaStatusInProgress}, nil
 	}
-	store.prepareDisclaimerStepFn = func(_ context.Context, _ string, turnID string) (*FlowState, error) {
-		return &FlowState{Step: FlowStepDisclaimer, ExpectedTurnID: turnID, QuestionNumber: 1}, nil
+	store.prepareDisclaimerStepFn = func(_ context.Context, _ string, issuedQuestion *IssuedQuestion) (*FlowState, error) {
+		return &FlowState{
+			Step:           FlowStepDisclaimer,
+			ExpectedTurnID: issuedQuestion.Question.TurnID,
+			QuestionNumber: 1,
+			ActiveQuestion: issuedQuestion,
+		}, nil
 	}
 
 	sessions := &fakeInterviewSessionStore{
@@ -220,8 +225,13 @@ func TestStartInterview_ResumingSessionReturnsReadinessReturningUserMessage(t *t
 		return &QuestionArea{Area: "protected_ground", Status: AreaStatusInProgress}, nil
 	}
 
-	store.prepareReadinessStepFn = func(_ context.Context, _ string, turnID string) (*FlowState, error) {
-		return &FlowState{Step: FlowStepReadiness, ExpectedTurnID: turnID, QuestionNumber: 7}, nil
+	store.prepareReadinessStepFn = func(_ context.Context, _ string, issuedQuestion *IssuedQuestion) (*FlowState, error) {
+		return &FlowState{
+			Step:           FlowStepReadiness,
+			ExpectedTurnID: issuedQuestion.Question.TurnID,
+			QuestionNumber: 7,
+			ActiveQuestion: issuedQuestion,
+		}, nil
 	}
 
 	sessions := &fakeInterviewSessionStore{
@@ -251,8 +261,8 @@ func TestStartInterview_ResumingSessionReturnsReadinessReturningUserMessage(t *t
 	if result.Question.TextEn != ResumeQuestion("protected_ground").TextEn {
 		t.Fatalf("question.textEn = %q, want returning-user message %q", result.Question.TextEn, ResumeQuestion("protected_ground").TextEn)
 	}
-	if result.Question.QuestionNumber != 7 {
-		t.Fatalf("question.questionNumber = %d, want 7", result.Question.QuestionNumber)
+	if result.Question.QuestionNumber != 6 {
+		t.Fatalf("question.questionNumber = %d, want 6", result.Question.QuestionNumber)
 	}
 	if result.Language != "en" {
 		t.Fatalf("language = %q, want en", result.Language)
@@ -272,7 +282,12 @@ func TestProcessTurn_ReadinessStepTriggersNewAICallAndReturnsNewQuestion(t *test
 		return &QuestionArea{Area: "protected_ground", Status: AreaStatusInProgress, QuestionsCount: 0}, nil
 	}
 	store.advanceNonCriterionStepFn = func(_ context.Context, params AdvanceNonCriterionStepParams) (*FlowState, error) {
-		return &FlowState{Step: FlowStepCriterion, ExpectedTurnID: params.NextTurnID, QuestionNumber: 3}, nil
+		return &FlowState{
+			Step:           FlowStepCriterion,
+			ExpectedTurnID: params.NextIssuedQuestion.Question.TurnID,
+			QuestionNumber: 3,
+			ActiveQuestion: params.NextIssuedQuestion,
+		}, nil
 	}
 	store.getAnswersBySessionFn = func(context.Context, string) ([]Answer, error) {
 		return []Answer{}, nil
@@ -401,11 +416,7 @@ func TestProcessTurn_CriterionStepCompletesInterviewAcrossSessionLanguages(t *te
 			}
 
 			store.processCriterionTurnFn = func(_ context.Context, _ ProcessCriterionTurnParams) (*ProcessCriterionTurnResult, error) {
-				return &ProcessCriterionTurnResult{
-					Action:         "next",
-					NextArea:       "",
-					QuestionNumber: 5,
-				}, nil
+				return &ProcessCriterionTurnResult{NewCount: 2}, nil
 			}
 
 			sessions := &fakeInterviewSessionStore{

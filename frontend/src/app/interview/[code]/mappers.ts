@@ -35,7 +35,9 @@ export function mapStartResponse(raw: StartResponseDto): StartInterviewData {
   return {
     question: mapQuestion(raw.question),
     timerRemainingS: raw.timer_remaining_s,
+    answerSubmitWindowRemainingS: raw.answer_submit_window_remaining_s,
     language: raw.language,
+    resuming: raw.resuming,
     error: raw.error,
     code: raw.code,
   };
@@ -49,6 +51,7 @@ export function mapAnswerJobResponse(raw: AnswerJobStatusResponseDto): AnswerJob
     done: raw.done,
     nextQuestion: raw.next_question ? mapQuestion(raw.next_question) : undefined,
     timerRemainingS: raw.timer_remaining_s,
+    answerSubmitWindowRemainingS: raw.answer_submit_window_remaining_s,
     errorCode: raw.error_code,
     errorMessage: raw.error_message,
     error: raw.error,

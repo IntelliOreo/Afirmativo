@@ -32,20 +32,22 @@ export type InterviewState =
   | { phase: "guard" }
   | { phase: "loading" }
   | {
-    phase: "active";
-    question: Question;
-    secondsLeft: number;
-    textAnswer: string;
-    inputMode: InputMode;
-  }
+      phase: "active";
+      question: Question;
+      secondsLeft: number;
+      answerSecondsLeft: number;
+      textAnswer: string;
+      inputMode: InputMode;
+    }
   | {
-    phase: "submitting";
-    question: Question;
-    secondsLeft: number;
-    submitMode: SubmitMode;
-    pendingJob: PendingAnswerSubmission;
-    requestKind: RequestKind;
-  }
+      phase: "submitting";
+      question: Question;
+      secondsLeft: number;
+      answerSecondsLeft: number;
+      submitMode: SubmitMode;
+      pendingJob: PendingAnswerSubmission;
+      requestKind: RequestKind;
+    }
   | { phase: "done"; completionSource: CompletionSource }
   | { phase: "error"; message: string; code?: string };
 
@@ -53,13 +55,12 @@ export type InterviewAction =
   | { type: "START_REQUESTED" }
   | { type: "START_UNAUTHORIZED" }
   | { type: "START_COMPLETED" }
-  | { type: "START_SUCCEEDED"; payload: { question: Question; secondsLeft: number } }
+  | { type: "START_SUCCEEDED"; payload: { question: Question; secondsLeft: number; answerSecondsLeft: number } }
   | { type: "START_FAILED"; payload: { message: string; code?: string } }
   | { type: "TEXT_CHANGED"; payload: { value: string } }
   | { type: "INPUT_MODE_CHANGED"; payload: { mode: InputMode } }
   | { type: "TICK" }
-  | { type: "AUTO_SUBMIT_REQUESTED"; payload: { pendingJob: PendingAnswerSubmission } }
-  | { type: "SUBMIT_REQUESTED"; payload: { pendingJob: PendingAnswerSubmission } }
+  | { type: "SUBMIT_REQUESTED"; payload: { pendingJob: PendingAnswerSubmission; submitMode: SubmitMode } }
   | { type: "SUBMIT_SUCCEEDED"; payload: { result: AnswerOutcome } }
   | { type: "SUBMIT_FAILED"; payload: { message: string; code?: string } }
   | { type: "RECOVERY_REQUESTED"; payload: { pendingJob: PendingAnswerSubmission } }
@@ -82,11 +83,13 @@ interface UseInterviewMachineResult {
 function toActiveState(
   question: Question,
   secondsLeft: number,
+  answerSecondsLeft: number,
 ): Extract<InterviewState, { phase: "active" }> {
   return {
     phase: "active",
     question,
     secondsLeft,
+    answerSecondsLeft,
     textAnswer: "",
     inputMode: "text",
   };
@@ -103,7 +106,11 @@ function applyAnswerOutcome(
     };
   }
 
-  return toActiveState(outcome.nextQuestion ?? currentQuestion, outcome.timerRemainingS);
+  return toActiveState(
+    outcome.nextQuestion ?? currentQuestion,
+    outcome.timerRemainingS,
+    outcome.answerSubmitWindowRemainingS,
+  );
 }
 
 export function interviewReducer(state: InterviewState, action: InterviewAction): InterviewState {
@@ -115,7 +122,11 @@ export function interviewReducer(state: InterviewState, action: InterviewAction)
     case "START_COMPLETED":
       return { phase: "done", completionSource: "already_completed" };
     case "START_SUCCEEDED":
-      return toActiveState(action.payload.question, action.payload.secondsLeft);
+      return toActiveState(
+        action.payload.question,
+        action.payload.secondsLeft,
+        action.payload.answerSecondsLeft,
+      );
     case "START_FAILED":
       return { phase: "error", message: action.payload.message, code: action.payload.code };
     case "TEXT_CHANGED":
@@ -129,26 +140,18 @@ export function interviewReducer(state: InterviewState, action: InterviewAction)
         return {
           ...state,
           secondsLeft: Math.max(0, state.secondsLeft - 1),
+          answerSecondsLeft: Math.max(0, state.answerSecondsLeft - 1),
         };
       }
       return state;
-    case "AUTO_SUBMIT_REQUESTED":
-      if (state.phase !== "active") return state;
-      return {
-        phase: "submitting",
-        question: state.question,
-        secondsLeft: state.secondsLeft,
-        submitMode: "finalAuto",
-        pendingJob: action.payload.pendingJob,
-        requestKind: "submit",
-      };
     case "SUBMIT_REQUESTED":
       if (state.phase !== "active") return state;
       return {
         phase: "submitting",
         question: state.question,
         secondsLeft: state.secondsLeft,
-        submitMode: "question",
+        answerSecondsLeft: state.answerSecondsLeft,
+        submitMode: action.payload.submitMode,
         pendingJob: action.payload.pendingJob,
         requestKind: "submit",
       };
@@ -158,6 +161,7 @@ export function interviewReducer(state: InterviewState, action: InterviewAction)
         phase: "submitting",
         question: state.question,
         secondsLeft: state.secondsLeft,
+        answerSecondsLeft: state.answerSecondsLeft,
         submitMode: "question",
         pendingJob: action.payload.pendingJob,
         requestKind: "recovery",
@@ -203,8 +207,8 @@ export function useInterviewMachine({
 
     const pendingJob = buildPendingJob(state.question, lang, answerText.trim());
     dispatch({
-      type: submitMode === "finalAuto" ? "AUTO_SUBMIT_REQUESTED" : "SUBMIT_REQUESTED",
-      payload: { pendingJob },
+      type: "SUBMIT_REQUESTED",
+      payload: { pendingJob, submitMode },
     });
   }, [lang, state]);
 
@@ -248,7 +252,11 @@ export function useInterviewMachine({
         const mapped = mapStartResponse(data);
         dispatch({
           type: "START_SUCCEEDED",
-          payload: { question: mapped.question, secondsLeft: mapped.timerRemainingS },
+          payload: {
+            question: mapped.question,
+            secondsLeft: mapped.timerRemainingS,
+            answerSecondsLeft: mapped.answerSubmitWindowRemainingS,
+          },
         });
 
         if (mapped.language === "en" || mapped.language === "es") {
@@ -257,7 +265,11 @@ export function useInterviewMachine({
 
         const pendingJob = pendingAnswerStore.read(code);
         if (pendingJob) {
-          dispatch({ type: "RECOVERY_REQUESTED", payload: { pendingJob } });
+          if (pendingJob.turnId === mapped.question.turnId) {
+            dispatch({ type: "RECOVERY_REQUESTED", payload: { pendingJob } });
+          } else {
+            pendingAnswerStore.clear(code);
+          }
         }
       } catch (err) {
         if (canceled) return;
@@ -275,14 +287,6 @@ export function useInterviewMachine({
       canceled = true;
     };
   }, [code, lang, langInitialized, setLang]);
-
-  useEffect(() => {
-    if (state.phase !== "active" || state.secondsLeft !== 0) return;
-    dispatch({
-      type: "AUTO_SUBMIT_REQUESTED",
-      payload: { pendingJob: buildPendingJob(state.question, lang, state.textAnswer.trim()) },
-    });
-  }, [lang, state]);
 
   useEffect(() => {
     if (state.phase !== "active" && state.phase !== "submitting") return;
@@ -326,7 +330,13 @@ export function useInterviewMachine({
           pendingAnswerStore.clear(code);
           dispatch({
             type: "SUBMIT_SUCCEEDED",
-            payload: { result: { done: true, timerRemainingS: 0 } },
+            payload: {
+              result: {
+                done: true,
+                timerRemainingS: 0,
+                answerSubmitWindowRemainingS: 0,
+              },
+            },
           });
           return;
         }

@@ -41,6 +41,7 @@ function makeActiveState(): InterviewState {
     phase: "active",
     question,
     secondsLeft: 10,
+    answerSecondsLeft: 10,
     textAnswer: "",
     inputMode: "text",
   };
@@ -72,13 +73,14 @@ describe("interviewReducer", () => {
   it("builds the active state from a start success", () => {
     const next = interviewReducer(
       { phase: "loading" },
-      { type: "START_SUCCEEDED", payload: { question, secondsLeft: 600 } },
+      { type: "START_SUCCEEDED", payload: { question, secondsLeft: 600, answerSecondsLeft: 240 } },
     );
 
     expect(next).toEqual({
       phase: "active",
       question,
       secondsLeft: 600,
+      answerSecondsLeft: 240,
       textAnswer: "",
       inputMode: "text",
     });
@@ -97,7 +99,7 @@ describe("interviewReducer", () => {
     const pendingJob = makePendingJob();
     const next = interviewReducer(
       makeActiveState(),
-      { type: "SUBMIT_REQUESTED", payload: { pendingJob } },
+      { type: "SUBMIT_REQUESTED", payload: { pendingJob, submitMode: "question" } },
     );
 
     expect(next).toMatchObject({
@@ -115,6 +117,7 @@ describe("interviewReducer", () => {
         phase: "submitting",
         question,
         secondsLeft: 0,
+        answerSecondsLeft: 0,
         submitMode: "question",
         pendingJob: makePendingJob(),
         requestKind: "submit",
@@ -126,6 +129,7 @@ describe("interviewReducer", () => {
             done: false,
             nextQuestion,
             timerRemainingS: 420,
+            answerSubmitWindowRemainingS: 240,
           },
         },
       },
@@ -135,6 +139,7 @@ describe("interviewReducer", () => {
       phase: "active",
       question: nextQuestion,
       secondsLeft: 420,
+      answerSecondsLeft: 240,
       textAnswer: "",
       inputMode: "text",
     });
@@ -146,6 +151,7 @@ describe("interviewReducer", () => {
         phase: "submitting",
         question,
         secondsLeft: 0,
+        answerSecondsLeft: 0,
         submitMode: "question",
         pendingJob: makePendingJob(),
         requestKind: "submit",
@@ -183,7 +189,7 @@ describe("useInterviewMachine", () => {
     vi.useRealTimers();
   });
 
-  it("auto-submits after ticking from one second to zero", async () => {
+  it("keeps the machine active at zero until forced finalization is orchestrated elsewhere", async () => {
     vi.useFakeTimers();
     apiMock.mockResolvedValue({
       ok: true,
@@ -199,12 +205,9 @@ describe("useInterviewMachine", () => {
           total_questions: 10,
         },
         timer_remaining_s: 1,
+        answer_submit_window_remaining_s: 1,
         language: "en",
       },
-    });
-    submitPendingAnswerJobMock.mockResolvedValue({
-      done: true,
-      timerRemainingS: 0,
     });
 
     const setLang = vi.fn();
@@ -231,8 +234,12 @@ describe("useInterviewMachine", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(submitPendingAnswerJobMock).toHaveBeenCalledTimes(1);
-    expect(result.current.state.phase).toBe("done");
+    expect(submitPendingAnswerJobMock).not.toHaveBeenCalled();
+    expect(result.current.state).toMatchObject({
+      phase: "active",
+      secondsLeft: 0,
+      answerSecondsLeft: 0,
+    });
   });
 
   it("keeps the in-flight submit alive while the submitting timer ticks", async () => {
@@ -251,6 +258,7 @@ describe("useInterviewMachine", () => {
           total_questions: 10,
         },
         timer_remaining_s: 5,
+        answer_submit_window_remaining_s: 240,
         language: "en",
       },
     });
@@ -266,6 +274,7 @@ describe("useInterviewMachine", () => {
           questionNumber: 3,
         },
         timerRemainingS: 420,
+        answerSubmitWindowRemainingS: 240,
       } satisfies AnswerOutcome;
     });
 

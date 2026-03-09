@@ -15,12 +15,12 @@ export function InterviewFinalSubmitState({
   return (
     <Card className="text-center py-12">
       <h1 className="text-2xl font-bold text-primary-dark mb-4">
-        {lang === "es" ? "Tiempo agotado" : "Time is up"}
+        {lang === "es" ? "Finalizando su respuesta" : "Finalizing your answer"}
       </h1>
       <p className="text-primary-darkest mb-6">
         {lang === "es"
-          ? "Enviando su última respuesta para evaluación..."
-          : "Submitting your final answer for evaluation..."}
+          ? "Bloqueamos la edición mientras terminamos de transcribir y enviar su respuesta."
+          : "Editing is locked while we finish transcribing and submitting your answer."}
       </p>
       {finalSubmitWaitStatus && (
         <p className="text-base sm:text-lg text-primary-dark leading-snug mb-6">

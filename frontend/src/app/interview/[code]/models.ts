@@ -22,6 +22,7 @@ export interface AnswerOutcome {
   done: boolean;
   nextQuestion?: Question;
   timerRemainingS: number;
+  answerSubmitWindowRemainingS: number;
   error?: string;
   code?: string;
 }
@@ -29,7 +30,9 @@ export interface AnswerOutcome {
 export interface StartInterviewData {
   question: Question;
   timerRemainingS: number;
+  answerSubmitWindowRemainingS: number;
   language: Lang;
+  resuming?: boolean;
   error?: string;
   code?: string;
 }
@@ -49,6 +52,7 @@ export interface AnswerJobStatus {
   done: boolean;
   nextQuestion?: Question;
   timerRemainingS: number;
+  answerSubmitWindowRemainingS: number;
   errorCode?: string;
   errorMessage?: string;
   error?: string;

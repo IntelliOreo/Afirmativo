@@ -34,17 +34,19 @@ describe("getVoiceCapabilities", () => {
   it("enables idle recording controls while interview is active", () => {
     const caps = getVoiceCapabilities({
       phase: "active",
-      submitMode: null,
       voiceRecorderState: "idle",
       voiceBlob: null,
       voicePreviewUrl: null,
+      hasDraftText: false,
+      isFinalReviewWindow: false,
     });
 
     expect(caps.canSwitchModes).toBe(true);
     expect(caps.canToggleRecording).toBe(true);
     expect(caps.canCompleteRecording).toBe(false);
     expect(caps.canDiscardRecording).toBe(false);
-    expect(caps.canSendRecording).toBe(false);
+    expect(caps.canReviewTranscript).toBe(false);
+    expect(caps.canSubmitAnswer).toBe(false);
     expect(caps.canPreviewRecording).toBe(false);
     expect(caps.centerControlLabel).toBe("Record");
   });
@@ -52,10 +54,11 @@ describe("getVoiceCapabilities", () => {
   it("blocks mode switching while recording and allows record controls", () => {
     const caps = getVoiceCapabilities({
       phase: "active",
-      submitMode: null,
       voiceRecorderState: "recording",
       voiceBlob: null,
       voicePreviewUrl: null,
+      hasDraftText: false,
+      isFinalReviewWindow: false,
     });
 
     expect(caps.canSwitchModes).toBe(false);
@@ -68,35 +71,39 @@ describe("getVoiceCapabilities", () => {
   it("only enables preview and send once a stopped recording is ready", () => {
     const caps = getVoiceCapabilities({
       phase: "active",
-      submitMode: null,
-      voiceRecorderState: "stopped",
+      voiceRecorderState: "audio_ready",
       voiceBlob: new Blob(["audio"]),
       voicePreviewUrl: "blob:preview",
+      hasDraftText: false,
+      isFinalReviewWindow: false,
     });
 
     expect(caps.canSwitchModes).toBe(true);
     expect(caps.canToggleRecording).toBe(false);
     expect(caps.canCompleteRecording).toBe(false);
     expect(caps.canDiscardRecording).toBe(true);
-    expect(caps.canSendRecording).toBe(true);
+    expect(caps.canReviewTranscript).toBe(true);
+    expect(caps.canSubmitAnswer).toBe(false);
     expect(caps.canPreviewRecording).toBe(true);
-    expect(caps.centerControlLabel).toBe("Resume");
+    expect(caps.centerControlLabel).toBe("Record");
   });
 
   it("blocks sending empty audio and all controls when interview is inactive", () => {
     const caps = getVoiceCapabilities({
       phase: "done",
-      submitMode: "question",
-      voiceRecorderState: "stopped",
+      voiceRecorderState: "audio_ready",
       voiceBlob: new Blob([]),
       voicePreviewUrl: "blob:preview",
+      hasDraftText: false,
+      isFinalReviewWindow: false,
     });
 
     expect(caps.canSwitchModes).toBe(false);
     expect(caps.canToggleRecording).toBe(false);
     expect(caps.canCompleteRecording).toBe(false);
     expect(caps.canDiscardRecording).toBe(false);
-    expect(caps.canSendRecording).toBe(false);
+    expect(caps.canReviewTranscript).toBe(false);
+    expect(caps.canSubmitAnswer).toBe(false);
     expect(caps.canPreviewRecording).toBe(false);
   });
 });

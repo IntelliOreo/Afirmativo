@@ -40,6 +40,7 @@ describe("interview mappers", () => {
         total_questions: 10,
       },
       timer_remaining_s: 600,
+      answer_submit_window_remaining_s: 240,
       language: "es",
     });
     const accepted = mapAsyncAcceptedResponse({
@@ -62,6 +63,7 @@ describe("interview mappers", () => {
         total_questions: 10,
       },
       timer_remaining_s: 540,
+      answer_submit_window_remaining_s: 180,
     });
 
     expect(start.question.turnId).toBe("turn-1");
@@ -70,5 +72,6 @@ describe("interview mappers", () => {
     expect(accepted.clientRequestId).toBe("client-1");
     expect(status.nextQuestion?.turnId).toBe("turn-2");
     expect(status.timerRemainingS).toBe(540);
+    expect(status.answerSubmitWindowRemainingS).toBe(180);
   });
 });

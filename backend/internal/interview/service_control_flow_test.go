@@ -383,11 +383,7 @@ func TestProcessTurn_NextAreaUsesFallbackQuestionOnAIExhaustion(t *testing.T) {
 		}, nil
 	}
 	store.processCriterionTurnFn = func(_ context.Context, _ ProcessCriterionTurnParams) (*ProcessCriterionTurnResult, error) {
-		return &ProcessCriterionTurnResult{
-			Action:         "next",
-			NextArea:       "social_group",
-			QuestionNumber: 5,
-		}, nil
+		return &ProcessCriterionTurnResult{NewCount: 2}, nil
 	}
 
 	sessions := &fakeInterviewSessionStore{
@@ -438,15 +434,15 @@ func TestProcessTurn_NextAreaUsesFallbackQuestionOnAIExhaustion(t *testing.T) {
 	if got.NextQuestion.Area != "social_group" {
 		t.Fatalf("nextQuestion.area = %q, want social_group", got.NextQuestion.Area)
 	}
-	if answerLoadCalls != 2 {
-		t.Fatalf("GetAnswersBySession() calls = %d, want 2", answerLoadCalls)
+	if answerLoadCalls != 1 {
+		t.Fatalf("GetAnswersBySession() calls = %d, want 1", answerLoadCalls)
 	}
 	if aiCalls != 2 {
 		t.Fatalf("GenerateTurn() calls = %d, want 2", aiCalls)
 	}
 }
 
-func TestProcessTurn_NextAreaAnswerLoadFailureFallsBackWithoutError(t *testing.T) {
+func TestProcessTurn_NextAreaUsesProjectedHistoryWithoutReloadingAnswers(t *testing.T) {
 	const (
 		sessionCode = "AP-7K9X-M2NF"
 		turnID      = "turn-next-answer-load-failure"
@@ -488,23 +484,16 @@ func TestProcessTurn_NextAreaAnswerLoadFailureFallsBackWithoutError(t *testing.T
 	answerLoadCalls := 0
 	store.getAnswersBySessionFn = func(context.Context, string) ([]Answer, error) {
 		answerLoadCalls++
-		if answerLoadCalls == 1 {
-			return []Answer{
-				{
-					Area:         "protected_ground",
-					QuestionText: "First question",
-					TranscriptEn: "First answer",
-				},
-			}, nil
-		}
-		return nil, errors.New("db unavailable")
+		return []Answer{
+			{
+				Area:         "protected_ground",
+				QuestionText: "First question",
+				TranscriptEn: "First answer",
+			},
+		}, nil
 	}
 	store.processCriterionTurnFn = func(_ context.Context, _ ProcessCriterionTurnParams) (*ProcessCriterionTurnResult, error) {
-		return &ProcessCriterionTurnResult{
-			Action:         "next",
-			NextArea:       "social_group",
-			QuestionNumber: 5,
-		}, nil
+		return &ProcessCriterionTurnResult{NewCount: 2}, nil
 	}
 
 	sessions := &fakeInterviewSessionStore{
@@ -546,17 +535,17 @@ func TestProcessTurn_NextAreaAnswerLoadFailureFallsBackWithoutError(t *testing.T
 	if got.NextQuestion == nil {
 		t.Fatalf("nextQuestion = nil, want non-nil")
 	}
-	if got.NextQuestion.TextEn != "Fallback social group question" {
-		t.Fatalf("nextQuestion.textEn = %q, want fallback question", got.NextQuestion.TextEn)
+	if got.NextQuestion.TextEn != "Unused next question" {
+		t.Fatalf("nextQuestion.textEn = %q, want projected next-area question", got.NextQuestion.TextEn)
 	}
 	if got.NextQuestion.Area != "social_group" {
 		t.Fatalf("nextQuestion.area = %q, want social_group", got.NextQuestion.Area)
 	}
-	if answerLoadCalls != 2 {
-		t.Fatalf("GetAnswersBySession() calls = %d, want 2", answerLoadCalls)
+	if answerLoadCalls != 1 {
+		t.Fatalf("GetAnswersBySession() calls = %d, want 1", answerLoadCalls)
 	}
-	if aiCalls != 1 {
-		t.Fatalf("GenerateTurn() calls = %d, want 1", aiCalls)
+	if aiCalls != 2 {
+		t.Fatalf("GenerateTurn() calls = %d, want 2", aiCalls)
 	}
 }
 
@@ -633,11 +622,7 @@ func TestProcessTurn_NextAreaUsesAIQuestionAndBuildsOpeningContext(t *testing.T)
 	}
 
 	store.processCriterionTurnFn = func(_ context.Context, _ ProcessCriterionTurnParams) (*ProcessCriterionTurnResult, error) {
-		return &ProcessCriterionTurnResult{
-			Action:         "next",
-			NextArea:       "social_group",
-			QuestionNumber: 5,
-		}, nil
+		return &ProcessCriterionTurnResult{NewCount: 3}, nil
 	}
 
 	sessions := &fakeInterviewSessionStore{
@@ -697,8 +682,8 @@ func TestProcessTurn_NextAreaUsesAIQuestionAndBuildsOpeningContext(t *testing.T)
 	if got.NextQuestion.Area != "social_group" {
 		t.Fatalf("nextQuestion.area = %q, want social_group", got.NextQuestion.Area)
 	}
-	if answerLoadCalls != 2 {
-		t.Fatalf("GetAnswersBySession() calls = %d, want 2", answerLoadCalls)
+	if answerLoadCalls != 1 {
+		t.Fatalf("GetAnswersBySession() calls = %d, want 1", answerLoadCalls)
 	}
 	if aiCalls != 2 {
 		t.Fatalf("GenerateTurn() calls = %d, want 2", aiCalls)
@@ -742,11 +727,11 @@ func TestProcessTurn_NextAreaUsesAIQuestionAndBuildsOpeningContext(t *testing.T)
 	if len(openingTurnCtx.HistoryTurns) != 2 {
 		t.Fatalf("openingTurnCtx.historyTurns length = %d, want 2", len(openingTurnCtx.HistoryTurns))
 	}
-	if openingTurnCtx.HistoryTurns[0].AnswerText != "Respuesta uno" {
-		t.Fatalf("openingTurnCtx.historyTurns[0].answerText = %q, want spanish fallback", openingTurnCtx.HistoryTurns[0].AnswerText)
+	if openingTurnCtx.HistoryTurns[0].AnswerText != "Current-area answer" {
+		t.Fatalf("openingTurnCtx.historyTurns[0].answerText = %q, want persisted prior answer", openingTurnCtx.HistoryTurns[0].AnswerText)
 	}
-	if openingTurnCtx.HistoryTurns[1].AnswerText != "Answer two" {
-		t.Fatalf("openingTurnCtx.historyTurns[1].answerText = %q, want english transcript", openingTurnCtx.HistoryTurns[1].AnswerText)
+	if openingTurnCtx.HistoryTurns[1].AnswerText != "Answer" {
+		t.Fatalf("openingTurnCtx.historyTurns[1].answerText = %q, want latest submitted answer", openingTurnCtx.HistoryTurns[1].AnswerText)
 	}
 }
 
@@ -786,11 +771,7 @@ func TestProcessTurn_NextAreaEmptyAIQuestionFallsBack(t *testing.T) {
 		}, nil
 	}
 	store.processCriterionTurnFn = func(_ context.Context, _ ProcessCriterionTurnParams) (*ProcessCriterionTurnResult, error) {
-		return &ProcessCriterionTurnResult{
-			Action:         "next",
-			NextArea:       "social_group",
-			QuestionNumber: 5,
-		}, nil
+		return &ProcessCriterionTurnResult{NewCount: 2}, nil
 	}
 
 	sessions := &fakeInterviewSessionStore{
@@ -838,8 +819,8 @@ func TestProcessTurn_NextAreaEmptyAIQuestionFallsBack(t *testing.T) {
 	if got.NextQuestion.TextEn != "Fallback social group question" {
 		t.Fatalf("nextQuestion.textEn = %q, want fallback question", got.NextQuestion.TextEn)
 	}
-	if answerLoadCalls != 2 {
-		t.Fatalf("GetAnswersBySession() calls = %d, want 2", answerLoadCalls)
+	if answerLoadCalls != 1 {
+		t.Fatalf("GetAnswersBySession() calls = %d, want 1", answerLoadCalls)
 	}
 }
 
@@ -882,11 +863,7 @@ func TestProcessTurn_NextAreaProviderAbortPropagatesError(t *testing.T) {
 		}, nil
 	}
 	store.processCriterionTurnFn = func(_ context.Context, _ ProcessCriterionTurnParams) (*ProcessCriterionTurnResult, error) {
-		return &ProcessCriterionTurnResult{
-			Action:         "next",
-			NextArea:       "social_group",
-			QuestionNumber: 5,
-		}, nil
+		return &ProcessCriterionTurnResult{NewCount: 2}, nil
 	}
 
 	sessions := &fakeInterviewSessionStore{
@@ -929,7 +906,7 @@ func TestProcessTurn_NextAreaProviderAbortPropagatesError(t *testing.T) {
 	}
 }
 
-func TestProcessTurn_NextAreaMissingFromStateSkipsOpeningAI(t *testing.T) {
+func TestProcessTurn_NextAreaUsesProjectedStateBeforeRefresh(t *testing.T) {
 	const (
 		sessionCode = "AP-7K9X-M2NF"
 		turnID      = "turn-next-area-missing"
@@ -973,11 +950,7 @@ func TestProcessTurn_NextAreaMissingFromStateSkipsOpeningAI(t *testing.T) {
 		}, nil
 	}
 	store.processCriterionTurnFn = func(_ context.Context, _ ProcessCriterionTurnParams) (*ProcessCriterionTurnResult, error) {
-		return &ProcessCriterionTurnResult{
-			Action:         "next",
-			NextArea:       "social_group",
-			QuestionNumber: 5,
-		}, nil
+		return &ProcessCriterionTurnResult{NewCount: 2}, nil
 	}
 
 	sessions := &fakeInterviewSessionStore{
@@ -1019,14 +992,14 @@ func TestProcessTurn_NextAreaMissingFromStateSkipsOpeningAI(t *testing.T) {
 	if got.NextQuestion == nil {
 		t.Fatalf("nextQuestion = nil, want non-nil")
 	}
-	if got.NextQuestion.TextEn != "Fallback social group question" {
-		t.Fatalf("nextQuestion.textEn = %q, want fallback question", got.NextQuestion.TextEn)
+	if got.NextQuestion.TextEn != "Unused next question" {
+		t.Fatalf("nextQuestion.textEn = %q, want projected next-area question", got.NextQuestion.TextEn)
 	}
 	if answerLoadCalls != 1 {
 		t.Fatalf("GetAnswersBySession() calls = %d, want 1", answerLoadCalls)
 	}
-	if aiCalls != 1 {
-		t.Fatalf("GenerateTurn() calls = %d, want 1", aiCalls)
+	if aiCalls != 2 {
+		t.Fatalf("GenerateTurn() calls = %d, want 2", aiCalls)
 	}
 }
 
