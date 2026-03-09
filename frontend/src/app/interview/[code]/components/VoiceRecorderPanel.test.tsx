@@ -88,7 +88,7 @@ describe("VoiceRecorderPanel", () => {
     });
 
     expect(screen.getByText("Recording...")).toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent("12s remain before the 3-minute limit.");
+    expect(screen.getByRole("alert")).toHaveTextContent("12s remain before the limit of 3 minutes.");
   });
 
   it("shows the completed message in spanish when recording is ready to send", () => {

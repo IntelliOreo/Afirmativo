@@ -1,3 +1,5 @@
+import type { Lang } from "@/lib/language";
+
 export const AUTOSUBMIT_SECONDS = 10; // auto-submit countdown threshold
 export const WARNING_AT_SECONDS = 45 * 60; // orange bar at 45 min remaining
 export const WRAPUP_AT_SECONDS = 5 * 60; // red bar + alert at 5 min remaining
@@ -27,8 +29,41 @@ export const ASYNC_POLL_TIMEOUT_MS = asyncPollTimeoutSeconds * 1000;
 export const ASYNC_POLL_CIRCUIT_BREAKER_FAILURES = asyncPollCircuitBreakerFailures;
 export const ASYNC_POLL_CIRCUIT_BREAKER_COOLDOWN_MS = asyncPollCircuitBreakerCooldownSeconds * 1000;
 
-export const VOICE_MAX_SECONDS = 180;
-export const VOICE_WARNING_SECONDS = [120, 150, 170] as const;
+function buildVoiceWarningSeconds(maxSeconds: number): number[] {
+  const warningOffsets = [60, 30, 10];
+  const seen = new Set<number>();
+
+  return warningOffsets
+    .map((offset) => maxSeconds - offset)
+    .filter((second) => second > 0 && second < maxSeconds)
+    .filter((second) => {
+      if (seen.has(second)) return false;
+      seen.add(second);
+      return true;
+    })
+    .sort((left, right) => left - right);
+}
+
+export function formatDurationLabel(seconds: number, lang: Lang): string {
+  if (seconds % 60 === 0) {
+    const minutes = seconds / 60;
+    if (lang === "es") {
+      return `${minutes} ${minutes === 1 ? "minuto" : "minutos"}`;
+    }
+    return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+  }
+
+  if (lang === "es") {
+    return `${seconds} ${seconds === 1 ? "segundo" : "segundos"}`;
+  }
+  return `${seconds} ${seconds === 1 ? "second" : "seconds"}`;
+}
+
+export const VOICE_MAX_SECONDS = parsePositiveIntEnv(
+  process.env.NEXT_PUBLIC_VOICE_MAX_SECONDS,
+  180,
+);
+export const VOICE_WARNING_SECONDS = buildVoiceWarningSeconds(VOICE_MAX_SECONDS);
 export const VOICE_MIME_CANDIDATES = [
   "audio/webm;codecs=opus",
   "audio/webm",

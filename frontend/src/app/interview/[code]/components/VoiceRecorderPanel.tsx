@@ -4,7 +4,7 @@ import { Alert } from "@components/Alert";
 import { Button } from "@components/Button";
 import { Card } from "@components/Card";
 import type { Lang } from "@/lib/language";
-import { VOICE_WAVE_BARS } from "../constants";
+import { formatDurationLabel, VOICE_MAX_SECONDS, VOICE_WAVE_BARS } from "../constants";
 import type { VoiceRecorderState } from "../viewTypes";
 import { formatBytes } from "../utils";
 
@@ -104,6 +104,7 @@ export function VoiceRecorderPanel({
   onTranscriptChange,
   onSubmitAnswer,
 }: VoiceRecorderPanelProps) {
+  const voiceLimitLabel = formatDurationLabel(VOICE_MAX_SECONDS, lang);
   const timerToneClass =
     answerTimerTone === "danger"
       ? "border-danger bg-danger-lightest text-danger-dark"
@@ -173,8 +174,8 @@ export function VoiceRecorderPanel({
       {voiceWarningRemaining !== null && (
         <Alert variant="warning" className="mb-4">
           {lang === "es"
-            ? `Quedan ${voiceWarningRemaining}s para llegar al límite de 3 minutos.`
-            : `${voiceWarningRemaining}s remain before the 3-minute limit.`}
+            ? `Quedan ${voiceWarningRemaining}s para llegar al límite de ${voiceLimitLabel}.`
+            : `${voiceWarningRemaining}s remain before the limit of ${voiceLimitLabel}.`}
         </Alert>
       )}
 

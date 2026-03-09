@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { log } from "@/lib/logger";
 import type { Lang } from "@/lib/language";
 import {
+  formatDurationLabel,
   VOICE_MAX_SECONDS,
   VOICE_MIME_CANDIDATES,
   VOICE_WARNING_SECONDS,
@@ -72,10 +73,11 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
     maxSeconds: VOICE_MAX_SECONDS,
     warningMilestones: VOICE_WARNING_SECONDS,
     onLimitReached: () => {
+      const limitLabel = formatDurationLabel(VOICE_MAX_SECONDS, langRef.current);
       setVoiceInfo(
         langRef.current === "es"
-          ? "Se alcanzo el limite de 3 minutos y la grabacion se detuvo."
-          : "The 3-minute limit was reached and recording stopped.",
+          ? `Se alcanzó el límite de ${limitLabel} y la grabación se detuvo.`
+          : `The limit of ${limitLabel} was reached and recording stopped.`,
       );
       completeVoiceRecordingRef.current();
     },
