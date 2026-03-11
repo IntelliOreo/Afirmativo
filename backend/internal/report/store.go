@@ -1,18 +1,36 @@
 // Store defines persistence operations for the reports table.
 package report
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Store defines persistence for reports.
 type Store interface {
 	// GetReportBySession returns the report for a session, or nil if not found.
 	GetReportBySession(ctx context.Context, sessionCode string) (*Report, error)
 
-	// CreateReport inserts a new report row (initially in "generating" status).
+	// CreateReport inserts a new report row.
 	CreateReport(ctx context.Context, r *Report) error
 
-	// UpdateReport updates a report with the generated content.
-	UpdateReport(ctx context.Context, r *Report) error
+	// SetReportQueued resets one report to the queued state.
+	SetReportQueued(ctx context.Context, sessionCode string, resetAttempts bool) error
+
+	// ClaimQueuedReport moves a queued report to running atomically.
+	ClaimQueuedReport(ctx context.Context, sessionCode string) (*Report, error)
+
+	// ListQueuedReportSessionCodes returns queued reports for worker pickup.
+	ListQueuedReportSessionCodes(ctx context.Context, limit int) ([]string, error)
+
+	// RequeueStaleRunningReports moves stale running reports back to queued.
+	RequeueStaleRunningReports(ctx context.Context, staleBefore time.Time) (int64, error)
+
+	// MarkReportReady stores a completed report payload.
+	MarkReportReady(ctx context.Context, r *Report) error
+
+	// MarkReportFailed stores a terminal failed state.
+	MarkReportFailed(ctx context.Context, sessionCode, errorCode, errorMessage string) error
 }
 
 // InterviewDataProvider provides read access to interview answers and question areas.

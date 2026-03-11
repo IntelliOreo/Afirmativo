@@ -41,12 +41,7 @@ func createAIClients(cfg config.Config) (interview.InterviewAIClient, report.Rep
 	}
 
 	if cfg.AIProvider == "vertex" {
-		vertexBaseURL := ""
-		if cfg.MockAPIURL != "" {
-			vertexBaseURL = cfg.MockAPIURL
-		}
 		vertexClient, err := vertexai.NewClient(vertexai.ClientConfig{
-			BaseURL:              vertexBaseURL,
 			ProjectID:            cfg.VertexAIProjectID,
 			Location:             cfg.VertexAILocation,
 			APIKey:               cfg.VertexAIAPIKey,

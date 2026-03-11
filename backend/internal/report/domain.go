@@ -2,17 +2,22 @@
 // This file defines the Report domain type — no infrastructure imports.
 package report
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 var (
 	ErrSessionNotFound     = errors.New("report session not found")
 	ErrSessionNotCompleted = errors.New("report session not completed")
+	ErrReportNotStarted    = errors.New("report not started")
 )
 
 type ReportStatus string
 
 const (
-	ReportStatusGenerating ReportStatus = "generating"
+	ReportStatusQueued     ReportStatus = "queued"
+	ReportStatusRunning    ReportStatus = "running"
 	ReportStatusReady      ReportStatus = "ready"
 	ReportStatusFailed     ReportStatus = "failed"
 )
@@ -31,6 +36,11 @@ type Report struct {
 	RecommendationEs        string
 	QuestionCount           int
 	DurationMinutes         int
+	ErrorCode               string
+	ErrorMessage            string
+	Attempts                int
+	StartedAt               *time.Time
+	CompletedAt             *time.Time
 }
 
 // AreaSummary is a compact representation of one area's evaluation result,

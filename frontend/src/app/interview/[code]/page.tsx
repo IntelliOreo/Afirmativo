@@ -13,12 +13,14 @@ import { InterviewErrorState } from "./components/InterviewErrorState";
 import { InterviewFinalSubmitState } from "./components/InterviewFinalSubmitState";
 import { InterviewGuardState } from "./components/InterviewGuardState";
 import { InterviewProgressHeader } from "./components/InterviewProgressHeader";
+import { InterviewQuestionCard } from "./components/InterviewQuestionCard";
+import { InputModeSwitch } from "./components/InputModeSwitch";
+import { MicrophoneWarmupDialog } from "./components/MicrophoneWarmupDialog";
 import { ReportSection } from "./components/ReportSection";
 import { TextAnswerPanel } from "./components/TextAnswerPanel";
-import { VoiceRecorderPanel } from "./components/VoiceRecorderPanel";
+import { VoiceAnswerSection } from "./components/VoiceAnswerSection";
 import {
   TEXT_ANSWER_MAX_CHARS,
-  VOICE_MAX_SECONDS,
   WARNING_AT_SECONDS,
   WRAPUP_AT_SECONDS,
 } from "./constants";
@@ -28,7 +30,11 @@ import { useInterviewMachine } from "./hooks/useInterviewMachine";
 import { useInterviewReport } from "./hooks/useInterviewReport";
 import { useInterviewWaitingStatus } from "./hooks/useInterviewWaitingStatus";
 import { useVoiceRecorder } from "./hooks/useVoiceRecorder";
-import type { InputMode } from "./viewTypes";
+import type {
+  InputMode,
+  MicrophoneWarmupDialogMode,
+  MicrophoneWarmupDialogState,
+} from "./viewTypes";
 import * as answerDraftStore from "@/lib/storage/answerDraftStore";
 import {
   formatClock,
@@ -37,6 +43,9 @@ import {
   parseDisclaimerBlocks,
 } from "./utils";
 import { getQuestionText } from "./models";
+
+const MIC_RECONNECT_DIALOG_REVEAL_MS = 300;
+const MIC_SUCCESS_HANDOFF_DELAY_MS = 500;
 
 function InterviewPageContent() {
   const params = useParams();
@@ -50,12 +59,15 @@ function InterviewPageContent() {
     report,
     reportError,
     loadReport,
+    resumeReport,
     printReport,
   } = useInterviewReport(code);
   const {
     state,
     dispatch,
     requestSubmit,
+    retryPendingRecovery,
+    canRetryPendingRecovery,
   } = useInterviewMachine({
     code,
     lang,
@@ -81,9 +93,19 @@ function InterviewPageContent() {
   const completionSource = state.phase === "done" ? state.completionSource : "finished";
   const error = state.phase === "error" ? state.message : "";
   const errorCode = state.phase === "error" ? state.code ?? "" : "";
+  const [hasMicOptIn, setHasMicOptIn] = useState(false);
+  const [hasSeenMicReadinessPrompt, setHasSeenMicReadinessPrompt] = useState(false);
+  const [activeMicDialogMode, setActiveMicDialogMode] = useState<MicrophoneWarmupDialogMode | null>(null);
+  const [micDialogUiState, setMicDialogUiState] = useState<MicrophoneWarmupDialogState>("idle");
+  const [suppressReconnectDialog, setSuppressReconnectDialog] = useState(false);
   const [forceFinalizingVoice, setForceFinalizingVoice] = useState(false);
   const restoredDraftTurnRef = useRef("");
   const autoFinalizeTurnRef = useRef("");
+  const reconnectDialogTimerRef = useRef<number | null>(null);
+  const micSuccessHandoffTimerRef = useRef<number | null>(null);
+  const shouldKeepMicWarm =
+    hasMicOptIn
+    && (state.phase === "active" || state.phase === "submitting");
 
   const {
     disclaimerScrollRef,
@@ -93,6 +115,7 @@ function InterviewPageContent() {
 
   const {
     voiceRecorderState,
+    micWarmState,
     voiceDurationSeconds,
     voiceWarningSeconds,
     voiceBlob,
@@ -102,6 +125,7 @@ function InterviewPageContent() {
     voiceInfo,
     isRecordingActive: voiceIsRecordingActive,
     isRecordingPaused: voiceIsRecordingPaused,
+    prepareMicrophone,
     startVoiceRecording,
     completeVoiceRecording,
     discardVoiceRecording,
@@ -112,6 +136,7 @@ function InterviewPageContent() {
   } = useVoiceRecorder({
     lang,
     isActive: state.phase === "active" || forceFinalizingVoice,
+    shouldKeepMicWarm,
   });
 
   useEffect(() => {
@@ -156,6 +181,47 @@ function InterviewPageContent() {
       updatedAt: Date.now(),
     });
   }, [code, currentQuestion, inputMode, lang, state.phase, textAnswer, voiceRecorderState]);
+
+  useEffect(() => {
+    if (state.phase !== "done") return;
+    void resumeReport();
+  }, [resumeReport, state.phase]);
+
+  const clearReconnectDialogTimer = useCallback(() => {
+    if (reconnectDialogTimerRef.current == null) return;
+    window.clearTimeout(reconnectDialogTimerRef.current);
+    reconnectDialogTimerRef.current = null;
+  }, []);
+
+  const clearMicSuccessHandoffTimer = useCallback(() => {
+    if (micSuccessHandoffTimerRef.current == null) return;
+    window.clearTimeout(micSuccessHandoffTimerRef.current);
+    micSuccessHandoffTimerRef.current = null;
+  }, []);
+
+  const closeMicrophoneDialog = useCallback(() => {
+    clearReconnectDialogTimer();
+    clearMicSuccessHandoffTimer();
+    setActiveMicDialogMode(null);
+    setMicDialogUiState("idle");
+  }, [clearMicSuccessHandoffTimer, clearReconnectDialogTimer]);
+
+  const beginMicSuccessHandoff = useCallback((mode: MicrophoneWarmupDialogMode) => {
+    clearReconnectDialogTimer();
+    clearMicSuccessHandoffTimer();
+    setActiveMicDialogMode(mode);
+    setMicDialogUiState("ready_handoff");
+    micSuccessHandoffTimerRef.current = window.setTimeout(() => {
+      if (mode === "initial_setup") {
+        setHasMicOptIn(true);
+        setHasSeenMicReadinessPrompt(true);
+      }
+      setSuppressReconnectDialog(false);
+      setActiveMicDialogMode(null);
+      setMicDialogUiState("idle");
+      micSuccessHandoffTimerRef.current = null;
+    }, MIC_SUCCESS_HANDOFF_DELAY_MS);
+  }, [clearMicSuccessHandoffTimer, clearReconnectDialogTimer]);
 
   const handleInputModeSwitch = useCallback((nextMode: InputMode) => {
     if (state.phase !== "active" || nextMode === state.inputMode) return;
@@ -215,6 +281,139 @@ function InterviewPageContent() {
     requestSubmit(state.textAnswer);
   }, [requestSubmit, state]);
 
+  const handleTextAnswerChange = useCallback((nextValue: string) => {
+    dispatch({ type: "TEXT_CHANGED", payload: { value: nextValue } });
+  }, [dispatch]);
+
+  const handleEnableMicrophone = useCallback(async () => {
+    const nextDialogMode = activeMicDialogMode ?? (hasMicOptIn ? "reconnect" : "initial_setup");
+    clearReconnectDialogTimer();
+    clearMicSuccessHandoffTimer();
+    setSuppressReconnectDialog(false);
+    setActiveMicDialogMode(nextDialogMode);
+    setMicDialogUiState(micWarmState === "recovering" ? "recovering" : "warming");
+    const prepared = await prepareMicrophone();
+    if (!prepared) return;
+    beginMicSuccessHandoff(nextDialogMode);
+  }, [
+    activeMicDialogMode,
+    beginMicSuccessHandoff,
+    clearMicSuccessHandoffTimer,
+    clearReconnectDialogTimer,
+    hasMicOptIn,
+    micWarmState,
+    prepareMicrophone,
+  ]);
+
+  const handleDismissMicrophonePrompt = useCallback(() => {
+    if (activeMicDialogMode === "initial_setup") {
+      setHasSeenMicReadinessPrompt(true);
+    } else if (activeMicDialogMode === "reconnect") {
+      setSuppressReconnectDialog(true);
+    }
+    closeMicrophoneDialog();
+  }, [activeMicDialogMode, closeMicrophoneDialog]);
+
+  const handleSelectTextInput = useCallback(() => {
+    handleInputModeSwitch("text");
+  }, [handleInputModeSwitch]);
+
+  useEffect(() => {
+    return () => {
+      clearReconnectDialogTimer();
+      clearMicSuccessHandoffTimer();
+    };
+  }, [clearMicSuccessHandoffTimer, clearReconnectDialogTimer]);
+
+  useEffect(() => {
+    if (activeMicDialogMode !== null || state.phase !== "active" || !currentQuestion) return;
+    if (currentQuestion.kind !== "readiness" || hasMicOptIn || hasSeenMicReadinessPrompt) return;
+    setActiveMicDialogMode("initial_setup");
+    setMicDialogUiState("idle");
+  }, [activeMicDialogMode, currentQuestion, hasMicOptIn, hasSeenMicReadinessPrompt, state.phase]);
+
+  useEffect(() => {
+    if (activeMicDialogMode === "initial_setup") {
+      if (micDialogUiState === "ready_handoff") return;
+      if (micWarmState === "warming") {
+        setMicDialogUiState("warming");
+      } else if (micWarmState === "recovering") {
+        setMicDialogUiState("recovering");
+      } else if (micWarmState === "denied") {
+        setMicDialogUiState("denied");
+      } else if (micWarmState === "error") {
+        setMicDialogUiState("error");
+      }
+      return;
+    }
+
+    if (!hasMicOptIn || !(state.phase === "active" || state.phase === "submitting")) {
+      clearReconnectDialogTimer();
+      if (activeMicDialogMode === "reconnect") {
+        closeMicrophoneDialog();
+      }
+      return;
+    }
+
+    if (micWarmState === "warm") {
+      clearReconnectDialogTimer();
+      if (
+        activeMicDialogMode === "reconnect"
+        && (micDialogUiState === "warming" || micDialogUiState === "recovering")
+      ) {
+        beginMicSuccessHandoff("reconnect");
+      }
+      setSuppressReconnectDialog(false);
+      return;
+    }
+
+    if (micWarmState === "cold") {
+      clearReconnectDialogTimer();
+      setSuppressReconnectDialog(false);
+      if (activeMicDialogMode === "reconnect") {
+        closeMicrophoneDialog();
+      }
+      return;
+    }
+
+    if (micWarmState === "recovering") {
+      if (activeMicDialogMode === "reconnect") {
+        setMicDialogUiState("recovering");
+        return;
+      }
+      if (suppressReconnectDialog) return;
+      clearReconnectDialogTimer();
+      reconnectDialogTimerRef.current = window.setTimeout(() => {
+        setActiveMicDialogMode("reconnect");
+        setMicDialogUiState("recovering");
+        reconnectDialogTimerRef.current = null;
+      }, MIC_RECONNECT_DIALOG_REVEAL_MS);
+      return;
+    }
+
+    clearReconnectDialogTimer();
+    if (micWarmState === "denied" || micWarmState === "error") {
+      if (suppressReconnectDialog) return;
+      setActiveMicDialogMode("reconnect");
+      setMicDialogUiState(micWarmState);
+    }
+  }, [
+    activeMicDialogMode,
+    beginMicSuccessHandoff,
+    clearReconnectDialogTimer,
+    closeMicrophoneDialog,
+    currentQuestion,
+    hasMicOptIn,
+    micDialogUiState,
+    micWarmState,
+    state.phase,
+    suppressReconnectDialog,
+  ]);
+
+  const handleSelectVoiceInput = useCallback(() => {
+    handleInputModeSwitch("voice");
+  }, [handleInputModeSwitch]);
+
   useEffect(() => {
     if (state.phase !== "active" || !currentQuestion) return;
     if (answerSecondsLeft > 0) return;
@@ -271,6 +470,7 @@ function InterviewPageContent() {
   const isBlinkingTimer = secondsLeft <= 30 && secondsLeft > 0;
   const isSubmittingInQuestionFlow = state.phase === "submitting" && state.submitMode === "question";
   const isConsentQuestion = currentQuestion?.kind === "disclaimer";
+  const isReadinessQuestion = currentQuestion?.kind === "readiness";
   const consentQuestionText = getQuestionText(currentQuestion, lang);
   const consentBlocks = parseDisclaimerBlocks(consentQuestionText);
   const consentWarningAlert = beforeYouStartContent[lang].warningAlert;
@@ -279,13 +479,8 @@ function InterviewPageContent() {
     : 0;
   const showInterviewProgress = state.phase === "active" || isSubmittingInQuestionFlow;
   const isReloadRecoveryError = isReloadRecoveryErrorCode(errorCode);
-  const isVoiceMode = state.phase === "active" && inputMode === "voice" && !isConsentQuestion;
-  const voiceTimerLabel = formatClock(voiceDurationSeconds);
-  const voiceProgressPct = Math.min(100, (voiceDurationSeconds / VOICE_MAX_SECONDS) * 100);
-  const voiceWarningRemaining = voiceWarningSeconds == null
-    ? null
-    : Math.max(0, VOICE_MAX_SECONDS - voiceWarningSeconds);
-  const isAnswerFinalReviewWindow = answerSecondsLeft > 0 && answerSecondsLeft <= 30;
+  const isVoiceMode = inputMode === "voice";
+  const showMicrophoneDialog = activeMicDialogMode !== null;
   const answerTimerTone = answerSecondsLeft <= 30
     ? "danger"
     : answerSecondsLeft <= 60
@@ -302,20 +497,14 @@ function InterviewPageContent() {
       : (lang === "es"
         ? "Use este tiempo para revisar y enviar su respuesta final."
         : "Use this time to review and submit your final answer.");
-  const voiceReviewWarning =
-    (voiceRecorderState === "recording" || voiceRecorderState === "paused") && answerSecondsLeft <= 60
-      ? (lang === "es"
-        ? "Deténgase pronto para dejar tiempo para revisar antes de enviar."
-        : "Stop soon to leave time to review before submit.")
-      : "";
-  const voiceCaps = getVoiceCapabilities({
+  const canSwitchModes = getVoiceCapabilities({
     phase: state.phase,
     voiceRecorderState,
     voiceBlob,
     voicePreviewUrl,
     hasDraftText: textAnswer.trim().length > 0,
-    isFinalReviewWindow: isAnswerFinalReviewWindow,
-  });
+    isFinalReviewWindow: answerSecondsLeft > 0 && answerSecondsLeft <= 30,
+  }).canSwitchModes;
   const {
     startupWaitStatus,
     questionWaitStatus,
@@ -367,6 +556,8 @@ function InterviewPageContent() {
               code={code}
               error={error}
               isReloadRecoveryError={isReloadRecoveryError}
+              canRetryPendingAnswer={canRetryPendingRecovery}
+              onRetryPendingAnswer={retryPendingRecovery}
               onReloadPage={handleReloadPage}
             />
           )}
@@ -381,6 +572,7 @@ function InterviewPageContent() {
                 reportWaitStatus={reportWaitStatus}
                 lang={lang}
                 onLoadReport={loadReport}
+                onCheckAgain={resumeReport}
                 onPrintReport={printReport}
               />
 
@@ -402,11 +594,19 @@ function InterviewPageContent() {
           {(state.phase === "active" || isSubmittingInQuestionFlow) && currentQuestion && !forceFinalizingVoice && (
             <>
               {!isConsentQuestion && (
-                <Card className="mb-6">
-                  <p className="text-lg font-semibold text-primary-dark whitespace-pre-line">
-                    {lang === "es" ? currentQuestion.textEs : currentQuestion.textEn}
-                  </p>
-                </Card>
+                <InterviewQuestionCard
+                  questionText={lang === "es" ? currentQuestion.textEs : currentQuestion.textEn}
+                />
+              )}
+
+              {showMicrophoneDialog && activeMicDialogMode && (
+                <MicrophoneWarmupDialog
+                  lang={lang}
+                  mode={activeMicDialogMode}
+                  uiState={micDialogUiState}
+                  onEnableMicrophone={handleEnableMicrophone}
+                  onDismiss={handleDismissMicrophonePrompt}
+                />
               )}
 
               {isSubmittingInQuestionFlow ? (
@@ -433,24 +633,13 @@ function InterviewPageContent() {
                 />
               ) : (
                 <>
-                  <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <Button
-                      type="button"
-                      variant={inputMode === "text" ? "primary" : "secondary"}
-                      disabled={!voiceCaps.canSwitchModes}
-                      onClick={() => handleInputModeSwitch("text")}
-                    >
-                      {lang === "es" ? "Entrada por texto" : "Text input"}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant={inputMode === "voice" ? "primary" : "secondary"}
-                      disabled={!voiceCaps.canSwitchModes}
-                      onClick={() => handleInputModeSwitch("voice")}
-                    >
-                      {lang === "es" ? "Entrada por voz" : "Voice input"}
-                    </Button>
-                  </div>
+                  <InputModeSwitch
+                    lang={lang}
+                    inputMode={inputMode}
+                    canSwitchModes={canSwitchModes}
+                    onSelectText={handleSelectTextInput}
+                    onSelectVoice={handleSelectVoiceInput}
+                  />
 
                   {!isVoiceMode ? (
                     <TextAnswerPanel
@@ -461,44 +650,33 @@ function InterviewPageContent() {
                       textAnswer={textAnswer}
                       textAnswerCharCount={textAnswerCharCount}
                       maxChars={TEXT_ANSWER_MAX_CHARS}
-                      onTextAnswerChange={(nextValue) => {
-                        dispatch({ type: "TEXT_CHANGED", payload: { value: nextValue } });
-                      }}
+                      onTextAnswerChange={handleTextAnswerChange}
                       onSubmitAnswer={handleSubmitAnswer}
                     />
                   ) : (
-                    <VoiceRecorderPanel
+                    <VoiceAnswerSection
                       lang={lang}
-                      answerTimerLabel={answerTimerLabel}
-                      answerTimerTone={answerTimerTone}
-                      answerTimerMessage={answerTimerMessage}
-                      voiceTimerLabel={voiceTimerLabel}
-                      canPreviewRecording={voiceCaps.canPreviewRecording}
+                      hasMicOptIn={hasMicOptIn}
+                      micWarmState={micWarmState}
+                      answerSecondsLeft={answerSecondsLeft}
+                      textAnswer={textAnswer}
+                      voiceRecorderState={voiceRecorderState}
+                      voiceDurationSeconds={voiceDurationSeconds}
+                      voiceWarningSeconds={voiceWarningSeconds}
+                      voiceBlob={voiceBlob}
+                      voicePreviewUrl={voicePreviewUrl}
                       isVoicePreviewPlaying={isVoicePreviewPlaying}
                       onToggleVoicePreviewPlayback={toggleVoicePreviewPlayback}
                       voiceIsRecordingActive={voiceIsRecordingActive}
-                      voiceProgressPct={voiceProgressPct}
-                      voiceWarningRemaining={voiceWarningRemaining}
-                      voiceReviewWarning={voiceReviewWarning}
                       voiceError={voiceError}
                       voiceInfo={voiceInfo}
-                      voiceRecorderState={voiceRecorderState}
                       voiceIsRecordingPaused={voiceIsRecordingPaused}
-                      voiceBlob={voiceBlob}
-                      canDiscardRecording={voiceCaps.canDiscardRecording}
+                      onPrepareMicrophone={handleEnableMicrophone}
                       onDiscardVoiceRecording={discardVoiceRecording}
-                      canToggleRecording={voiceCaps.canToggleRecording}
                       onStartVoiceRecording={startVoiceRecording}
-                      centerControlLabel={voiceCaps.centerControlLabel}
-                      canCompleteRecording={voiceCaps.canCompleteRecording}
                       onCompleteVoiceRecording={completeVoiceRecording}
-                      canReviewTranscript={voiceCaps.canReviewTranscript}
                       onReviewVoiceAnswer={handleReviewVoiceAnswer}
-                      canSubmitAnswer={voiceCaps.canSubmitAnswer}
-                      transcriptText={textAnswer}
-                      onTranscriptChange={(nextValue) => {
-                        dispatch({ type: "TEXT_CHANGED", payload: { value: nextValue } });
-                      }}
+                      onTranscriptChange={handleTextAnswerChange}
                       onSubmitAnswer={handleSubmitReviewedVoiceAnswer}
                     />
                   )}

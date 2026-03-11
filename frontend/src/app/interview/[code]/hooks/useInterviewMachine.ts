@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { api } from "@/lib/api";
+import * as answerDraftStore from "@/lib/storage/answerDraftStore";
 import * as pendingAnswerStore from "@/lib/storage/pendingAnswerStore";
 import type { Lang } from "@/lib/language";
 import type { StartResponseDto } from "../dto";
@@ -21,8 +22,10 @@ import { useAsyncAnswerPolling } from "./useAsyncAnswerPolling";
 import {
   extractErrorCode,
   isCompletedResponse,
+  isPendingRecoveryRetryableErrorCode,
   isUnauthorizedResponse,
   makeClientRequestId,
+  shouldAttemptStartAfterRecoveryError,
   shouldClearPendingAnswerOnError,
 } from "../utils";
 
@@ -55,6 +58,7 @@ export type InterviewAction =
   | { type: "START_REQUESTED" }
   | { type: "START_UNAUTHORIZED" }
   | { type: "START_COMPLETED" }
+  | { type: "BOOT_RECOVERY_COMPLETED" }
   | { type: "START_SUCCEEDED"; payload: { question: Question; secondsLeft: number; answerSecondsLeft: number } }
   | { type: "START_FAILED"; payload: { message: string; code?: string } }
   | { type: "TEXT_CHANGED"; payload: { value: string } }
@@ -78,6 +82,8 @@ interface UseInterviewMachineResult {
   state: InterviewState;
   dispatch: Dispatch<InterviewAction>;
   requestSubmit: (answerText: string, submitMode?: SubmitMode) => void;
+  retryPendingRecovery: () => void;
+  canRetryPendingRecovery: boolean;
 }
 
 function toActiveState(
@@ -121,6 +127,8 @@ export function interviewReducer(state: InterviewState, action: InterviewAction)
       return { phase: "guard" };
     case "START_COMPLETED":
       return { phase: "done", completionSource: "already_completed" };
+    case "BOOT_RECOVERY_COMPLETED":
+      return { phase: "done", completionSource: "finished" };
     case "START_SUCCEEDED":
       return toActiveState(
         action.payload.question,
@@ -188,6 +196,15 @@ function buildPendingJob(question: Question, lang: Lang, answerText: string): Pe
   };
 }
 
+function clearPendingSubmission(sessionCode: string): void {
+  pendingAnswerStore.clear(sessionCode);
+}
+
+function clearPendingSubmissionAndDraft(sessionCode: string, pendingJob: PendingAnswerSubmission): void {
+  pendingAnswerStore.clear(sessionCode);
+  answerDraftStore.clear(sessionCode, pendingJob.turnId);
+}
+
 export function useInterviewMachine({
   code,
   lang,
@@ -195,6 +212,7 @@ export function useInterviewMachine({
   setLang,
 }: UseInterviewMachineParams): UseInterviewMachineResult {
   const [state, dispatch] = useReducer(interviewReducer, { phase: "guard" });
+  const [bootAttempt, setBootAttempt] = useState(0);
   const startRequestKeyRef = useRef<string>("");
   const activeSubmissionKeyRef = useRef<string>("");
   const langRef = useRef<Lang>(lang);
@@ -220,7 +238,7 @@ export function useInterviewMachine({
   useEffect(() => {
     if (!langInitialized) return;
 
-    const requestKey = `${code}:start`;
+    const requestKey = `${code}:start:${bootAttempt}`;
     if (startRequestKeyRef.current === requestKey) return;
     startRequestKeyRef.current = requestKey;
 
@@ -228,7 +246,60 @@ export function useInterviewMachine({
     dispatch({ type: "START_REQUESTED" });
 
     void (async () => {
+      const pendingJobBeforeStart = pendingAnswerStore.read(code);
+      let recoveryTerminalCode = "";
+
       try {
+        if (pendingJobBeforeStart) {
+          try {
+            const recoveryResult = await submitPendingAnswerJob(pendingJobBeforeStart, () => canceled);
+            if (canceled) return;
+
+            answerDraftStore.clear(code, pendingJobBeforeStart.turnId);
+            if (recoveryResult.done) {
+              dispatch({ type: "BOOT_RECOVERY_COMPLETED" });
+              return;
+            }
+            if (!recoveryResult.nextQuestion) {
+              dispatch({
+                type: "START_FAILED",
+                payload: {
+                  message: "Recovered answer completed without a next question",
+                  code: "RECOVERY_INVALID",
+                },
+              });
+              return;
+            }
+
+            dispatch({
+              type: "START_SUCCEEDED",
+              payload: {
+                question: recoveryResult.nextQuestion,
+                secondsLeft: recoveryResult.timerRemainingS,
+                answerSecondsLeft: recoveryResult.answerSubmitWindowRemainingS,
+              },
+            });
+            return;
+          } catch (err) {
+            if (canceled) return;
+
+            recoveryTerminalCode = extractErrorCode(err);
+            if (shouldClearPendingAnswerOnError(recoveryTerminalCode)) {
+              clearPendingSubmission(code);
+            }
+            if (!shouldAttemptStartAfterRecoveryError(recoveryTerminalCode)) {
+              dispatch({
+                type: "START_FAILED",
+                payload: {
+                  message: err instanceof Error ? err.message : "Unknown error",
+                  code: recoveryTerminalCode,
+                },
+              });
+              return;
+            }
+          }
+        }
+
         const { ok, status, data } = await api<StartResponseDto>("/api/interview/start", {
           method: "POST",
           body: { session_code: code, language: lang },
@@ -240,10 +311,16 @@ export function useInterviewMachine({
         if (!ok || !data) {
           const errorMessage = data?.error ?? "Failed to start";
           if (isUnauthorizedResponse(status, data?.code)) {
+            if (pendingJobBeforeStart) {
+              clearPendingSubmission(code);
+            }
             dispatch({ type: "START_UNAUTHORIZED" });
             return;
           }
           if (isCompletedResponse(status, data?.code, errorMessage)) {
+            if (pendingJobBeforeStart) {
+              clearPendingSubmissionAndDraft(code, pendingJobBeforeStart);
+            }
             dispatch({ type: "START_COMPLETED" });
             return;
           }
@@ -255,6 +332,14 @@ export function useInterviewMachine({
         }
 
         const mapped = mapStartResponse(data);
+        if (pendingJobBeforeStart) {
+          if (mapped.question.turnId !== pendingJobBeforeStart.turnId) {
+            clearPendingSubmissionAndDraft(code, pendingJobBeforeStart);
+          } else if (recoveryTerminalCode !== "") {
+            clearPendingSubmission(code);
+          }
+        }
+
         dispatch({
           type: "START_SUCCEEDED",
           payload: {
@@ -267,22 +352,17 @@ export function useInterviewMachine({
         if (mapped.language === "en" || mapped.language === "es") {
           setLang(mapped.language);
         }
-
-        const pendingJob = pendingAnswerStore.read(code);
-        if (pendingJob) {
-          if (pendingJob.turnId === mapped.question.turnId) {
-            dispatch({ type: "RECOVERY_REQUESTED", payload: { pendingJob } });
-          } else {
-            pendingAnswerStore.clear(code);
-          }
-        }
       } catch (err) {
         if (canceled) return;
+        const errorCode = extractErrorCode(err);
+        if (pendingJobBeforeStart && shouldClearPendingAnswerOnError(errorCode)) {
+          clearPendingSubmission(code);
+        }
         dispatch({
           type: "START_FAILED",
           payload: {
             message: err instanceof Error ? err.message : "Unknown error",
-            code: extractErrorCode(err),
+            code: errorCode,
           },
         });
       }
@@ -291,10 +371,11 @@ export function useInterviewMachine({
     return () => {
       canceled = true;
     };
-  }, [code, lang, langInitialized, setLang]);
+  }, [bootAttempt, code, lang, langInitialized, setLang, submitPendingAnswerJob]);
 
   useEffect(() => {
-    if (state.phase !== "active" && state.phase !== "submitting") return;
+    const isTickingPhase = state.phase === "active" || state.phase === "submitting";
+    if (!isTickingPhase) return;
     if (state.secondsLeft <= 0) return;
 
     const intervalId = window.setInterval(() => {
@@ -304,7 +385,13 @@ export function useInterviewMachine({
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [state]);
+  }, [
+    dispatch,
+    state.phase,
+    state.phase === "active" || state.phase === "submitting"
+      ? state.secondsLeft
+      : 0,
+  ]);
 
   useEffect(() => {
     if (!submissionPendingJob || !submissionRequestKind || !submissionMode) {
@@ -324,6 +411,8 @@ export function useInterviewMachine({
         const result = await submitPendingAnswerJob(submissionPendingJob, () => canceled);
         if (canceled) return;
 
+        answerDraftStore.clear(code, submissionPendingJob.turnId);
+
         dispatch({
           type: submissionRequestKind === "recovery" ? "RECOVERY_SUCCEEDED" : "SUBMIT_SUCCEEDED",
           payload: { result },
@@ -332,7 +421,6 @@ export function useInterviewMachine({
         if (canceled) return;
 
         if (submissionMode === "finalAuto") {
-          pendingAnswerStore.clear(code);
           dispatch({
             type: "SUBMIT_FAILED",
             payload: {
@@ -347,7 +435,7 @@ export function useInterviewMachine({
 
         const errorCode = extractErrorCode(err);
         if (shouldClearPendingAnswerOnError(errorCode)) {
-          pendingAnswerStore.clear(code);
+          clearPendingSubmission(code);
         }
 
         dispatch({
@@ -365,5 +453,16 @@ export function useInterviewMachine({
     };
   }, [code, submissionMode, submissionPendingJob, submissionRequestKind, submitPendingAnswerJob]);
 
-  return { state, dispatch, requestSubmit };
+  const retryPendingRecovery = useCallback(() => {
+    if (!pendingAnswerStore.read(code)) return;
+    startRequestKeyRef.current = "";
+    setBootAttempt((current) => current + 1);
+  }, [code]);
+
+  const canRetryPendingRecovery =
+    state.phase === "error"
+    && pendingAnswerStore.read(code) != null
+    && isPendingRecoveryRetryableErrorCode(state.code ?? "");
+
+  return { state, dispatch, requestSubmit, retryPendingRecovery, canRetryPendingRecovery };
 }

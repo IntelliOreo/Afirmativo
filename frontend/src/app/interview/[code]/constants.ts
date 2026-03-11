@@ -63,6 +63,8 @@ export const VOICE_MAX_SECONDS = parsePositiveIntEnv(
   process.env.NEXT_PUBLIC_VOICE_MAX_SECONDS,
   180,
 );
+export const VOICE_CHUNK_TIMESLICE_MS = 5000;
+export const VOICE_TICK_INTERVAL_MS = 1000;
 export const VOICE_WARNING_SECONDS = buildVoiceWarningSeconds(VOICE_MAX_SECONDS);
 export const VOICE_MIME_CANDIDATES = [
   "audio/webm;codecs=opus",

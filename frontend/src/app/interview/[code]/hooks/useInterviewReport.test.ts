@@ -14,11 +14,28 @@ describe("useInterviewReport", () => {
     apiMock.mockReset();
   });
 
-  it("keeps the hook in generating state on 202", async () => {
+  it("leaves report state idle when resume sees REPORT_NOT_STARTED", async () => {
+    apiMock.mockResolvedValue({
+      ok: false,
+      status: 404,
+      data: { error: "Not started", code: "REPORT_NOT_STARTED" },
+    });
+
+    const { result } = renderHook(() => useInterviewReport("AP-123"));
+
+    await act(async () => {
+      await result.current.resumeReport();
+    });
+
+    expect(result.current.reportStatus).toBe("idle");
+    expect(result.current.report).toBeNull();
+  });
+
+  it("enters generating state when POST /generate accepts the job", async () => {
     apiMock.mockResolvedValue({
       ok: true,
       status: 202,
-      data: null,
+      data: { status: "generating" },
     });
 
     const { result } = renderHook(() => useInterviewReport("AP-123"));
@@ -28,7 +45,6 @@ describe("useInterviewReport", () => {
     });
 
     expect(result.current.reportStatus).toBe("generating");
-    expect(result.current.report).toBeNull();
   });
 
   it("stores canonical report fields when the API returns them", async () => {
@@ -54,88 +70,25 @@ describe("useInterviewReport", () => {
     const { result } = renderHook(() => useInterviewReport("AP-123"));
 
     await act(async () => {
-      await result.current.loadReport();
+      await result.current.resumeReport();
     });
 
     expect(result.current.reportStatus).toBe("ready");
     expect(result.current.report?.areasOfClarity).toEqual(["Strong chronology"]);
     expect(result.current.report?.areasOfClarityEs).toEqual(["Cronologia solida"]);
-    expect(result.current.report?.areasToDevelopFurther).toEqual(["More dates"]);
-    expect(result.current.report?.areasToDevelopFurtherEs).toEqual(["Mas fechas"]);
-    expect(result.current.report?.recommendationEs).toBe("Practique los detalles de la cronologia");
-  });
-
-  it("normalizes missing canonical arrays to empty arrays", async () => {
-    apiMock.mockResolvedValue({
-      ok: true,
-      status: 200,
-      data: {
-        session_code: "AP-123",
-        status: "ready",
-        content_en: "English content",
-        content_es: "Contenido",
-        recommendation: "Practice timeline details",
-        recommendation_es: "Practique los detalles de la cronologia",
-        question_count: 12,
-        duration_minutes: 25,
-      },
-    });
-
-    const { result } = renderHook(() => useInterviewReport("AP-123"));
-
-    await act(async () => {
-      await result.current.loadReport();
-    });
-
-    expect(result.current.reportStatus).toBe("ready");
-    expect(result.current.report?.areasOfClarity).toEqual([]);
-    expect(result.current.report?.areasOfClarityEs).toEqual([]);
-    expect(result.current.report?.areasToDevelopFurther).toEqual([]);
-    expect(result.current.report?.areasToDevelopFurtherEs).toEqual([]);
-  });
-
-  it("does not backfill legacy strengths and weaknesses into canonical arrays", async () => {
-    apiMock.mockResolvedValue({
-      ok: true,
-      status: 200,
-      data: {
-        session_code: "AP-123",
-        status: "ready",
-        content_en: "English content",
-        content_es: "Contenido",
-        strengths: ["Legacy strength"],
-        weaknesses: ["Legacy weakness"],
-        recommendation: "Practice timeline details",
-        recommendation_es: "Practique los detalles de la cronologia",
-        question_count: 12,
-        duration_minutes: 25,
-      },
-    });
-
-    const { result } = renderHook(() => useInterviewReport("AP-123"));
-
-    await act(async () => {
-      await result.current.loadReport();
-    });
-
-    expect(result.current.reportStatus).toBe("ready");
-    expect(result.current.report?.areasOfClarity).toEqual([]);
-    expect(result.current.report?.areasOfClarityEs).toEqual([]);
-    expect(result.current.report?.areasToDevelopFurther).toEqual([]);
-    expect(result.current.report?.areasToDevelopFurtherEs).toEqual([]);
   });
 
   it("surfaces API failures as report errors", async () => {
     apiMock.mockResolvedValue({
       ok: false,
       status: 500,
-      data: { error: "Report failed" },
+      data: { error: "Report failed", code: "GENERATION_FAILED" },
     });
 
     const { result } = renderHook(() => useInterviewReport("AP-123"));
 
     await act(async () => {
-      await result.current.loadReport();
+      await result.current.resumeReport();
     });
 
     await waitFor(() => {

@@ -15,6 +15,7 @@ interface ReportSectionProps {
   reportWaitStatus: string;
   lang: Lang;
   onLoadReport: () => void | Promise<void>;
+  onCheckAgain: () => void | Promise<void>;
   onPrintReport: () => void;
 }
 
@@ -26,6 +27,7 @@ export function ReportSection({
   reportWaitStatus,
   lang,
   onLoadReport,
+  onCheckAgain,
   onPrintReport,
 }: ReportSectionProps) {
   const clarityItems = lang === "es" ? report?.areasOfClarityEs ?? [] : report?.areasOfClarity ?? [];
@@ -70,7 +72,7 @@ export function ReportSection({
             <div className="mt-6 inline-block h-8 w-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
             {reportStatus === "generating" && (
               <div className="mt-6">
-                <Button fullWidth onClick={() => { void onLoadReport(); }}>
+                <Button fullWidth onClick={() => { void onCheckAgain(); }}>
                   {lang === "es" ? "Verificar de nuevo" : "Check again"}
                 </Button>
               </div>

@@ -5,22 +5,28 @@ import { log } from "@/lib/logger";
 import type { Lang } from "@/lib/language";
 import {
   formatDurationLabel,
+  VOICE_CHUNK_TIMESLICE_MS,
   VOICE_MAX_SECONDS,
   VOICE_MIME_CANDIDATES,
+  VOICE_TICK_INTERVAL_MS,
   VOICE_WARNING_SECONDS,
 } from "../constants";
 import { transcribeAudio } from "../lib/voiceTranscription";
-import type { VoiceRecorderState } from "../viewTypes";
+import type { MicWarmState, VoiceRecorderState } from "../viewTypes";
 import { useVoicePreview } from "./useVoicePreview";
 import { useVoiceTicker } from "./useVoiceTicker";
+
+type StreamAcquireMode = "prepare" | "recover" | "start";
 
 interface UseVoiceRecorderParams {
   lang: Lang;
   isActive: boolean;
+  shouldKeepMicWarm: boolean;
 }
 
 interface UseVoiceRecorderResult {
   voiceRecorderState: VoiceRecorderState;
+  micWarmState: MicWarmState;
   voiceDurationSeconds: number;
   voiceWarningSeconds: number | null;
   voiceBlob: Blob | null;
@@ -30,6 +36,7 @@ interface UseVoiceRecorderResult {
   voiceInfo: string;
   isRecordingActive: boolean;
   isRecordingPaused: boolean;
+  prepareMicrophone: () => Promise<boolean>;
   startVoiceRecording: () => Promise<void>;
   completeVoiceRecording: () => void;
   discardVoiceRecording: () => void;
@@ -39,8 +46,30 @@ interface UseVoiceRecorderResult {
   setVoiceErrorMessage: (message: string) => void;
 }
 
-export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): UseVoiceRecorderResult {
+function getStreamTracks(stream: MediaStream | null): MediaStreamTrack[] {
+  if (!stream) return [];
+  if (typeof stream.getAudioTracks === "function") {
+    const audioTracks = stream.getAudioTracks();
+    if (audioTracks.length > 0) {
+      return audioTracks;
+    }
+  }
+  return typeof stream.getTracks === "function" ? stream.getTracks() : [];
+}
+
+function isPermissionDeniedError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const maybeName = "name" in error ? String(error.name) : "";
+  return maybeName === "NotAllowedError" || maybeName === "PermissionDeniedError";
+}
+
+export function useVoiceRecorder({
+  lang,
+  isActive,
+  shouldKeepMicWarm,
+}: UseVoiceRecorderParams): UseVoiceRecorderResult {
   const [voiceRecorderState, setVoiceRecorderState] = useState<VoiceRecorderState>("idle");
+  const [micWarmState, setMicWarmState] = useState<MicWarmState>("cold");
   const [voiceBlob, setVoiceBlob] = useState<Blob | null>(null);
   const [voiceError, setVoiceError] = useState("");
   const [voiceInfo, setVoiceInfo] = useState("");
@@ -49,16 +78,37 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const voiceChunksRef = useRef<BlobPart[]>([]);
   const stopRecordingResolverRef = useRef<((blob: Blob | null) => void) | null>(null);
+  const warmStreamPromiseRef = useRef<Promise<MediaStream | null> | null>(null);
+  const clearWarmStreamListenersRef = useRef<(() => void) | null>(null);
+  const generationRef = useRef(0);
   const langRef = useRef(lang);
-  langRef.current = lang;
+  const shouldKeepMicWarmRef = useRef(shouldKeepMicWarm);
   const voiceBlobRef = useRef<Blob | null>(voiceBlob);
+  langRef.current = lang;
+  shouldKeepMicWarmRef.current = shouldKeepMicWarm;
   voiceBlobRef.current = voiceBlob;
 
-  const stopVoiceStreamTracks = useCallback(() => {
-    if (!mediaStreamRef.current) return;
-    mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-    mediaStreamRef.current = null;
-  }, []);
+  const microphoneAccessMessage = useCallback((permissionDenied: boolean) => (
+    permissionDenied
+      ? (langRef.current === "es"
+        ? "Permita el acceso al micrófono para grabar por voz."
+        : "Allow microphone access to record by voice.")
+      : (langRef.current === "es"
+        ? "No se pudo acceder al micrófono."
+        : "Unable to access microphone.")
+  ), []);
+
+  const recordingFailureMessage = useCallback(() => (
+    langRef.current === "es"
+      ? "No se pudo completar la grabación."
+      : "Unable to complete recording."
+  ), []);
+
+  const noAudioDetectedMessage = useCallback(() => (
+    langRef.current === "es"
+      ? "No se detecto audio. Intente grabar de nuevo."
+      : "No audio detected. Please record again."
+  ), []);
 
   const completeVoiceRecordingRef = useRef<() => void>(() => {});
   const {
@@ -72,6 +122,7 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
   } = useVoiceTicker({
     maxSeconds: VOICE_MAX_SECONDS,
     warningMilestones: VOICE_WARNING_SECONDS,
+    tickIntervalMs: VOICE_TICK_INTERVAL_MS,
     onLimitReached: () => {
       const limitLabel = formatDurationLabel(VOICE_MAX_SECONDS, langRef.current);
       setVoiceInfo(
@@ -91,6 +142,17 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
     clearPreview,
   } = useVoicePreview();
 
+  const invalidateDeferredWork = useCallback(() => {
+    generationRef.current += 1;
+  }, []);
+
+  const scheduleGuardedTask = useCallback((generation: number, task: () => void) => {
+    window.setTimeout(() => {
+      if (generation !== generationRef.current) return;
+      task();
+    }, 0);
+  }, []);
+
   const detachRecorder = useCallback((recorder: MediaRecorder | null = mediaRecorderRef.current) => {
     if (!recorder) return;
     recorder.ondataavailable = null;
@@ -107,7 +169,189 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
     stopRecordingResolverRef.current = null;
   }, []);
 
+  const isWarmStreamLive = useCallback((stream: MediaStream | null): boolean => {
+    const tracks = getStreamTracks(stream);
+    return tracks.length > 0 && tracks.every((track) => track.readyState !== "ended");
+  }, []);
+
+  const detachWarmStreamListeners = useCallback(() => {
+    clearWarmStreamListenersRef.current?.();
+    clearWarmStreamListenersRef.current = null;
+  }, []);
+
+  const releaseWarmStream = useCallback((options?: { stopTracks?: boolean; nextState?: MicWarmState }) => {
+    const stream = mediaStreamRef.current;
+    detachWarmStreamListeners();
+    mediaStreamRef.current = null;
+    warmStreamPromiseRef.current = null;
+
+    if (stream && options?.stopTracks) {
+      stream.getTracks().forEach((track) => {
+        try {
+          track.stop();
+        } catch {
+          // Ignore track stop failures during cleanup.
+        }
+      });
+    }
+
+    if (options?.nextState) {
+      setMicWarmState(options.nextState);
+    }
+  }, [detachWarmStreamListeners]);
+
+  const cacheWarmStream = useCallback((stream: MediaStream) => {
+    detachWarmStreamListeners();
+    mediaStreamRef.current = stream;
+
+    const tracks = getStreamTracks(stream);
+    const handleTrackEnded = () => {
+      if (mediaStreamRef.current !== stream) return;
+      releaseWarmStream({
+        nextState: shouldKeepMicWarmRef.current ? "recovering" : "cold",
+      });
+    };
+
+    tracks.forEach((track) => {
+      track.addEventListener("ended", handleTrackEnded);
+    });
+    clearWarmStreamListenersRef.current = () => {
+      tracks.forEach((track) => {
+        track.removeEventListener("ended", handleTrackEnded);
+      });
+    };
+
+    setMicWarmState("warm");
+  }, [detachWarmStreamListeners, releaseWarmStream]);
+
+  const ensureWarmStream = useCallback(async (mode: StreamAcquireMode): Promise<MediaStream | null> => {
+    const existingStream = mediaStreamRef.current;
+    if (isWarmStreamLive(existingStream)) {
+      setMicWarmState("warm");
+      return existingStream;
+    }
+
+    if (existingStream) {
+      releaseWarmStream({
+        nextState: mode === "recover" ? "recovering" : "cold",
+      });
+    }
+
+    if (mode === "recover" && !shouldKeepMicWarmRef.current) {
+      return null;
+    }
+
+    if (warmStreamPromiseRef.current) {
+      return warmStreamPromiseRef.current;
+    }
+
+    if (
+      typeof navigator === "undefined"
+      || !navigator.mediaDevices?.getUserMedia
+    ) {
+      if (mode === "start") {
+        setVoiceError(
+          langRef.current === "es"
+            ? "Este navegador no soporta grabacion de audio."
+            : "This browser does not support audio recording.",
+        );
+      } else {
+        setMicWarmState("error");
+      }
+      return null;
+    }
+
+    const generation = generationRef.current;
+    setMicWarmState(mode === "recover" ? "recovering" : "warming");
+
+    const acquisitionPromise: Promise<MediaStream | null> = navigator.mediaDevices.getUserMedia({ audio: true })
+      .then((stream) => {
+        if (
+          generation !== generationRef.current
+          || (mode === "recover" && !shouldKeepMicWarmRef.current)
+        ) {
+          stream.getTracks().forEach((track) => track.stop());
+          return null;
+        }
+
+        cacheWarmStream(stream);
+        setVoiceError("");
+        return stream;
+      })
+      .catch((error: unknown) => {
+        if (generation !== generationRef.current) return null;
+
+        const nextState = isPermissionDeniedError(error) ? "denied" : "error";
+        setMicWarmState(nextState);
+
+        if (mode === "start") {
+          setVoiceError(microphoneAccessMessage(nextState === "denied"));
+        }
+        return null;
+      })
+      .finally(() => {
+        if (warmStreamPromiseRef.current === acquisitionPromise) {
+          warmStreamPromiseRef.current = null;
+        }
+      });
+
+    warmStreamPromiseRef.current = acquisitionPromise;
+    return acquisitionPromise;
+  }, [cacheWarmStream, isWarmStreamLive, microphoneAccessMessage, releaseWarmStream]);
+
+  const prepareMicrophone = useCallback(async (): Promise<boolean> => {
+    const stream = await ensureWarmStream("prepare");
+    return stream != null;
+  }, [ensureWarmStream]);
+
+  const stopEphemeralStreamIfNeeded = useCallback(() => {
+    if (shouldKeepMicWarmRef.current) return;
+    releaseWarmStream({ stopTracks: true, nextState: "cold" });
+  }, [releaseWarmStream]);
+
+  useEffect(() => {
+    if (shouldKeepMicWarm) return;
+    invalidateDeferredWork();
+    releaseWarmStream({ stopTracks: true, nextState: "cold" });
+  }, [invalidateDeferredWork, releaseWarmStream, shouldKeepMicWarm]);
+
+  useEffect(() => {
+    if (!shouldKeepMicWarm || micWarmState !== "recovering") return;
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") return;
+    void ensureWarmStream("recover");
+  }, [ensureWarmStream, micWarmState, shouldKeepMicWarm]);
+
+  useEffect(() => {
+    if (!shouldKeepMicWarm) return;
+
+    const maybeRecoverWarmStream = () => {
+      const recorder = mediaRecorderRef.current;
+      if (recorder && recorder.state !== "inactive") return;
+      if (isWarmStreamLive(mediaStreamRef.current)) {
+        setMicWarmState("warm");
+        return;
+      }
+      setMicWarmState("recovering");
+      void ensureWarmStream("recover");
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) return;
+      maybeRecoverWarmStream();
+    };
+
+    window.addEventListener("focus", maybeRecoverWarmStream);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener("focus", maybeRecoverWarmStream);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [ensureWarmStream, isWarmStreamLive, shouldKeepMicWarm]);
+
   const discardVoiceRecording = useCallback(() => {
+    invalidateDeferredWork();
     const recorder = mediaRecorderRef.current;
     if (recorder) {
       detachRecorder(recorder);
@@ -120,7 +364,6 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
       }
     }
 
-    stopVoiceStreamTracks();
     voiceChunksRef.current = [];
     resolvePendingStop(null);
     resetVoiceTicker();
@@ -129,7 +372,15 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
     setVoiceRecorderState("idle");
     setVoiceError("");
     setVoiceInfo("");
-  }, [clearPreview, detachRecorder, resetVoiceTicker, resolvePendingStop, stopVoiceStreamTracks]);
+    stopEphemeralStreamIfNeeded();
+  }, [
+    clearPreview,
+    detachRecorder,
+    invalidateDeferredWork,
+    resetVoiceTicker,
+    resolvePendingStop,
+    stopEphemeralStreamIfNeeded,
+  ]);
 
   const stopVoiceRecordingAndWaitForBlob = useCallback(async (): Promise<Blob | null> => {
     if (
@@ -205,11 +456,7 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
       return;
     }
 
-    if (
-      typeof navigator === "undefined"
-      || !navigator.mediaDevices?.getUserMedia
-      || typeof MediaRecorder === "undefined"
-    ) {
+    if (typeof MediaRecorder === "undefined") {
       setVoiceError(
         langRef.current === "es"
           ? "Este navegador no soporta grabacion de audio."
@@ -218,11 +465,18 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
       return;
     }
 
-    discardVoiceRecording();
+    const isPristineIdle =
+      voiceRecorderState === "idle"
+      && voiceError === ""
+      && voiceInfo === ""
+      && voiceBlobRef.current == null;
+    if (!isPristineIdle) {
+      discardVoiceRecording();
+    }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaStreamRef.current = stream;
+      const stream = await ensureWarmStream("start");
+      if (!stream) return;
 
       const mimeType = VOICE_MIME_CANDIDATES.find((candidate) => MediaRecorder.isTypeSupported(candidate));
       const recorder = mimeType
@@ -234,71 +488,69 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
 
         voiceChunksRef.current.push(event.data);
         if (recorder.state === "paused") {
-          const previewBlob = new Blob(voiceChunksRef.current, { type: recorder.mimeType || "audio/webm" });
-          if (previewBlob.size > 0) {
-            setPreviewBlob(previewBlob);
-          }
+          const generation = generationRef.current;
+          scheduleGuardedTask(generation, () => {
+            const previewBlob = new Blob(voiceChunksRef.current, { type: recorder.mimeType || "audio/webm" });
+            if (previewBlob.size > 0) {
+              setPreviewBlob(previewBlob);
+            }
+          });
         }
       };
 
       recorder.onerror = () => {
+        invalidateDeferredWork();
         detachRecorder(recorder);
-        stopVoiceStreamTracks();
+        releaseWarmStream({ stopTracks: true, nextState: "error" });
         voiceChunksRef.current = [];
+        resolvePendingStop(null);
         resetVoiceTicker();
         clearPreview();
         setVoiceBlob(null);
         setVoiceRecorderState("idle");
-        setVoiceError(
-          langRef.current === "es"
-            ? "No se pudo completar la grabacion."
-            : "Unable to complete recording.",
-        );
+        setVoiceInfo("");
+        setVoiceError(recordingFailureMessage());
       };
 
       recorder.onstop = () => {
         detachRecorder(recorder);
-        stopVoiceStreamTracks();
         stopVoiceTicker();
+        const generation = generationRef.current;
+        scheduleGuardedTask(generation, () => {
+          const chunks = voiceChunksRef.current;
+          voiceChunksRef.current = [];
+          if (chunks.length === 0) {
+            clearPreview();
+            setVoiceRecorderState("idle");
+            setVoiceBlob(null);
+            resolvePendingStop(null);
+            setVoiceError(noAudioDetectedMessage());
+            stopEphemeralStreamIfNeeded();
+            return;
+          }
 
-        const chunks = voiceChunksRef.current;
-        voiceChunksRef.current = [];
-        if (chunks.length === 0) {
-          clearPreview();
-          setVoiceRecorderState("idle");
-          setVoiceBlob(null);
-          resolvePendingStop(null);
-          setVoiceError(
+          const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+          if (blob.size === 0) {
+            clearPreview();
+            setVoiceRecorderState("idle");
+            setVoiceBlob(null);
+            resolvePendingStop(null);
+            setVoiceError(noAudioDetectedMessage());
+            stopEphemeralStreamIfNeeded();
+            return;
+          }
+
+          setVoiceBlob(blob);
+          setPreviewBlob(blob);
+          setVoiceRecorderState("audio_ready");
+          setVoiceInfo(
             langRef.current === "es"
-              ? "No se detecto audio. Intente grabar de nuevo."
-              : "No audio detected. Please record again.",
+              ? "Audio listo. Revise la transcripción antes de enviar."
+              : "Audio ready. Review the transcript before submitting.",
           );
-          return;
-        }
-
-        const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
-        if (blob.size === 0) {
-          clearPreview();
-          setVoiceRecorderState("idle");
-          setVoiceBlob(null);
-          resolvePendingStop(null);
-          setVoiceError(
-            langRef.current === "es"
-              ? "No se detecto audio. Intente grabar de nuevo."
-              : "No audio detected. Please record again.",
-          );
-          return;
-        }
-
-        setVoiceBlob(blob);
-        setPreviewBlob(blob);
-        setVoiceRecorderState("audio_ready");
-        setVoiceInfo(
-          langRef.current === "es"
-            ? "Audio listo. Revise la transcripción antes de enviar."
-            : "Audio ready. Review the transcript before submitting.",
-        );
-        resolvePendingStop(blob);
+          resolvePendingStop(blob);
+          stopEphemeralStreamIfNeeded();
+        });
       };
 
       mediaRecorderRef.current = recorder;
@@ -309,33 +561,46 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
       setVoiceError("");
       setVoiceInfo("");
       setVoiceRecorderState("recording");
-      recorder.start(250);
+      recorder.start(VOICE_CHUNK_TIMESLICE_MS);
       startVoiceTicker();
     } catch {
       detachRecorder();
-      stopVoiceStreamTracks();
+      releaseWarmStream({
+        stopTracks: true,
+        nextState: shouldKeepMicWarmRef.current ? "error" : "cold",
+      });
+      invalidateDeferredWork();
       voiceChunksRef.current = [];
+      resolvePendingStop(null);
       resetVoiceTicker();
       clearPreview();
       setVoiceBlob(null);
       setVoiceRecorderState("idle");
-      setVoiceError(
-        langRef.current === "es"
-          ? "No se pudo acceder al microfono."
-          : "Unable to access microphone.",
-      );
+      setVoiceInfo("");
+      setVoiceError(microphoneAccessMessage(false));
     }
   }, [
     clearPreview,
     detachRecorder,
     discardVoiceRecording,
+    ensureWarmStream,
+    invalidateDeferredWork,
     isActive,
+    microphoneAccessMessage,
+    noAudioDetectedMessage,
     pauseVoiceRecording,
+    recordingFailureMessage,
+    releaseWarmStream,
     resetVoiceTicker,
+    resolvePendingStop,
     resumeVoiceRecording,
+    scheduleGuardedTask,
     setPreviewBlob,
     startVoiceTicker,
-    stopVoiceStreamTracks,
+    stopEphemeralStreamIfNeeded,
+    stopVoiceTicker,
+    voiceError,
+    voiceInfo,
     voiceRecorderState,
   ]);
 
@@ -458,6 +723,8 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
 
   useEffect(() => {
     return () => {
+      invalidateDeferredWork();
+      resolvePendingStop(null);
       const recorder = mediaRecorderRef.current;
       if (recorder) {
         detachRecorder(recorder);
@@ -469,12 +736,13 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
           }
         }
       }
-      stopVoiceStreamTracks();
+      releaseWarmStream({ stopTracks: true, nextState: "cold" });
     };
-  }, [detachRecorder, stopVoiceStreamTracks]);
+  }, [detachRecorder, invalidateDeferredWork, releaseWarmStream, resolvePendingStop]);
 
   return {
     voiceRecorderState,
+    micWarmState,
     voiceDurationSeconds,
     voiceWarningSeconds,
     voiceBlob,
@@ -484,6 +752,7 @@ export function useVoiceRecorder({ lang, isActive }: UseVoiceRecorderParams): Us
     voiceInfo,
     isRecordingActive: voiceRecorderState === "recording",
     isRecordingPaused: voiceRecorderState === "paused",
+    prepareMicrophone,
     startVoiceRecording,
     completeVoiceRecording,
     discardVoiceRecording,

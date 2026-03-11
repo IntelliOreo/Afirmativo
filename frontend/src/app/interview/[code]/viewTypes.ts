@@ -12,6 +12,23 @@ export type VoiceRecorderState =
   | "review_ready"
   | "forced_finalizing";
 
+export type MicWarmState =
+  | "cold"
+  | "warming"
+  | "warm"
+  | "recovering"
+  | "denied"
+  | "error";
+
+export type MicrophoneWarmupDialogMode = "initial_setup" | "reconnect";
+export type MicrophoneWarmupDialogState =
+  | "idle"
+  | "warming"
+  | "recovering"
+  | "ready_handoff"
+  | "denied"
+  | "error";
+
 export interface VoiceCapabilities {
   canSwitchModes: boolean;
   canToggleRecording: boolean;

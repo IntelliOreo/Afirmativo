@@ -13,7 +13,7 @@ This document is the current local development guide for this repository.
 - `doc/`: developer documentation
 - `docker-compose.yml`: local dev only (future/planned)
 - `.github/workflows/`: CI/CD pipeline (future/planned)
-- `dev-all.sh`: helper script that starts frontend, backend, and the mock server together
+- `dev-all.sh`: helper script that starts frontend, backend, the mock server, and the database UI together
 
 ## Prerequisites
 
@@ -297,3 +297,5 @@ That command does not attach a named Docker volume, so removing `test-postgres` 
 - Backend tests run with `go test ./...`
 - The backend async Postgres integration tests are opt-in and can run against a local Docker Postgres instance when `AFIRMATIVO_TEST_DATABASE_URL` is set
 - Those integration tests create and clean up their own temporary databases
+
+gcloud auth application-default login

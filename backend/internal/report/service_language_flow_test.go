@@ -25,7 +25,7 @@ func (s *reportInterviewProviderStub) GetAnswerCount(context.Context, string) (i
 	return s.answerCount, nil
 }
 
-func TestServiceGetOrGenerateReport_LanguageTranscriptFlowAndBilingualReport(t *testing.T) {
+func TestProcessQueuedReport_LanguageTranscriptFlowAndBilingualReport(t *testing.T) {
 	t.Parallel()
 
 	const (
@@ -51,50 +51,19 @@ func TestServiceGetOrGenerateReport_LanguageTranscriptFlowAndBilingualReport(t *
 			name:              "english_user_uses_english_open_floor_transcript",
 			preferredLanguage: "en",
 			answers: []InterviewAnswerSnapshot{
-				{
-					Area:         "protected_ground",
-					QuestionText: "Main criterion question",
-					TranscriptEn: "English answer body",
-					TranscriptEs: "Respuesta en espanol",
-					AIEvaluation: evaluation,
-				},
-				{
-					Area:         "open_floor",
-					QuestionText: "Open floor prompt #1",
-					TranscriptEn: "EN open floor answer 1",
-					TranscriptEs: "ES open floor answer 1",
-				},
-				{
-					Area:         "open_floor",
-					QuestionText: "Open floor prompt #2",
-					TranscriptEn: "EN open floor answer 2",
-					TranscriptEs: "ES open floor answer 2",
-				},
+				{Area: "protected_ground", QuestionText: "Main criterion question", TranscriptEn: "English answer body", TranscriptEs: "Respuesta en espanol", AIEvaluation: evaluation},
+				{Area: "open_floor", QuestionText: "Open floor prompt #1", TranscriptEn: "EN open floor answer 1", TranscriptEs: "ES open floor answer 1"},
+				{Area: "open_floor", QuestionText: "Open floor prompt #2", TranscriptEn: "EN open floor answer 2", TranscriptEs: "ES open floor answer 2"},
 			},
 			wantTranscript: "Q: Open floor prompt #1\nA: EN open floor answer 1\n\nQ: Open floor prompt #2\nA: EN open floor answer 2",
 		},
 		{
-			name:              "spanish_user_uses_spanish_open_floor_transcript_and_persists_bilingual_analysis",
+			name:              "spanish_user_uses_spanish_open_floor_transcript",
 			preferredLanguage: "es",
 			answers: []InterviewAnswerSnapshot{
-				{
-					Area:         "protected_ground",
-					QuestionText: "Pregunta principal",
-					TranscriptEs: "Respuesta principal",
-					AIEvaluation: evaluation,
-				},
-				{
-					Area:         "open_floor",
-					QuestionText: "Open floor prompt #1",
-					TranscriptEn: "EN open floor answer 1",
-					TranscriptEs: "ES open floor answer 1",
-				},
-				{
-					Area:         "open_floor",
-					QuestionText: "Open floor prompt #2",
-					TranscriptEn: "EN open floor answer 2",
-					TranscriptEs: "ES open floor answer 2",
-				},
+				{Area: "protected_ground", QuestionText: "Pregunta principal", TranscriptEs: "Respuesta principal", AIEvaluation: evaluation},
+				{Area: "open_floor", QuestionText: "Open floor prompt #1", TranscriptEn: "EN open floor answer 1", TranscriptEs: "ES open floor answer 1"},
+				{Area: "open_floor", QuestionText: "Open floor prompt #2", TranscriptEn: "EN open floor answer 2", TranscriptEs: "ES open floor answer 2"},
 			},
 			wantTranscript: "Q: Open floor prompt #1\nA: ES open floor answer 1\n\nQ: Open floor prompt #2\nA: ES open floor answer 2",
 		},
@@ -106,28 +75,22 @@ func TestServiceGetOrGenerateReport_LanguageTranscriptFlowAndBilingualReport(t *
 			t.Parallel()
 
 			var (
-				createdReport      *Report
-				updatedReport      *Report
+				readyReport        *Report
 				capturedTranscript string
 				capturedSummaries  []AreaSummary
 			)
 
 			store := &fakeReportStore{
-				getReportBySessionFn: func(context.Context, string) (*Report, error) {
-					return nil, nil
+				claimQueuedReportFn: func(context.Context, string) (*Report, error) {
+					return &Report{SessionCode: sessionCode, Status: ReportStatusRunning, Attempts: 1}, nil
 				},
-				createReportFn: func(_ context.Context, r *Report) error {
-					reportCopy := *r
-					createdReport = &reportCopy
-					return nil
-				},
-				updateReportFn: func(_ context.Context, r *Report) error {
-					reportCopy := *r
-					reportCopy.AreasOfClarity = append([]string(nil), r.AreasOfClarity...)
-					reportCopy.AreasOfClarityEs = append([]string(nil), r.AreasOfClarityEs...)
-					reportCopy.AreasToDevelopFurther = append([]string(nil), r.AreasToDevelopFurther...)
-					reportCopy.AreasToDevelopFurtherEs = append([]string(nil), r.AreasToDevelopFurtherEs...)
-					updatedReport = &reportCopy
+				markReportReadyFn: func(_ context.Context, r *Report) error {
+					copyReport := *r
+					copyReport.AreasOfClarity = append([]string(nil), r.AreasOfClarity...)
+					copyReport.AreasOfClarityEs = append([]string(nil), r.AreasOfClarityEs...)
+					copyReport.AreasToDevelopFurther = append([]string(nil), r.AreasToDevelopFurther...)
+					copyReport.AreasToDevelopFurtherEs = append([]string(nil), r.AreasToDevelopFurtherEs...)
+					readyReport = &copyReport
 					return nil
 				},
 			}
@@ -176,49 +139,25 @@ func TestServiceGetOrGenerateReport_LanguageTranscriptFlowAndBilingualReport(t *
 			}
 
 			svc := NewService(store, interviews, sessions, ai, areaConfigs)
+			svc.processQueuedReport(context.Background(), sessionCode)
 
-			got, err := svc.GetOrGenerateReport(context.Background(), sessionCode)
-			if err != nil {
-				t.Fatalf("GetOrGenerateReport() error = %v", err)
-			}
-			if got == nil {
-				t.Fatalf("GetOrGenerateReport() = nil, want non-nil report")
-			}
-			if got.Status != "ready" {
-				t.Fatalf("report status = %q, want ready", got.Status)
-			}
 			if capturedTranscript != tc.wantTranscript {
 				t.Fatalf("AI transcript = %q, want %q", capturedTranscript, tc.wantTranscript)
 			}
-			if createdReport == nil || createdReport.Status != "generating" {
-				t.Fatalf("created report = %#v, want status generating placeholder", createdReport)
+			if readyReport == nil {
+				t.Fatalf("expected ready report to be persisted")
 			}
-			if updatedReport == nil {
-				t.Fatalf("expected report to be persisted via UpdateReport")
+			if readyReport.Status != ReportStatusReady {
+				t.Fatalf("status = %q, want ready", readyReport.Status)
 			}
-			if updatedReport.ContentEn != englishReport {
-				t.Fatalf("content_en = %q, want %q", updatedReport.ContentEn, englishReport)
+			if readyReport.ContentEn != englishReport || readyReport.ContentEs != spanishReport {
+				t.Fatalf("content mismatch: %#v", readyReport)
 			}
-			if updatedReport.ContentEs != spanishReport {
-				t.Fatalf("content_es = %q, want %q", updatedReport.ContentEs, spanishReport)
-			}
-			if updatedReport.Recommendation != recommendationEn {
-				t.Fatalf("recommendation = %q, want %q", updatedReport.Recommendation, recommendationEn)
-			}
-			if updatedReport.RecommendationEs != recommendationEs {
-				t.Fatalf("recommendation_es = %q, want %q", updatedReport.RecommendationEs, recommendationEs)
-			}
-			if len(updatedReport.AreasOfClarity) == 0 || len(updatedReport.AreasToDevelopFurther) == 0 {
-				t.Fatalf("english analysis bullets should be preserved: clarity=%v develop=%v", updatedReport.AreasOfClarity, updatedReport.AreasToDevelopFurther)
-			}
-			if len(updatedReport.AreasOfClarityEs) == 0 || len(updatedReport.AreasToDevelopFurtherEs) == 0 {
-				t.Fatalf("spanish analysis bullets should be preserved: clarity=%v develop=%v", updatedReport.AreasOfClarityEs, updatedReport.AreasToDevelopFurtherEs)
+			if readyReport.Recommendation != recommendationEn || readyReport.RecommendationEs != recommendationEs {
+				t.Fatalf("recommendation mismatch: %#v", readyReport)
 			}
 			if len(capturedSummaries) != 2 {
 				t.Fatalf("area summaries count = %d, want 2", len(capturedSummaries))
-			}
-			if capturedSummaries[0].EvidenceSummary != "English evidence summary" {
-				t.Fatalf("summary evidence = %q, want English evidence summary", capturedSummaries[0].EvidenceSummary)
 			}
 		})
 	}

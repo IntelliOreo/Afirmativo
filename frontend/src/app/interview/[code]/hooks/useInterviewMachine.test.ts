@@ -15,6 +15,7 @@ import {
 
 const apiMock = vi.fn();
 const submitPendingAnswerJobMock = vi.fn();
+const submitPendingAnswerJobStable = (...args: unknown[]) => submitPendingAnswerJobMock(...args);
 
 vi.mock("@/lib/api", () => ({
   api: (...args: unknown[]) => apiMock(...args),
@@ -22,18 +23,24 @@ vi.mock("@/lib/api", () => ({
 
 vi.mock("./useAsyncAnswerPolling", () => ({
   useAsyncAnswerPolling: () => ({
-    submitPendingAnswerJob: (...args: unknown[]) => submitPendingAnswerJobMock(...args),
+    submitPendingAnswerJob: submitPendingAnswerJobStable,
   }),
 }));
 
 const pendingAnswerStoreReadMock = vi.fn();
 const pendingAnswerStoreWriteMock = vi.fn();
 const pendingAnswerStoreClearMock = vi.fn();
+const answerDraftStoreClearMock = vi.fn();
+let pendingAnswerSnapshot: PendingAnswerSubmission | null = null;
 
 vi.mock("@/lib/storage/pendingAnswerStore", () => ({
   read: (...args: unknown[]) => pendingAnswerStoreReadMock(...args),
   write: (...args: unknown[]) => pendingAnswerStoreWriteMock(...args),
   clear: (...args: unknown[]) => pendingAnswerStoreClearMock(...args),
+}));
+
+vi.mock("@/lib/storage/answerDraftStore", () => ({
+  clear: (...args: unknown[]) => answerDraftStoreClearMock(...args),
 }));
 
 const question = {
@@ -196,7 +203,15 @@ describe("useInterviewMachine", () => {
     pendingAnswerStoreReadMock.mockReset();
     pendingAnswerStoreWriteMock.mockReset();
     pendingAnswerStoreClearMock.mockReset();
-    pendingAnswerStoreReadMock.mockReturnValue(null);
+    answerDraftStoreClearMock.mockReset();
+    pendingAnswerSnapshot = null;
+    pendingAnswerStoreReadMock.mockImplementation(() => pendingAnswerSnapshot);
+    pendingAnswerStoreWriteMock.mockImplementation((_code, pendingJob) => {
+      pendingAnswerSnapshot = pendingJob as PendingAnswerSubmission;
+    });
+    pendingAnswerStoreClearMock.mockImplementation(() => {
+      pendingAnswerSnapshot = null;
+    });
   });
 
   afterEach(() => {
@@ -253,6 +268,44 @@ describe("useInterviewMachine", () => {
       phase: "active",
       secondsLeft: 0,
       answerSecondsLeft: 0,
+    });
+  });
+
+  it("recovers a persisted pending answer before calling start", async () => {
+    pendingAnswerStoreReadMock.mockReturnValue(makePendingJob());
+    submitPendingAnswerJobMock.mockResolvedValue({
+      done: false,
+      nextQuestion: {
+        ...question,
+        turnId: toTurnId("turn-2"),
+        questionNumber: 3,
+      },
+      timerRemainingS: 420,
+      answerSubmitWindowRemainingS: 240,
+    } satisfies AnswerOutcome);
+
+    const setLang = vi.fn();
+    const { result } = renderHook(() => useInterviewMachine({
+      code: "AP-123",
+      lang: "en",
+      langInitialized: true,
+      setLang,
+    }));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(submitPendingAnswerJobMock).toHaveBeenCalledTimes(1);
+    expect(apiMock).not.toHaveBeenCalled();
+    expect(answerDraftStoreClearMock).toHaveBeenCalledWith("AP-123", question.turnId);
+    expect(result.current.state).toMatchObject({
+      phase: "active",
+      question: {
+        turnId: "turn-2",
+        questionNumber: 3,
+      },
     });
   });
 
@@ -375,7 +428,8 @@ describe("useInterviewMachine", () => {
       await Promise.resolve();
     });
 
-    expect(pendingAnswerStoreClearMock).toHaveBeenCalledWith("AP-123");
+    expect(pendingAnswerStoreClearMock).not.toHaveBeenCalled();
+    expect(result.current.canRetryPendingRecovery).toBe(true);
     expect(result.current.state).toEqual({
       phase: "error",
       message: "Automatic final submission could not be confirmed. Reload to continue.",

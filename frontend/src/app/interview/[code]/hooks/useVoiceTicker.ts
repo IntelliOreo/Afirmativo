@@ -6,6 +6,7 @@ interface UseVoiceTickerParams {
   maxSeconds: number;
   warningMilestones: readonly number[];
   onLimitReached: () => void;
+  tickIntervalMs?: number;
 }
 
 interface UseVoiceTickerResult {
@@ -22,6 +23,7 @@ export function useVoiceTicker({
   maxSeconds,
   warningMilestones,
   onLimitReached,
+  tickIntervalMs = 250,
 }: UseVoiceTickerParams): UseVoiceTickerResult {
   const [durationSeconds, setDurationSeconds] = useState(0);
   const [warningSeconds, setWarningSeconds] = useState<number | null>(null);
@@ -82,8 +84,8 @@ export function useVoiceTicker({
 
   const startTicker = useCallback(() => {
     clearTicker();
-    tickerRef.current = window.setInterval(tick, 250);
-  }, [clearTicker, tick]);
+    tickerRef.current = window.setInterval(tick, tickIntervalMs);
+  }, [clearTicker, tick, tickIntervalMs]);
 
   const start = useCallback(() => {
     clearTicker();

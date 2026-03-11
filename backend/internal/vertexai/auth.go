@@ -22,6 +22,7 @@ import (
 )
 
 const googleOAuthScope = "https://www.googleapis.com/auth/cloud-platform"
+const defaultMetadataTokenURL = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
 
 type tokenSource interface {
 	Token(ctx context.Context) (string, error)
@@ -37,6 +38,7 @@ type adcTokenSource struct {
 
 	serviceAccount *serviceAccountCredentials
 	authorizedUser *authorizedUserCredentials
+	metadataTokenURL string
 }
 
 type serviceAccountCredentials struct {
@@ -58,16 +60,20 @@ func newADCTokenSource(httpClient *http.Client, nowFn func() time.Time) (tokenSo
 		return nil, err
 	}
 
+	source := &adcTokenSource{
+		httpClient:       httpClient,
+		nowFn:            nowFn,
+		metadataTokenURL: defaultMetadataTokenURL,
+	}
+	if len(raw) == 0 {
+		return source, nil
+	}
+
 	var envelope struct {
 		Type string `json:"type"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return nil, fmt.Errorf("parse ADC credentials: %w", err)
-	}
-
-	source := &adcTokenSource{
-		httpClient: httpClient,
-		nowFn:      nowFn,
 	}
 	switch strings.TrimSpace(envelope.Type) {
 	case "service_account":
@@ -113,7 +119,7 @@ func (s *adcTokenSource) Token(ctx context.Context) (string, error) {
 	case s.authorizedUser != nil:
 		token, expiry, err = s.refreshAuthorizedUserToken(ctx)
 	default:
-		err = fmt.Errorf("no ADC credentials loaded")
+		token, expiry, err = s.exchangeMetadataToken(ctx)
 	}
 	if err != nil {
 		return "", err
@@ -193,14 +199,56 @@ func loadADCCredentials() ([]byte, error) {
 
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return nil, fmt.Errorf("resolve home directory for ADC lookup: %w", err)
+		return nil, nil
 	}
 	defaultPath := filepath.Join(homeDir, ".config", "gcloud", "application_default_credentials.json")
 	raw, err := os.ReadFile(defaultPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("read ADC credentials: %w", err)
 	}
 	return raw, nil
+}
+
+func (s *adcTokenSource) exchangeMetadataToken(ctx context.Context) (string, time.Time, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.metadataTokenURL, nil)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("build metadata token request: %w", err)
+	}
+	req.Header.Set("Metadata-Flavor", "Google")
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("resolve ADC metadata token: %w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("read metadata token response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", time.Time{}, fmt.Errorf("metadata token exchange status %d", resp.StatusCode)
+	}
+
+	var tokenResp struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int    `json:"expires_in"`
+	}
+	if err := json.Unmarshal(raw, &tokenResp); err != nil {
+		return "", time.Time{}, fmt.Errorf("decode metadata token response: %w", err)
+	}
+	if strings.TrimSpace(tokenResp.AccessToken) == "" {
+		return "", time.Time{}, fmt.Errorf("metadata token response missing access_token")
+	}
+
+	expiry := s.nowFn().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+	if tokenResp.ExpiresIn <= 0 {
+		expiry = s.nowFn().Add(5 * time.Minute)
+	}
+	return tokenResp.AccessToken, expiry, nil
 }
 
 func buildServiceAccountJWT(creds *serviceAccountCredentials, now time.Time) (string, error) {

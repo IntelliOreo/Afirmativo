@@ -102,8 +102,25 @@ export function isReloadRecoveryErrorCode(errorCode: string): boolean {
     || errorCode === "FINAL_AUTO_RECOVERY_REQUIRED";
 }
 
+export function isPendingRecoveryRetryableErrorCode(errorCode: string): boolean {
+  return errorCode === ""
+    || errorCode === "ASYNC_POLL_TIMEOUT"
+    || errorCode === "ASYNC_POLL_CIRCUIT_OPEN"
+    || errorCode === "FINAL_AUTO_RECOVERY_REQUIRED";
+}
+
+export function shouldAttemptStartAfterRecoveryError(errorCode: string): boolean {
+  return errorCode === "TURN_CONFLICT"
+    || errorCode === "IDEMPOTENCY_CONFLICT"
+    || errorCode === "AI_RETRY_EXHAUSTED";
+}
+
 export function shouldClearPendingAnswerOnError(errorCode: string): boolean {
-  return errorCode === "IDEMPOTENCY_CONFLICT";
+  return errorCode === "IDEMPOTENCY_CONFLICT"
+    || errorCode === "TURN_CONFLICT"
+    || errorCode === "SESSION_EXPIRED"
+    || errorCode === "UNAUTHORIZED"
+    || errorCode === "SESSION_MISMATCH";
 }
 
 export function getVoiceCapabilities(params: {

@@ -5,11 +5,14 @@ import { Button } from "@components/Button";
 import { Card } from "@components/Card";
 import type { Lang } from "@/lib/language";
 import { formatDurationLabel, VOICE_MAX_SECONDS, VOICE_WAVE_BARS } from "../constants";
-import type { VoiceRecorderState } from "../viewTypes";
+import type { MicWarmState, VoiceRecorderState } from "../viewTypes";
 import { formatBytes } from "../utils";
 
 interface VoiceRecorderPanelProps {
   lang: Lang;
+  hasMicOptIn: boolean;
+  micWarmState: MicWarmState;
+  onPrepareMicrophone: () => Promise<void>;
   answerTimerLabel: string;
   answerTimerTone: "normal" | "warning" | "danger";
   answerTimerMessage: string;
@@ -72,8 +75,74 @@ function getRecorderStatusMessage(
     : "Audio ready. Review the transcript before submitting.";
 }
 
+function getMicSetupCopy(
+  lang: Lang,
+  hasMicOptIn: boolean,
+  micWarmState: MicWarmState,
+): { message: string; buttonLabel: string; variant: "info" | "warning" | "error"; busy: boolean } {
+  if (micWarmState === "warming") {
+    return {
+      message: lang === "es"
+        ? "Conectando el micrófono. Esto puede tardar un momento."
+        : "Connecting the microphone. This can take a moment.",
+      buttonLabel: lang === "es" ? "Conectando..." : "Connecting...",
+      variant: "info",
+      busy: true,
+    };
+  }
+
+  if (micWarmState === "recovering") {
+    return {
+      message: lang === "es"
+        ? "Reconectando el micrófono para que la próxima grabación empiece sin problemas."
+        : "Reconnecting the microphone so the next recording can start cleanly.",
+      buttonLabel: lang === "es" ? "Reconectando..." : "Reconnecting...",
+      variant: "warning",
+      busy: true,
+    };
+  }
+
+  if (micWarmState === "denied") {
+    return {
+      message: lang === "es"
+        ? "No se concedió acceso al micrófono. Vuelva a intentarlo cuando quiera usar voz."
+        : "Microphone access was not granted. Try again when you want to use voice.",
+      buttonLabel: lang === "es" ? "Habilitar micrófono" : "Enable microphone",
+      variant: "error",
+      busy: false,
+    };
+  }
+
+  if (micWarmState === "error") {
+    return {
+      message: lang === "es"
+        ? "El micrófono necesita reconectarse antes de la próxima grabación."
+        : "The microphone needs to reconnect before the next recording.",
+      buttonLabel: lang === "es" ? "Reconectar micrófono" : "Reconnect microphone",
+      variant: "error",
+      busy: false,
+    };
+  }
+
+  return {
+    message: hasMicOptIn
+      ? (lang === "es"
+        ? "El micrófono quedará listo mientras continúa con la entrevista."
+        : "The microphone will stay ready while you continue the interview.")
+      : (lang === "es"
+        ? "Si piensa responder por voz, habilite el micrófono ahora para evitar demora cuando grabe."
+        : "If you plan to answer by voice, enable the microphone now to avoid delay when you record."),
+    buttonLabel: lang === "es" ? "Habilitar micrófono" : "Enable microphone",
+    variant: hasMicOptIn ? "info" : "warning",
+    busy: false,
+  };
+}
+
 export function VoiceRecorderPanel({
   lang,
+  hasMicOptIn,
+  micWarmState,
+  onPrepareMicrophone,
   answerTimerLabel,
   answerTimerTone,
   answerTimerMessage,
@@ -105,6 +174,11 @@ export function VoiceRecorderPanel({
   onSubmitAnswer,
 }: VoiceRecorderPanelProps) {
   const voiceLimitLabel = formatDurationLabel(VOICE_MAX_SECONDS, lang);
+  const micSetupCopy = getMicSetupCopy(lang, hasMicOptIn, micWarmState);
+  const shouldShowMicSetup =
+    voiceRecorderState === "idle"
+    && !voiceBlob
+    && (micWarmState !== "warm" || !hasMicOptIn);
   const timerToneClass =
     answerTimerTone === "danger"
       ? "border-danger bg-danger-lightest text-danger-dark"
@@ -164,6 +238,23 @@ export function VoiceRecorderPanel({
           style={{ width: `${voiceProgressPct}%` }}
         />
       </div>
+
+      {shouldShowMicSetup && (
+        <Alert variant={micSetupCopy.variant} className="mb-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <span>{micSetupCopy.message}</span>
+            <Button
+              type="button"
+              variant="secondary"
+              className="sm:shrink-0"
+              onClick={() => { void onPrepareMicrophone(); }}
+              disabled={micSetupCopy.busy}
+            >
+              {micSetupCopy.buttonLabel}
+            </Button>
+          </div>
+        </Alert>
+      )}
 
       {voiceReviewWarning && (
         <Alert variant="warning" className="mb-4">

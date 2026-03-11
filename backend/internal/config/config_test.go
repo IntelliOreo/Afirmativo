@@ -34,6 +34,12 @@ func setBaseValidEnv(t *testing.T) {
 		"ASYNC_ANSWER_RECOVERY_EVERY_SECONDS":         "10",
 		"ASYNC_ANSWER_STALE_AFTER_SECONDS":            "180",
 		"ASYNC_ANSWER_JOB_TIMEOUT_SECONDS":            "180",
+		"ASYNC_REPORT_WORKERS":                        "2",
+		"ASYNC_REPORT_QUEUE_SIZE":                     "64",
+		"ASYNC_REPORT_RECOVERY_BATCH":                 "50",
+		"ASYNC_REPORT_RECOVERY_EVERY_SECONDS":         "10",
+		"ASYNC_REPORT_STALE_AFTER_SECONDS":            "180",
+		"ASYNC_REPORT_JOB_TIMEOUT_SECONDS":            "180",
 		"VERIFY_IP_RATE_LIMIT_PER_MINUTE":             "60",
 		"VERIFY_IP_RATE_LIMIT_BURST":                  "10",
 		"VERIFY_FAIL_MAX_ATTEMPTS":                    "5",
@@ -74,6 +80,12 @@ func TestLoad_ParsesNewAsyncAndRateLimitKnobs(t *testing.T) {
 	t.Setenv("ASYNC_ANSWER_RECOVERY_EVERY_SECONDS", "11")
 	t.Setenv("ASYNC_ANSWER_STALE_AFTER_SECONDS", "240")
 	t.Setenv("ASYNC_ANSWER_JOB_TIMEOUT_SECONDS", "200")
+	t.Setenv("ASYNC_REPORT_WORKERS", "3")
+	t.Setenv("ASYNC_REPORT_QUEUE_SIZE", "111")
+	t.Setenv("ASYNC_REPORT_RECOVERY_BATCH", "19")
+	t.Setenv("ASYNC_REPORT_RECOVERY_EVERY_SECONDS", "14")
+	t.Setenv("ASYNC_REPORT_STALE_AFTER_SECONDS", "260")
+	t.Setenv("ASYNC_REPORT_JOB_TIMEOUT_SECONDS", "210")
 	t.Setenv("VERIFY_IP_RATE_LIMIT_PER_MINUTE", "120")
 	t.Setenv("VERIFY_IP_RATE_LIMIT_BURST", "20")
 	t.Setenv("VERIFY_FAIL_MAX_ATTEMPTS", "6")
@@ -96,6 +108,14 @@ func TestLoad_ParsesNewAsyncAndRateLimitKnobs(t *testing.T) {
 		cfg.AsyncAnswerStaleAfterSeconds != 240 ||
 		cfg.AsyncAnswerJobTimeoutSeconds != 200 {
 		t.Fatalf("unexpected async runtime config: %#v", cfg)
+	}
+	if cfg.AsyncReportWorkers != 3 ||
+		cfg.AsyncReportQueueSize != 111 ||
+		cfg.AsyncReportRecoveryBatch != 19 ||
+		cfg.AsyncReportRecoveryEverySeconds != 14 ||
+		cfg.AsyncReportStaleAfterSeconds != 260 ||
+		cfg.AsyncReportJobTimeoutSeconds != 210 {
+		t.Fatalf("unexpected async report config: %#v", cfg)
 	}
 
 	if cfg.VerifyIPRatePerMinute != 120 ||
@@ -162,6 +182,22 @@ func TestLoad_RejectsInvalidVertexAuthMode(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `invalid VERTEX_AI_AUTH_MODE`) {
 		t.Fatalf("error = %v, want VERTEX_AI_AUTH_MODE validation message", err)
+	}
+}
+
+func TestLoad_RejectsVertexProviderWithMockAPIURL(t *testing.T) {
+	setBaseValidEnv(t)
+	t.Setenv("AI_PROVIDER", "vertex")
+	t.Setenv("VERTEX_AI_AUTH_MODE", "adc")
+	t.Setenv("VERTEX_AI_PROJECT_ID", "afirmativo-dev")
+	t.Setenv("MOCK_API_URL", "http://localhost:9999")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatalf("Load() expected error for vertex mock mode")
+	}
+	if !strings.Contains(err.Error(), "MOCK_API_URL is not supported when AI_PROVIDER=vertex") {
+		t.Fatalf("error = %v, want vertex mock validation message", err)
 	}
 }
 

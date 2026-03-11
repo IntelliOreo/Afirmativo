@@ -145,6 +145,15 @@ func main() {
 		reportAIClient,
 		cfg.AreaConfigs,
 	)
+	reportSvc.SetAsyncConfig(report.AsyncConfig{
+		Workers:       cfg.AsyncReportWorkers,
+		QueueSize:     cfg.AsyncReportQueueSize,
+		RecoveryBatch: cfg.AsyncReportRecoveryBatch,
+		RecoveryEvery: time.Duration(cfg.AsyncReportRecoveryEverySeconds) * time.Second,
+		StaleAfter:    time.Duration(cfg.AsyncReportStaleAfterSeconds) * time.Second,
+		JobTimeout:    time.Duration(cfg.AsyncReportJobTimeoutSeconds) * time.Second,
+	})
+	reportSvc.StartAsyncRuntime(asyncRuntimeCtx)
 	reportHandler := report.NewHandler(reportSvc)
 
 	paymentHandler := payment.NewHandler()
@@ -198,6 +207,7 @@ func main() {
 		"POST /api/voice/token",
 		shared.RequireSessionAuth(sessionAuth, voiceTokenIPLimiter.Wrap(voiceTokenSessionLimiter.Wrap(voiceHandler.HandleMintToken))),
 	)
+	mux.HandleFunc("POST /api/report/{code}/generate", shared.RequireSessionAuth(sessionAuth, reportHandler.HandleGenerateReport))
 	mux.HandleFunc("GET /api/report/{code}", shared.RequireSessionAuth(sessionAuth, reportHandler.HandleGetReport))
 	mux.HandleFunc("GET /api/report/{code}/pdf", shared.RequireSessionAuth(sessionAuth, reportHandler.HandleGetReportPDF))
 	mux.HandleFunc("POST /api/payment/checkout", paymentHandler.HandleCheckout)

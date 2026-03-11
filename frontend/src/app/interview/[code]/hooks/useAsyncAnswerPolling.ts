@@ -91,7 +91,6 @@ export function useAsyncAnswerPolling({ code }: UseAsyncAnswerPollingParams) {
           };
         }
 
-        pendingAnswerStore.clear(code);
         if (mapped.status === "canceled") {
           throw buildCodedError(
             mapped.errorMessage || "Processing was canceled. Reload to continue.",

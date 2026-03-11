@@ -47,6 +47,12 @@ type Config struct {
 	AsyncAnswerRecoveryEverySeconds int    // Recovery loop interval in seconds
 	AsyncAnswerStaleAfterSeconds    int    // Running job stale threshold in seconds
 	AsyncAnswerJobTimeoutSeconds    int    // Per-job processing timeout in seconds
+	AsyncReportWorkers              int    // Number of async report worker goroutines
+	AsyncReportQueueSize            int    // In-memory queue size for async report dispatch
+	AsyncReportRecoveryBatch        int    // Max queued reports fetched per recovery cycle
+	AsyncReportRecoveryEverySeconds int    // Report recovery loop interval in seconds
+	AsyncReportStaleAfterSeconds    int    // Running report stale threshold in seconds
+	AsyncReportJobTimeoutSeconds    int    // Per-report processing timeout in seconds
 	VerifyIPRatePerMinute           int    // Max average /api/session/verify requests per minute per IP
 	VerifyIPBurst                   int    // Burst size for /api/session/verify per-IP token bucket
 	VerifyFailMaxAttempts           int    // Max verify failures before lockout per session+IP
@@ -206,6 +212,30 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	asyncReportWorkers, err := envIntMin("ASYNC_REPORT_WORKERS", 2, 1)
+	if err != nil {
+		return Config{}, err
+	}
+	asyncReportQueueSize, err := envIntMin("ASYNC_REPORT_QUEUE_SIZE", 64, 1)
+	if err != nil {
+		return Config{}, err
+	}
+	asyncReportRecoveryBatch, err := envIntMin("ASYNC_REPORT_RECOVERY_BATCH", 50, 1)
+	if err != nil {
+		return Config{}, err
+	}
+	asyncReportRecoveryEveryS, err := envIntMin("ASYNC_REPORT_RECOVERY_EVERY_SECONDS", 10, 1)
+	if err != nil {
+		return Config{}, err
+	}
+	asyncReportStaleAfterS, err := envIntMin("ASYNC_REPORT_STALE_AFTER_SECONDS", 180, 1)
+	if err != nil {
+		return Config{}, err
+	}
+	asyncReportJobTimeoutS, err := envIntMin("ASYNC_REPORT_JOB_TIMEOUT_SECONDS", 180, 1)
+	if err != nil {
+		return Config{}, err
+	}
 	verifyIPRatePerMinute, err := envIntMin("VERIFY_IP_RATE_LIMIT_PER_MINUTE", 60, 1)
 	if err != nil {
 		return Config{}, err
@@ -265,6 +295,12 @@ func Load() (Config, error) {
 		AsyncAnswerRecoveryEverySeconds:         asyncRecoveryEveryS,
 		AsyncAnswerStaleAfterSeconds:            asyncStaleAfterS,
 		AsyncAnswerJobTimeoutSeconds:            asyncJobTimeoutS,
+		AsyncReportWorkers:                      asyncReportWorkers,
+		AsyncReportQueueSize:                    asyncReportQueueSize,
+		AsyncReportRecoveryBatch:                asyncReportRecoveryBatch,
+		AsyncReportRecoveryEverySeconds:         asyncReportRecoveryEveryS,
+		AsyncReportStaleAfterSeconds:            asyncReportStaleAfterS,
+		AsyncReportJobTimeoutSeconds:            asyncReportJobTimeoutS,
 		VerifyIPRatePerMinute:                   verifyIPRatePerMinute,
 		VerifyIPBurst:                           verifyIPBurst,
 		VerifyFailMaxAttempts:                   verifyFailMaxAttempts,
@@ -341,13 +377,14 @@ func Load() (Config, error) {
 		if cfg.VertexAIAuthMode != "api_key" && cfg.VertexAIAuthMode != "adc" {
 			return Config{}, fmt.Errorf("invalid VERTEX_AI_AUTH_MODE %q (expected \"api_key\" or \"adc\")", cfg.VertexAIAuthMode)
 		}
-		if cfg.MockAPIURL == "" {
-			if strings.TrimSpace(cfg.VertexAIProjectID) == "" {
-				return Config{}, fmt.Errorf("VERTEX_AI_PROJECT_ID is required when AI_PROVIDER=vertex")
-			}
-			if cfg.VertexAIAuthMode == "api_key" && strings.TrimSpace(cfg.VertexAIAPIKey) == "" {
-				return Config{}, fmt.Errorf("VERTEX_AI_API_KEY is required when AI_PROVIDER=vertex and VERTEX_AI_AUTH_MODE=api_key")
-			}
+		if strings.TrimSpace(cfg.MockAPIURL) != "" {
+			return Config{}, fmt.Errorf("MOCK_API_URL is not supported when AI_PROVIDER=vertex")
+		}
+		if strings.TrimSpace(cfg.VertexAIProjectID) == "" {
+			return Config{}, fmt.Errorf("VERTEX_AI_PROJECT_ID is required when AI_PROVIDER=vertex")
+		}
+		if cfg.VertexAIAuthMode == "api_key" && strings.TrimSpace(cfg.VertexAIAPIKey) == "" {
+			return Config{}, fmt.Errorf("VERTEX_AI_API_KEY is required when AI_PROVIDER=vertex and VERTEX_AI_AUTH_MODE=api_key")
 		}
 	}
 
@@ -389,6 +426,12 @@ func (c Config) LogLoaded() {
 		"async_answer_recovery_every_seconds", c.AsyncAnswerRecoveryEverySeconds,
 		"async_answer_stale_after_seconds", c.AsyncAnswerStaleAfterSeconds,
 		"async_answer_job_timeout_seconds", c.AsyncAnswerJobTimeoutSeconds,
+		"async_report_workers", c.AsyncReportWorkers,
+		"async_report_queue_size", c.AsyncReportQueueSize,
+		"async_report_recovery_batch", c.AsyncReportRecoveryBatch,
+		"async_report_recovery_every_seconds", c.AsyncReportRecoveryEverySeconds,
+		"async_report_stale_after_seconds", c.AsyncReportStaleAfterSeconds,
+		"async_report_job_timeout_seconds", c.AsyncReportJobTimeoutSeconds,
 		"verify_ip_rate_limit_per_minute", c.VerifyIPRatePerMinute,
 		"verify_ip_rate_limit_burst", c.VerifyIPBurst,
 		"verify_fail_max_attempts", c.VerifyFailMaxAttempts,

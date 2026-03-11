@@ -10,6 +10,8 @@ interface InterviewErrorStateProps {
   code: string;
   error: string;
   isReloadRecoveryError: boolean;
+  canRetryPendingAnswer: boolean;
+  onRetryPendingAnswer: () => void;
   onReloadPage: () => void;
 }
 
@@ -18,6 +20,8 @@ export function InterviewErrorState({
   code,
   error,
   isReloadRecoveryError,
+  canRetryPendingAnswer,
+  onRetryPendingAnswer,
   onReloadPage,
 }: InterviewErrorStateProps) {
   return (
@@ -26,7 +30,21 @@ export function InterviewErrorState({
         {lang === "es" ? "Error: " : "Error: "}
         {error}
       </Alert>
-      {isReloadRecoveryError ? (
+      {canRetryPendingAnswer ? (
+        <>
+          <p className="text-primary-darkest mb-4">
+            {lang === "es"
+              ? "Tiene una respuesta pendiente guardada. Intente reenviarla o recargue la página para continuar."
+              : "A pending answer is still saved. Retry sending it or reload the page to continue."}
+          </p>
+          <Button fullWidth className="mb-3" onClick={onRetryPendingAnswer}>
+            {lang === "es" ? "Reintentar envío" : "Retry send"}
+          </Button>
+          <Button fullWidth className="mb-3" variant="secondary" onClick={onReloadPage}>
+            {lang === "es" ? "Recargar página" : "Reload page"}
+          </Button>
+        </>
+      ) : isReloadRecoveryError ? (
         <>
           <p className="text-primary-darkest mb-4">
             {lang === "es"
