@@ -179,7 +179,7 @@ func TestSubmitAnswerAsync_RejectsExpiredSession(t *testing.T) {
 			}, nil
 		},
 	}
-	svc := NewService(sessions, sessions, sessions, &fakeInterviewStore{}, nil, nil, "", "", "", "", AsyncConfig{})
+	svc := NewService(sessions, sessions, sessions, &fakeInterviewStore{}, nil, nil, "", "", "", "", 300, AsyncConfig{})
 
 	_, err := svc.SubmitAnswerAsync(
 		context.Background(),

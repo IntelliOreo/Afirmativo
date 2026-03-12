@@ -1,6 +1,6 @@
 import type { Lang } from "@/lib/language";
 
-export type WaitingStatusPhase = "startup" | "question" | "finalSubmit" | "report";
+export type WaitingStatusPhase = "startup" | "question" | "report";
 
 export const WAITING_STATUS_ROTATION_MS = 4000;
 export const WAITING_STATUS_INITIAL_DELAY_MS = 2000;
@@ -44,7 +44,6 @@ const WAITING_STATUS_ES = [
 const byPhase = (messages: readonly string[]): Record<WaitingStatusPhase, readonly string[]> => ({
   startup: messages,
   question: messages,
-  finalSubmit: messages,
   report: messages,
 });
 

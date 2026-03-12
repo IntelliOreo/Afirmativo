@@ -1,6 +1,5 @@
 import type { Lang } from "@/lib/language";
 
-export const AUTOSUBMIT_SECONDS = 10; // auto-submit countdown threshold
 export const WARNING_AT_SECONDS = 45 * 60; // orange bar at 45 min remaining
 export const WRAPUP_AT_SECONDS = 5 * 60; // red bar + alert at 5 min remaining
 export const TEXT_ANSWER_MAX_CHARS = 3000;

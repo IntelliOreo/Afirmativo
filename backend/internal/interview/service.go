@@ -54,9 +54,10 @@ type Service struct {
 	areaConfigs      []config.AreaConfig
 	openingTextEn    string
 	openingTextEs    string
-	readinessTextEn  string
-	readinessTextEs  string
-	nowFn            func() time.Time
+	readinessTextEn        string
+	readinessTextEs        string
+	answerTimeLimitSeconds int
+	nowFn                  func() time.Time
 
 	asyncAnswerWorkers       int
 	asyncAnswerRecoveryBatch int
@@ -76,6 +77,7 @@ func NewService(
 	ai InterviewAIClient,
 	areaConfigs []config.AreaConfig,
 	openingTextEn, openingTextEs, readinessTextEn, readinessTextEs string,
+	answerTimeLimitSeconds int,
 	asyncConfig AsyncConfig,
 ) *Service {
 	asyncConfig = asyncConfig.withDefaults()
@@ -92,6 +94,7 @@ func NewService(
 		openingTextEs:            openingTextEs,
 		readinessTextEn:          readinessTextEn,
 		readinessTextEs:          readinessTextEs,
+		answerTimeLimitSeconds:   answerTimeLimitSeconds,
 		nowFn:                    time.Now,
 		asyncAnswerWorkers:       asyncConfig.Workers,
 		asyncAnswerRecoveryBatch: asyncConfig.RecoveryBatch,
@@ -149,14 +152,6 @@ func (s *Service) StartInterview(ctx context.Context, sessionCode, preferredLang
 
 		resuming := answersCount > 0 || currentFlow.Step != FlowStepDisclaimer
 		if currentFlow.ActiveQuestion != nil {
-			if currentFlow.ActiveQuestion.BufferExpired(s.nowFn()) {
-				questionText := currentFlow.ActiveQuestion.TextForLanguage(effectiveLanguage)
-				if _, err := s.processTurn(ctx, sessionCode, "", questionText, currentFlow.ExpectedTurnID); err != nil {
-					return nil, fmt.Errorf("finalize expired active turn: %w", err)
-				}
-				continue
-			}
-
 			overallRemaining := s.calcTimeRemaining(sess)
 			if overallRemaining < 0 {
 				overallRemaining = 0
@@ -216,7 +211,7 @@ func (s *Service) StartInterview(ctx context.Context, sessionCode, preferredLang
 				turnID,
 			)
 			persistCtx, persistCancel := context.WithTimeout(ctx, dbTimeout)
-			_, err = s.stateStore.PrepareReadinessStep(persistCtx, sessionCode, NewIssuedQuestion(q, s.nowFn()))
+			_, err = s.stateStore.PrepareReadinessStep(persistCtx, sessionCode, NewIssuedQuestion(q, s.nowFn(), s.answerTimeLimitSeconds))
 			persistCancel()
 			if err != nil {
 				return nil, fmt.Errorf("prepare readiness step: %w", err)
@@ -230,7 +225,7 @@ func (s *Service) StartInterview(ctx context.Context, sessionCode, preferredLang
 				turnID,
 			)
 			persistCtx, persistCancel := context.WithTimeout(ctx, dbTimeout)
-			_, err = s.stateStore.PrepareDisclaimerStep(persistCtx, sessionCode, NewIssuedQuestion(q, s.nowFn()))
+			_, err = s.stateStore.PrepareDisclaimerStep(persistCtx, sessionCode, NewIssuedQuestion(q, s.nowFn(), s.answerTimeLimitSeconds))
 			persistCancel()
 			if err != nil {
 				return nil, fmt.Errorf("prepare disclaimer step: %w", err)
@@ -244,7 +239,7 @@ func (s *Service) StartInterview(ctx context.Context, sessionCode, preferredLang
 		return &StartResult{
 			Question:                     q,
 			TimerRemainingS:              overallRemaining,
-			AnswerSubmitWindowRemainingS: int(AnswerSubmitWindow / time.Second),
+			AnswerSubmitWindowRemainingS: s.answerTimeLimitSeconds,
 			Area:                         activeArea,
 			Resuming:                     resuming,
 			Language:                     effectiveLanguage,
@@ -345,7 +340,7 @@ func (s *Service) processTurnCore(
 			flowState.QuestionNumber,
 			nextTurnID,
 		)
-		issuedQuestion := NewIssuedQuestion(nextQuestion, s.nowFn())
+		issuedQuestion := NewIssuedQuestion(nextQuestion, s.nowFn(), s.answerTimeLimitSeconds)
 
 		advanceCtx, advanceCancel := context.WithTimeout(ctx, dbTimeout)
 		nextFlow, err := s.stateStore.AdvanceNonCriterionStep(advanceCtx, AdvanceNonCriterionStepParams{
@@ -441,7 +436,7 @@ func (s *Service) processTurnCore(
 			QuestionNumber: flowState.QuestionNumber + 1,
 			TotalQuestions: EstimatedTotalQuestions,
 		}
-		issuedQuestion := NewIssuedQuestion(nextQuestion, s.nowFn())
+		issuedQuestion := NewIssuedQuestion(nextQuestion, s.nowFn(), s.answerTimeLimitSeconds)
 		advanceCtx, advanceCancel := context.WithTimeout(ctx, dbTimeout)
 		nextFlow, err := s.stateStore.AdvanceNonCriterionStep(advanceCtx, AdvanceNonCriterionStepParams{
 			SessionCode:        sessionCode,
@@ -600,22 +595,23 @@ func (s *Service) processTurnCore(
 				QuestionNumber: flowState.QuestionNumber + 1,
 				TotalQuestions: EstimatedTotalQuestions,
 			}
-			issuedQuestion = NewIssuedQuestion(nextQuestion, s.nowFn())
+			issuedQuestion = NewIssuedQuestion(nextQuestion, s.nowFn(), s.answerTimeLimitSeconds)
 		}
 
 		processCtx, processCancel := context.WithTimeout(ctx, dbTimeout)
 		_, err = s.stateStore.ProcessCriterionTurn(processCtx, ProcessCriterionTurnParams{
-			SessionCode:        sessionCode,
-			ExpectedTurnID:     turnID,
-			CurrentArea:        currentArea.Area,
-			QuestionText:       questionText,
-			AnswerText:         answerText,
-			PreferredLanguage:  preferredLanguage,
-			Evaluation:         aiResult.Evaluation,
-			PreAddressed:       preAddressed,
-			Decision:           decision,
-			NextArea:           nextArea,
-			NextIssuedQuestion: issuedQuestion,
+			SessionCode:            sessionCode,
+			ExpectedTurnID:         turnID,
+			CurrentArea:            currentArea.Area,
+			QuestionText:           questionText,
+			AnswerText:             answerText,
+			PreferredLanguage:      preferredLanguage,
+			Evaluation:             aiResult.Evaluation,
+			PreAddressed:           preAddressed,
+			Decision:               decision,
+			NextArea:               nextArea,
+			NextIssuedQuestion:     issuedQuestion,
+			AnswerTimeLimitSeconds: s.answerTimeLimitSeconds,
 		})
 		processCancel()
 		if err != nil {

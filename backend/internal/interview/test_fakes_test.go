@@ -145,7 +145,7 @@ func newInterviewServiceForAsyncTests(store Store, asyncConfig ...AsyncConfig) *
 	if len(asyncConfig) > 0 {
 		cfg = asyncConfig[0]
 	}
-	return NewService(fakeSessions, fakeSessions, fakeSessions, store, nil, nil, "", "", "", "", cfg)
+	return NewService(fakeSessions, fakeSessions, fakeSessions, store, nil, nil, "", "", "", "", 300, cfg)
 }
 
 func (f *fakeInterviewSessionStore) StartSession(ctx context.Context, sessionCode, preferredLanguage string) (*session.Session, error) {

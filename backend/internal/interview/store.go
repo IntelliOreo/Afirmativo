@@ -107,17 +107,18 @@ type AdvanceNonCriterionStepParams struct {
 }
 
 type ProcessCriterionTurnParams struct {
-	SessionCode        string
-	ExpectedTurnID     string
-	CurrentArea        string
-	QuestionText       string
-	AnswerText         string
-	PreferredLanguage  string
-	Evaluation         *Evaluation
-	PreAddressed       []PreAddressedArea
-	Decision           CriterionTurnDecision
-	NextArea           string
-	NextIssuedQuestion *IssuedQuestion
+	SessionCode            string
+	ExpectedTurnID         string
+	CurrentArea            string
+	QuestionText           string
+	AnswerText             string
+	PreferredLanguage      string
+	Evaluation             *Evaluation
+	PreAddressed           []PreAddressedArea
+	Decision               CriterionTurnDecision
+	NextArea               string
+	NextIssuedQuestion     *IssuedQuestion
+	AnswerTimeLimitSeconds int
 }
 
 type PreAddressedArea struct {

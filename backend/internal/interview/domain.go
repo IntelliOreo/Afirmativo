@@ -195,10 +195,9 @@ type IssuedQuestion struct {
 	Question         Question
 	IssuedAt         time.Time
 	AnswerDeadlineAt time.Time
-	BufferDeadlineAt time.Time
 }
 
-func NewIssuedQuestion(question *Question, now time.Time) *IssuedQuestion {
+func NewIssuedQuestion(question *Question, now time.Time, answerTimeLimitSeconds int) *IssuedQuestion {
 	if question == nil {
 		return nil
 	}
@@ -206,8 +205,7 @@ func NewIssuedQuestion(question *Question, now time.Time) *IssuedQuestion {
 	return &IssuedQuestion{
 		Question:         *question,
 		IssuedAt:         issuedAt,
-		AnswerDeadlineAt: issuedAt.Add(AnswerSubmitWindow),
-		BufferDeadlineAt: issuedAt.Add(AnswerSubmitWindow + AnswerSubmitBuffer),
+		AnswerDeadlineAt: issuedAt.Add(time.Duration(answerTimeLimitSeconds) * time.Second),
 	}
 }
 
@@ -220,13 +218,6 @@ func (q *IssuedQuestion) SubmitWindowRemaining(now time.Time) int {
 		return 0
 	}
 	return remaining
-}
-
-func (q *IssuedQuestion) BufferExpired(now time.Time) bool {
-	if q == nil {
-		return false
-	}
-	return !now.UTC().Before(q.BufferDeadlineAt)
 }
 
 func (q *IssuedQuestion) TextForLanguage(preferredLanguage string) string {
@@ -271,11 +262,6 @@ const EstimatedTotalQuestions = 25
 // MaxQuestionsPerArea is the maximum questions (initial + follow-ups) per criterion
 // before the backend marks it complete or insufficient and moves on.
 const MaxQuestionsPerArea = 6
-
-const (
-	AnswerSubmitWindow = 4 * time.Minute
-	AnswerSubmitBuffer = 30 * time.Second
-)
 
 // ── AI response types ───────────────────────────────────────────────
 // These map to the json_schema enforced via output_config in the Claude API call.

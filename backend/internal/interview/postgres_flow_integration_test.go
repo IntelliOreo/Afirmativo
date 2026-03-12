@@ -36,7 +36,7 @@ func TestPostgresStoreAdvanceNonCriterionStepRecordsEventAndAdvancesFlow(t *test
 			TurnID:         "turn-readiness",
 			QuestionNumber: 1,
 			TotalQuestions: EstimatedTotalQuestions,
-		}, time.Now().UTC()),
+		}, time.Now().UTC(), 300),
 	})
 	if err != nil {
 		t.Fatalf("AdvanceNonCriterionStep() error = %v", err)
@@ -109,7 +109,7 @@ func TestPostgresStoreAdvanceNonCriterionStepConflictRollsBack(t *testing.T) {
 			TurnID:         "turn-readiness",
 			QuestionNumber: 1,
 			TotalQuestions: EstimatedTotalQuestions,
-		}, time.Now().UTC()),
+		}, time.Now().UTC(), 300),
 	})
 	assertPostgresIntegrationConflict(t, err)
 
@@ -193,7 +193,7 @@ func TestPostgresStoreProcessCriterionTurnMovesToNextArea(t *testing.T) {
 			TurnID:         "turn-next",
 			QuestionNumber: 4,
 			TotalQuestions: EstimatedTotalQuestions,
-		}, time.Now().UTC()),
+		}, time.Now().UTC(), 300),
 	})
 	if err != nil {
 		t.Fatalf("ProcessCriterionTurn() error = %v", err)
@@ -419,7 +419,7 @@ func TestPostgresStoreProcessCriterionTurnConflictRollsBack(t *testing.T) {
 			TurnID:         "turn-next",
 			QuestionNumber: 3,
 			TotalQuestions: EstimatedTotalQuestions,
-		}, time.Now().UTC()),
+		}, time.Now().UTC(), 300),
 	})
 	assertPostgresIntegrationConflict(t, err)
 

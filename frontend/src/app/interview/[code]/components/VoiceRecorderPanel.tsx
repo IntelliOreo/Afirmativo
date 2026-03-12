@@ -39,6 +39,7 @@ interface VoiceRecorderPanelProps {
   canReviewTranscript: boolean;
   onReviewVoiceAnswer: () => Promise<void>;
   canSubmitAnswer: boolean;
+  isTimerExpired?: boolean;
   transcriptText: string;
   onTranscriptChange: (nextValue: string) => void;
   onSubmitAnswer: () => Promise<void> | void;
@@ -66,9 +67,6 @@ function getRecorderStatusMessage(
     return lang === "es"
       ? "Transcripción lista. Revísela y envíe su respuesta."
       : "Transcript ready. Review it and submit your answer.";
-  }
-  if (voiceRecorderState === "forced_finalizing") {
-    return lang === "es" ? "Finalizando su respuesta..." : "Finalizing your answer...";
   }
   return lang === "es"
     ? "Audio listo. Revise la transcripción antes de enviar."
@@ -169,6 +167,7 @@ export function VoiceRecorderPanel({
   canReviewTranscript,
   onReviewVoiceAnswer,
   canSubmitAnswer,
+  isTimerExpired = false,
   transcriptText,
   onTranscriptChange,
   onSubmitAnswer,
@@ -187,7 +186,7 @@ export function VoiceRecorderPanel({
         : "border-primary/20 bg-primary/5 text-primary-darkest";
 
   const isTranscriptVisible =
-    voiceRecorderState === "review_ready" || voiceRecorderState === "forced_finalizing";
+    voiceRecorderState === "review_ready";
   const primaryButtonLabel =
     voiceRecorderState === "transcribing_for_review"
       ? (lang === "es" ? "Revisando transcripción..." : "Reviewing transcript...")
@@ -308,7 +307,7 @@ export function VoiceRecorderPanel({
             rows={6}
             className="w-full px-3 py-3 text-base border border-base-lighter rounded focus:outline-none focus:ring-2 focus:ring-primary resize-none"
             placeholder={lang === "es" ? "Edite la transcripción aquí..." : "Edit the transcript here..."}
-            readOnly={voiceRecorderState === "forced_finalizing"}
+            readOnly={isTimerExpired}
           />
         </div>
       )}
@@ -319,7 +318,7 @@ export function VoiceRecorderPanel({
             type="button"
             variant="secondary"
             className="!h-14 !w-14 !rounded-full !px-0 !py-0 shadow-sm"
-            disabled={!canDiscardRecording}
+            disabled={!canDiscardRecording || isTimerExpired}
             onClick={onDiscardVoiceRecording}
           >
             ×
@@ -336,7 +335,7 @@ export function VoiceRecorderPanel({
             type="button"
             variant="danger"
             className="!h-16 !w-16 !rounded-full !px-0 !py-0 shadow-md"
-            disabled={!canToggleRecording}
+            disabled={!canToggleRecording || isTimerExpired}
             onClick={() => { void onStartVoiceRecording(); }}
           >
             {voiceIsRecordingActive ? "II" : voiceIsRecordingPaused ? ">" : "●"}
@@ -351,7 +350,7 @@ export function VoiceRecorderPanel({
             type="button"
             variant="secondary"
             className="!h-14 !w-14 !rounded-full !px-0 !py-0 shadow-sm"
-            disabled={!canCompleteRecording}
+            disabled={!canCompleteRecording || isTimerExpired}
             onClick={onCompleteVoiceRecording}
           >
             ✓
@@ -361,6 +360,14 @@ export function VoiceRecorderPanel({
           </span>
         </div>
       </div>
+
+      {isTimerExpired && (
+        <div className="mb-4 rounded-lg border border-danger bg-danger-lightest px-4 py-3 text-danger-dark text-sm font-semibold">
+          {lang === "es"
+            ? "Se acabó el tiempo — por favor envíe su respuesta ahora."
+            : "Time is up — please submit your answer now."}
+        </div>
+      )}
 
       <Button
         type="button"

@@ -133,6 +133,7 @@ func newServiceForRecoveryTests(store Store, sessions *fakeInterviewSessionStore
 		"Opening disclaimer ES",
 		"Default readiness EN",
 		"Default readiness ES",
+		300,
 		AsyncConfig{},
 	)
 }

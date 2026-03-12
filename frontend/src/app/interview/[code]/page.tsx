@@ -10,7 +10,6 @@ import { Card } from "@components/Card";
 import { beforeYouStartContent } from "../../../../content/beforeYouStart";
 import { DisclaimerConsentPanel } from "./components/DisclaimerConsentPanel";
 import { InterviewErrorState } from "./components/InterviewErrorState";
-import { InterviewFinalSubmitState } from "./components/InterviewFinalSubmitState";
 import { InterviewGuardState } from "./components/InterviewGuardState";
 import { InterviewProgressHeader } from "./components/InterviewProgressHeader";
 import { InterviewQuestionCard } from "./components/InterviewQuestionCard";
@@ -98,9 +97,7 @@ function InterviewPageContent() {
   const [activeMicDialogMode, setActiveMicDialogMode] = useState<MicrophoneWarmupDialogMode | null>(null);
   const [micDialogUiState, setMicDialogUiState] = useState<MicrophoneWarmupDialogState>("idle");
   const [suppressReconnectDialog, setSuppressReconnectDialog] = useState(false);
-  const [forceFinalizingVoice, setForceFinalizingVoice] = useState(false);
   const restoredDraftTurnRef = useRef("");
-  const autoFinalizeTurnRef = useRef("");
   const reconnectDialogTimerRef = useRef<number | null>(null);
   const micSuccessHandoffTimerRef = useRef<number | null>(null);
   const shouldKeepMicWarm =
@@ -131,19 +128,16 @@ function InterviewPageContent() {
     discardVoiceRecording,
     toggleVoicePreviewPlayback,
     reviewVoiceRecording,
-    finalizeVoiceRecording,
     setVoiceErrorMessage,
   } = useVoiceRecorder({
     lang,
-    isActive: state.phase === "active" || forceFinalizingVoice,
+    isActive: state.phase === "active",
     shouldKeepMicWarm,
   });
 
   useEffect(() => {
     if (!currentQuestion?.turnId) return;
     restoredDraftTurnRef.current = "";
-    autoFinalizeTurnRef.current = "";
-    setForceFinalizingVoice(false);
     discardVoiceRecording();
   }, [currentQuestion?.turnId, discardVoiceRecording]);
 
@@ -230,7 +224,6 @@ function InterviewPageContent() {
       voiceRecorderState === "recording"
       || voiceRecorderState === "paused"
       || voiceRecorderState === "transcribing_for_review"
-      || voiceRecorderState === "forced_finalizing"
     ) {
       setVoiceErrorMessage(
         lang === "es"
@@ -414,43 +407,16 @@ function InterviewPageContent() {
     handleInputModeSwitch("voice");
   }, [handleInputModeSwitch]);
 
+  const isTimerExpired = answerSecondsLeft <= 0
+    && state.phase === "active"
+    && currentQuestion?.kind === "criterion";
+
   useEffect(() => {
-    if (state.phase !== "active" || !currentQuestion) return;
-    if (answerSecondsLeft > 0) return;
-    if (autoFinalizeTurnRef.current === currentQuestion.turnId) return;
-    autoFinalizeTurnRef.current = currentQuestion.turnId;
-
-    void (async () => {
-      const draftText = state.textAnswer.trim();
-      if (draftText) {
-        requestSubmit(draftText, "finalAuto");
-        return;
-      }
-
-      const hasVoiceInProgress =
-        voiceRecorderState === "recording"
-        || voiceRecorderState === "paused"
-        || voiceRecorderState === "audio_ready"
-        || voiceRecorderState === "review_ready";
-
-      if (!hasVoiceInProgress) {
-        requestSubmit("", "finalAuto");
-        return;
-      }
-
-      setForceFinalizingVoice(true);
-      const transcript = await finalizeVoiceRecording(code);
-      requestSubmit((transcript ?? "").trim(), "finalAuto");
-    })();
-  }, [
-    answerSecondsLeft,
-    code,
-    currentQuestion,
-    finalizeVoiceRecording,
-    requestSubmit,
-    state,
-    voiceRecorderState,
-  ]);
+    if (!isTimerExpired) return;
+    if (voiceRecorderState === "recording" || voiceRecorderState === "paused") {
+      completeVoiceRecording();
+    }
+  }, [isTimerExpired, voiceRecorderState, completeVoiceRecording]);
 
   const handleAgreeAndContinue = useCallback(() => {
     if (state.phase !== "active") return;
@@ -488,8 +454,8 @@ function InterviewPageContent() {
       : "normal";
   const answerTimerMessage = answerSecondsLeft <= 30
     ? (lang === "es"
-      ? "Quedan 0:30 o menos. Su respuesta se finalizará automáticamente cuando llegue a 0:00."
-      : "0:30 or less remain. Your answer will be finalized automatically when the timer reaches 0:00.")
+      ? "Quedan 0:30 o menos. Termine y envíe su respuesta."
+      : "0:30 or less remain. Finish and submit your answer.")
     : answerSecondsLeft <= 60
       ? (lang === "es"
         ? "Queda 1:00 o menos. Termine y envíe su respuesta."
@@ -508,7 +474,6 @@ function InterviewPageContent() {
   const {
     startupWaitStatus,
     questionWaitStatus,
-    finalSubmitWaitStatus,
     reportWaitStatus,
   } = useInterviewWaitingStatus({
     lang,
@@ -584,14 +549,7 @@ function InterviewPageContent() {
             </>
           )}
 
-          {(forceFinalizingVoice || (state.phase === "submitting" && state.submitMode === "finalAuto")) && (
-            <InterviewFinalSubmitState
-              lang={lang}
-              finalSubmitWaitStatus={finalSubmitWaitStatus}
-            />
-          )}
-
-          {(state.phase === "active" || isSubmittingInQuestionFlow) && currentQuestion && !forceFinalizingVoice && (
+          {(state.phase === "active" || isSubmittingInQuestionFlow) && currentQuestion && (
             <>
               {!isConsentQuestion && (
                 <InterviewQuestionCard
@@ -636,7 +594,7 @@ function InterviewPageContent() {
                   <InputModeSwitch
                     lang={lang}
                     inputMode={inputMode}
-                    canSwitchModes={canSwitchModes}
+                    canSwitchModes={canSwitchModes && !isTimerExpired}
                     onSelectText={handleSelectTextInput}
                     onSelectVoice={handleSelectVoiceInput}
                   />
@@ -650,6 +608,7 @@ function InterviewPageContent() {
                       textAnswer={textAnswer}
                       textAnswerCharCount={textAnswerCharCount}
                       maxChars={TEXT_ANSWER_MAX_CHARS}
+                      isTimerExpired={isTimerExpired}
                       onTextAnswerChange={handleTextAnswerChange}
                       onSubmitAnswer={handleSubmitAnswer}
                     />
@@ -659,6 +618,7 @@ function InterviewPageContent() {
                       hasMicOptIn={hasMicOptIn}
                       micWarmState={micWarmState}
                       answerSecondsLeft={answerSecondsLeft}
+                      isTimerExpired={isTimerExpired}
                       textAnswer={textAnswer}
                       voiceRecorderState={voiceRecorderState}
                       voiceDurationSeconds={voiceDurationSeconds}

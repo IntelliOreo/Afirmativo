@@ -42,7 +42,6 @@ interface UseVoiceRecorderResult {
   discardVoiceRecording: () => void;
   toggleVoicePreviewPlayback: () => Promise<void>;
   reviewVoiceRecording: (sessionCode: string) => Promise<string | null>;
-  finalizeVoiceRecording: (sessionCode: string) => Promise<string | null>;
   setVoiceErrorMessage: (message: string) => void;
 }
 
@@ -672,52 +671,8 @@ export function useVoiceRecorder({
     }
   }, [isActive, stopPlayback, voiceRecorderState]);
 
-  const finalizeVoiceRecording = useCallback(async (sessionCode: string): Promise<string | null> => {
-    if (!isActive) return null;
-
-    const trimmedSessionCode = sessionCode.trim();
-    const audioBlob = await stopVoiceRecordingAndWaitForBlob();
-    if (!audioBlob) return null;
-
-    stopPlayback();
-    setVoiceRecorderState("forced_finalizing");
-    setVoiceError("");
-    setVoiceInfo(
-      langRef.current === "es"
-        ? "Finalizando su respuesta..."
-        : "Finalizing your answer...",
-    );
-
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        const transcript = await transcribeAudio(audioBlob, langRef.current, trimmedSessionCode);
-        log.info("voice forced-finalization transcription completed", {
-          phase: "forced_finalization_done",
-          transcript_length: transcript.length,
-          attempt: attempt + 1,
-        });
-        return transcript;
-      } catch (err) {
-        log.error("voice forced-finalization transcription failed", {
-          phase: "forced_finalization_error",
-          attempt: attempt + 1,
-          error: err instanceof Error ? err.message : "unknown_error",
-        });
-        if (attempt === 1) {
-          setVoiceError(
-            err instanceof Error
-              ? err.message
-              : (langRef.current === "es" ? "Error de transcripción." : "Transcription error."),
-          );
-        }
-      }
-    }
-
-    return null;
-  }, [isActive, stopPlayback, stopVoiceRecordingAndWaitForBlob]);
-
   useEffect(() => {
-    if (isActive || voiceRecorderState === "idle" || voiceRecorderState === "forced_finalizing") return;
+    if (isActive || voiceRecorderState === "idle") return;
     discardVoiceRecording();
   }, [discardVoiceRecording, isActive, voiceRecorderState]);
 
@@ -758,7 +713,6 @@ export function useVoiceRecorder({
     discardVoiceRecording,
     toggleVoicePreviewPlayback,
     reviewVoiceRecording,
-    finalizeVoiceRecording,
     setVoiceErrorMessage: setVoiceError,
   };
 }

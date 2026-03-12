@@ -43,6 +43,7 @@ func newServiceForControlFlowTests(store Store, sessions *fakeInterviewSessionSt
 		"Opening disclaimer ES",
 		"Default readiness EN",
 		"Default readiness ES",
+		300,
 		AsyncConfig{},
 	)
 }

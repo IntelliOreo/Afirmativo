@@ -98,15 +98,13 @@ export function isReloadRecoveryErrorCode(errorCode: string): boolean {
     || errorCode === "IDEMPOTENCY_CONFLICT"
     || errorCode === "ASYNC_POLL_TIMEOUT"
     || errorCode === "ASYNC_POLL_CIRCUIT_OPEN"
-    || errorCode === "AI_RETRY_EXHAUSTED"
-    || errorCode === "FINAL_AUTO_RECOVERY_REQUIRED";
+    || errorCode === "AI_RETRY_EXHAUSTED";
 }
 
 export function isPendingRecoveryRetryableErrorCode(errorCode: string): boolean {
   return errorCode === ""
     || errorCode === "ASYNC_POLL_TIMEOUT"
-    || errorCode === "ASYNC_POLL_CIRCUIT_OPEN"
-    || errorCode === "FINAL_AUTO_RECOVERY_REQUIRED";
+    || errorCode === "ASYNC_POLL_CIRCUIT_OPEN";
 }
 
 export function shouldAttemptStartAfterRecoveryError(errorCode: string): boolean {
@@ -141,9 +139,7 @@ export function getVoiceCapabilities(params: {
   } = params;
 
   const isRecordingState = voiceRecorderState === "recording" || voiceRecorderState === "paused";
-  const isBusyState =
-    voiceRecorderState === "transcribing_for_review"
-    || voiceRecorderState === "forced_finalizing";
+  const isBusyState = voiceRecorderState === "transcribing_for_review";
 
   return {
     canSwitchModes:

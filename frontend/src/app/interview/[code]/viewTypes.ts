@@ -1,5 +1,5 @@
 export type InterviewPhase = "guard" | "loading" | "active" | "submitting" | "done" | "error";
-export type SubmitMode = "question" | "finalAuto";
+export type SubmitMode = "question";
 export type ReportStatus = "idle" | "loading" | "generating" | "ready" | "error";
 export type CompletionSource = "finished" | "already_completed";
 export type InputMode = "text" | "voice";
@@ -9,8 +9,7 @@ export type VoiceRecorderState =
   | "paused"
   | "audio_ready"
   | "transcribing_for_review"
-  | "review_ready"
-  | "forced_finalizing";
+  | "review_ready";
 
 export type MicWarmState =
   | "cold"

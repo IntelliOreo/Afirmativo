@@ -121,6 +121,7 @@ func main() {
 		cfg.InterviewOpeningDisclaimerEs,
 		cfg.InterviewReadinessQuestionEn,
 		cfg.InterviewReadinessQuestionEs,
+		cfg.AnswerTimeLimitSeconds,
 		interview.AsyncConfig{
 			Workers:       cfg.AsyncAnswerWorkers,
 			QueueSize:     cfg.AsyncAnswerQueueSize,

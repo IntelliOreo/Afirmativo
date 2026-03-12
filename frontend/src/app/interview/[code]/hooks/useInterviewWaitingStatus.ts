@@ -15,7 +15,6 @@ interface UseInterviewWaitingStatusParams {
 interface UseInterviewWaitingStatusResult {
   startupWaitStatus: string;
   questionWaitStatus: string;
-  finalSubmitWaitStatus: string;
   reportWaitStatus: string;
 }
 
@@ -32,10 +31,6 @@ export function useInterviewWaitingStatus({
     waitCopy.question,
     phase === "submitting" && submitMode === "question",
   );
-  const finalSubmitWaitStatus = useRotatingStatus(
-    waitCopy.finalSubmit,
-    phase === "submitting" && submitMode === "finalAuto",
-  );
   const reportWaitStatus = useRotatingStatus(
     waitCopy.report,
     reportStatus === "loading" || reportStatus === "generating",
@@ -44,7 +39,6 @@ export function useInterviewWaitingStatus({
   return {
     startupWaitStatus,
     questionWaitStatus,
-    finalSubmitWaitStatus,
     reportWaitStatus,
   };
 }

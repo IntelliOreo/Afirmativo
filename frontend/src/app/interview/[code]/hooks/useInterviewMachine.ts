@@ -420,19 +420,6 @@ export function useInterviewMachine({
       } catch (err) {
         if (canceled) return;
 
-        if (submissionMode === "finalAuto") {
-          dispatch({
-            type: "SUBMIT_FAILED",
-            payload: {
-              message: langRef.current === "es"
-                ? "No se pudo confirmar el envío final automático. Recargue para continuar."
-                : "Automatic final submission could not be confirmed. Reload to continue.",
-              code: "FINAL_AUTO_RECOVERY_REQUIRED",
-            },
-          });
-          return;
-        }
-
         const errorCode = extractErrorCode(err);
         if (shouldClearPendingAnswerOnError(errorCode)) {
           clearPendingSubmission(code);

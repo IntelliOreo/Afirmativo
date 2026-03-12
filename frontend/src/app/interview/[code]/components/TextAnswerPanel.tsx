@@ -13,6 +13,7 @@ interface TextAnswerPanelProps {
   textAnswerCharCount: number;
   maxChars: number;
   isReadOnly?: boolean;
+  isTimerExpired?: boolean;
   onTextAnswerChange: (nextValue: string) => void;
   onSubmitAnswer: () => void | Promise<void>;
 }
@@ -26,6 +27,7 @@ export function TextAnswerPanel({
   textAnswerCharCount,
   maxChars,
   isReadOnly = false,
+  isTimerExpired = false,
   onTextAnswerChange,
   onSubmitAnswer,
 }: TextAnswerPanelProps) {
@@ -60,7 +62,7 @@ export function TextAnswerPanel({
           onChange={(e) => onTextAnswerChange(e.target.value.slice(0, maxChars))}
           maxLength={maxChars}
           rows={6}
-          readOnly={isReadOnly}
+          readOnly={isReadOnly || isTimerExpired}
           className="w-full px-3 py-3 text-base border border-base-lighter rounded focus:outline-none focus:ring-2 focus:ring-primary resize-none"
           placeholder={
             lang === "es"
@@ -72,6 +74,14 @@ export function TextAnswerPanel({
           {lang === "es" ? "Caracteres" : "Characters"}: {textAnswerCharCount} / {maxChars}
         </p>
       </div>
+
+      {isTimerExpired && (
+        <div className="mb-4 rounded-lg border border-danger bg-danger-lightest px-4 py-3 text-danger-dark text-sm font-semibold">
+          {lang === "es"
+            ? "Se acab\u00f3 el tiempo \u2014 por favor env\u00ede su respuesta ahora."
+            : "Time is up \u2014 please submit your answer now."}
+        </div>
+      )}
 
       <Button fullWidth disabled={!textAnswer.trim() || isReadOnly} onClick={() => { void onSubmitAnswer(); }}>
         {lang === "es" ? "Enviar respuesta" : "Submit answer"}

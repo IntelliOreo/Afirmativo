@@ -101,6 +101,9 @@ type Config struct {
 	VoiceAIModel               string // Model label returned to the frontend
 	VoiceAITokenTimeoutSeconds int    // Minted token TTL in seconds
 
+	// Interview timing.
+	AnswerTimeLimitSeconds int // Per-question answer time limit in seconds (default 300 = 5 min)
+
 	// Admin maintenance configuration.
 	AdminCleanupEnabled bool // Enables destructive admin cleanup endpoint when true
 }
@@ -175,6 +178,10 @@ func Load() (Config, error) {
 	}
 	if voiceTokenTimeout <= 0 || voiceTokenTimeout > 3600 {
 		return Config{}, fmt.Errorf("VOICE_AI_TOKEN_TIMEOUT_SECONDS must be between 1 and 3600")
+	}
+	answerTimeLimitS, err := envIntMin("ANSWER_TIME_LIMIT_SECONDS", 300, 30)
+	if err != nil {
+		return Config{}, err
 	}
 	adminCleanupEnabled, err := envBool("ADMIN_CLEANUP_ENABLED", false)
 	if err != nil {
@@ -343,6 +350,7 @@ func Load() (Config, error) {
 		VoiceAIAPIKey:                           os.Getenv("VOICE_AI_API_KEY"),
 		VoiceAIModel:                            envOr("VOICE_AI_MODEL", "nova-3"),
 		VoiceAITokenTimeoutSeconds:              voiceTokenTimeout,
+		AnswerTimeLimitSeconds:                  answerTimeLimitS,
 		AdminCleanupEnabled:                     adminCleanupEnabled,
 	}
 
@@ -442,6 +450,7 @@ func (c Config) LogLoaded() {
 		"voice_token_session_rate_limit_per_minute", c.VoiceSessionRatePerMinute,
 		"voice_token_session_rate_limit_burst", c.VoiceSessionBurst,
 		"admin_cleanup_enabled", c.AdminCleanupEnabled,
+		"answer_time_limit_seconds", c.AnswerTimeLimitSeconds,
 	)
 	slog.Debug("AI config loaded",
 		"provider", c.AIProvider,

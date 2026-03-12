@@ -14,6 +14,7 @@ interface VoiceAnswerSectionProps {
   hasMicOptIn: boolean;
   micWarmState: MicWarmState;
   answerSecondsLeft: number;
+  isTimerExpired?: boolean;
   textAnswer: string;
   voiceRecorderState: VoiceRecorderState;
   voiceDurationSeconds: number;
@@ -44,8 +45,8 @@ function answerTimerTone(answerSecondsLeft: number): "normal" | "warning" | "dan
 function answerTimerMessage(lang: Lang, answerSecondsLeft: number): string {
   if (answerSecondsLeft <= 30) {
     return lang === "es"
-      ? "Quedan 0:30 o menos. Su respuesta se finalizará automáticamente cuando llegue a 0:00."
-      : "0:30 or less remain. Your answer will be finalized automatically when the timer reaches 0:00.";
+      ? "Quedan 0:30 o menos. Termine y envíe su respuesta."
+      : "0:30 or less remain. Finish and submit your answer.";
   }
   if (answerSecondsLeft <= 60) {
     return lang === "es"
@@ -62,6 +63,7 @@ export const VoiceAnswerSection = memo(function VoiceAnswerSection({
   hasMicOptIn,
   micWarmState,
   answerSecondsLeft,
+  isTimerExpired = false,
   textAnswer,
   voiceRecorderState,
   voiceDurationSeconds,
@@ -135,6 +137,7 @@ export const VoiceAnswerSection = memo(function VoiceAnswerSection({
       canReviewTranscript={voiceCaps.canReviewTranscript}
       onReviewVoiceAnswer={onReviewVoiceAnswer}
       canSubmitAnswer={voiceCaps.canSubmitAnswer}
+      isTimerExpired={isTimerExpired}
       transcriptText={textAnswer}
       onTranscriptChange={onTranscriptChange}
       onSubmitAnswer={onSubmitAnswer}
