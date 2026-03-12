@@ -44,3 +44,40 @@ export type CodedError = Error & { code?: string };
 export type DisclaimerBlock =
   | { type: "paragraph"; text: string }
   | { type: "list"; items: string[] };
+
+export type ReportErrorCode =
+  | "load_failed"
+  | "queue_failed"
+  | "generation_failed"
+  | "polling_timed_out"
+  | "polling_paused"
+  | "network"
+  | "unknown";
+
+export interface ReportErrorState {
+  code: ReportErrorCode;
+  requestId?: string;
+}
+
+export type VoiceFeedbackCode =
+  | "microphone_permission_denied"
+  | "microphone_unavailable"
+  | "browser_unsupported"
+  | "secure_context_required"
+  | "switch_mode_while_recording"
+  | "recording_failed"
+  | "no_audio_detected"
+  | "audio_playback_failed"
+  | "transcription_failed"
+  | "session_unauthorized"
+  | "voice_api_unavailable"
+  | "limit_reached"
+  | "audio_ready"
+  | "preparing_transcript"
+  | "transcript_ready"
+  | "audio_ready_retry_review";
+
+export interface VoiceFeedback {
+  code: VoiceFeedbackCode;
+  requestId?: string;
+}

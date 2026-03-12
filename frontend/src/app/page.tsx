@@ -12,6 +12,8 @@ import { isAdminToolsEnabled } from "@/lib/env";
 import { withLang } from "@/lib/language";
 import { verifySession } from "@/lib/sessionService";
 import { useLanguage } from "@/lib/useLanguage";
+import { getCommonMessages } from "@/messages/commonMessages";
+import { getLandingMessages, getLandingVerifyErrorMessage } from "@/messages/landingMessages";
 
 export default function LandingPage() {
   const router = useRouter();
@@ -20,6 +22,8 @@ export default function LandingPage() {
   const [pinInput, setPinInput] = useState("");
   const [verificationError, setVerificationError] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
+  const t = getLandingMessages(lang);
+  const common = getCommonMessages(lang);
 
   async function handleVerifySession() {
     if (!sessionCodeInput.trim() || !pinInput.trim()) return;
@@ -31,64 +35,11 @@ export default function LandingPage() {
     const result = await verifySession(normalizedSessionCode, normalizedPin);
     if (result.ok) {
       router.push(withLang(`/interview/${normalizedSessionCode}`, lang));
-    } else if (result.reason === "not_found") {
-      setVerificationError(
-        lang === "es"
-          ? "Código de sesión no encontrado. / Session code not found."
-          : "Session code not found. / Código de sesión no encontrado."
-      );
-    } else if (result.reason === "expired") {
-      setVerificationError(
-        lang === "es"
-          ? "Esta sesión ha expirado. / This session has expired."
-          : "This session has expired. / Esta sesión ha expirado."
-      );
-    } else if (result.reason === "network") {
-      setVerificationError(
-        lang === "es"
-          ? "Error de conexión. Intente de nuevo. / Connection error. Please try again."
-          : "Connection error. Please try again. / Error de conexión."
-      );
     } else {
-      setVerificationError(
-        lang === "es"
-          ? "PIN incorrecto. Intente de nuevo. / Incorrect PIN. Please try again."
-          : "Incorrect PIN. Please try again. / PIN incorrecto."
-      );
+      setVerificationError(getLandingVerifyErrorMessage(lang, result.reason));
     }
     setIsVerifying(false);
   }
-
-  const content = {
-    es: {
-      headline: "Prepárese para su entrevista afirmativa de asilo",
-      subheadline:
-        "Una herramienta de práctica confidencial con reporte bilingüe.",
-      steps: [
-        "Lea Antes de Comenzar y acepte los términos",
-        "Ingrese un cupón o pague en línea",
-        "Realice la entrevista simulada — una pregunta a la vez",
-        "Descargue su reporte de evaluación bilingüe",
-      ],
-      cta: "Comenzar",
-      note: "Sin cuenta. Sin inicio de sesión. Su sesión es completamente anónima.",
-    },
-    en: {
-      headline: "Prepare for your affirmative asylum interview",
-      subheadline:
-        "A confidential practice tool with a bilingual assessment report.",
-      steps: [
-        "Read Before You Start and agree to the terms",
-        "Enter a coupon code or pay online",
-        "Complete the simulated interview — one question at a time",
-        "Download your bilingual assessment report",
-      ],
-      cta: "Get Started",
-      note: "No account. No login. Your session is completely anonymous.",
-    },
-  };
-
-  const t = content[lang];
   const showAdminLink = isAdminToolsEnabled();
 
   return (
@@ -124,7 +75,7 @@ export default function LandingPage() {
           {showAdminLink && (
             <p className="text-sm text-center mb-10">
               <Link href="/admin">
-                Admin (dev): Limpieza DB / DB cleanup
+                {t.adminLink}
               </Link>
             </p>
           )}
@@ -132,19 +83,17 @@ export default function LandingPage() {
           {/* Resume session */}
           <div className="border-t border-base-lighter pt-8">
             <h2 className="text-lg font-bold text-primary-dark mb-2">
-              {lang === "es" ? "¿Ya tiene una sesión?" : "Already have a session?"}
+              {t.resumeHeading}
             </h2>
             <p className="text-sm text-gray-600 mb-4">
-              {lang === "es"
-                ? "Ingrese su código de sesión y PIN para continuar."
-                : "Enter your session code and PIN to continue."}
+              {t.resumeBody}
             </p>
             <form
               onSubmit={(e) => { e.preventDefault(); handleVerifySession(); }}
               className="space-y-3"
             >
               <Input
-                label={lang === "es" ? "Código de sesión" : "Session code"}
+                label={common.sessionCodeLabel}
                 placeholder="AP-XXXX-XXXX"
                 value={sessionCodeInput}
                 onChange={(e) => setSessionCodeInput(e.target.value.toUpperCase())}
@@ -167,9 +116,7 @@ export default function LandingPage() {
                 variant="secondary"
                 disabled={isVerifying || !sessionCodeInput.trim() || !pinInput.trim()}
               >
-                {isVerifying
-                  ? lang === "es" ? "Verificando..." : "Verifying..."
-                  : lang === "es" ? "Reanudar sesión" : "Resume session"}
+                {isVerifying ? common.verifying : t.resumeButton}
               </Button>
             </form>
           </div>

@@ -83,6 +83,7 @@ describe("useInterviewReport", () => {
       ok: false,
       status: 500,
       data: { error: "Report failed", code: "GENERATION_FAILED" },
+      requestId: "req-123",
     });
 
     const { result } = renderHook(() => useInterviewReport("AP-123"));
@@ -94,6 +95,9 @@ describe("useInterviewReport", () => {
     await waitFor(() => {
       expect(result.current.reportStatus).toBe("error");
     });
-    expect(result.current.reportError).toBe("Report failed");
+    expect(result.current.reportError).toEqual({
+      code: "generation_failed",
+      requestId: "req-123",
+    });
   });
 });

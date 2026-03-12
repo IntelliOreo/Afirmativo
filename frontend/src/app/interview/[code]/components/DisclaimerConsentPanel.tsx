@@ -5,6 +5,7 @@ import { Alert } from "@components/Alert";
 import { Button } from "@components/Button";
 import { Card } from "@components/Card";
 import type { Lang } from "@/lib/language";
+import { getInterviewMessages } from "../messages/interviewMessages";
 import type { DisclaimerBlock } from "../viewTypes";
 
 interface DisclaimerConsentPanelProps {
@@ -26,6 +27,8 @@ export function DisclaimerConsentPanel({
   onDisclaimerScroll,
   onAgreeAndContinue,
 }: DisclaimerConsentPanelProps) {
+  const t = getInterviewMessages(lang).disclaimer;
+
   return (
     <>
       <Card className="mb-6">
@@ -58,9 +61,7 @@ export function DisclaimerConsentPanel({
 
       {!hasReachedDisclaimerBottom && (
         <p className="text-sm text-primary-darkest mb-4">
-          {lang === "es"
-            ? "Desplácese hasta el final del aviso para continuar."
-            : "Scroll to the bottom of the disclaimer to continue."}
+          {t.scrollToContinue}
         </p>
       )}
 
@@ -69,7 +70,7 @@ export function DisclaimerConsentPanel({
         disabled={!hasReachedDisclaimerBottom}
         onClick={() => { void onAgreeAndContinue(); }}
       >
-        {lang === "es" ? "Entiendo" : "I understand"}
+        {t.agree}
       </Button>
     </>
   );

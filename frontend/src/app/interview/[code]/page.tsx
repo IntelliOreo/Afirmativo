@@ -17,6 +17,7 @@ import { InputModeSwitch } from "./components/InputModeSwitch";
 import { MicrophoneWarmupDialog } from "./components/MicrophoneWarmupDialog";
 import { ReportSection } from "./components/ReportSection";
 import { TextAnswerPanel } from "./components/TextAnswerPanel";
+import { TimeoutDialog } from "./components/TimeoutDialog";
 import { VoiceAnswerSection } from "./components/VoiceAnswerSection";
 import {
   TEXT_ANSWER_MAX_CHARS,
@@ -29,6 +30,12 @@ import { useInterviewMachine } from "./hooks/useInterviewMachine";
 import { useInterviewReport } from "./hooks/useInterviewReport";
 import { useInterviewWaitingStatus } from "./hooks/useInterviewWaitingStatus";
 import { useVoiceRecorder } from "./hooks/useVoiceRecorder";
+import {
+  getAnswerTimerMessage,
+  getInterviewMessages,
+  getReportErrorMessage,
+  getVoiceFeedbackMessage,
+} from "./messages/interviewMessages";
 import type {
   InputMode,
   MicrophoneWarmupDialogMode,
@@ -53,6 +60,7 @@ function InterviewPageContent() {
   const requestedLang = searchParams.get("lang");
 
   const { lang, setLang, langInitialized } = useInterviewLanguage(code, requestedLang);
+  const t = getInterviewMessages(lang);
   const {
     reportStatus,
     report,
@@ -97,7 +105,12 @@ function InterviewPageContent() {
   const [activeMicDialogMode, setActiveMicDialogMode] = useState<MicrophoneWarmupDialogMode | null>(null);
   const [micDialogUiState, setMicDialogUiState] = useState<MicrophoneWarmupDialogState>("idle");
   const [suppressReconnectDialog, setSuppressReconnectDialog] = useState(false);
+  const [showTimeoutDialog, setShowTimeoutDialog] = useState(false);
   const restoredDraftTurnRef = useRef("");
+  const timedOutTurnRef = useRef("");
+  const timeoutReviewTurnRef = useRef("");
+  const liveExpiredTurnRef = useRef("");
+  const previousAnswerWindowRef = useRef<{ turnId: string; answerSecondsLeft: number } | null>(null);
   const reconnectDialogTimerRef = useRef<number | null>(null);
   const micSuccessHandoffTimerRef = useRef<number | null>(null);
   const shouldKeepMicWarm =
@@ -128,7 +141,7 @@ function InterviewPageContent() {
     discardVoiceRecording,
     toggleVoicePreviewPlayback,
     reviewVoiceRecording,
-    setVoiceErrorMessage,
+    setVoiceErrorFeedback,
   } = useVoiceRecorder({
     lang,
     isActive: state.phase === "active",
@@ -140,6 +153,23 @@ function InterviewPageContent() {
     restoredDraftTurnRef.current = "";
     discardVoiceRecording();
   }, [currentQuestion?.turnId, discardVoiceRecording]);
+
+  useEffect(() => {
+    if (!currentQuestion?.turnId) {
+      setShowTimeoutDialog(false);
+      timedOutTurnRef.current = "";
+      timeoutReviewTurnRef.current = "";
+      liveExpiredTurnRef.current = "";
+      previousAnswerWindowRef.current = null;
+      return;
+    }
+
+    setShowTimeoutDialog(false);
+    timedOutTurnRef.current = "";
+    timeoutReviewTurnRef.current = "";
+    liveExpiredTurnRef.current = "";
+    previousAnswerWindowRef.current = null;
+  }, [currentQuestion?.turnId]);
 
   useEffect(() => {
     if (state.phase !== "active" || !currentQuestion) return;
@@ -225,11 +255,7 @@ function InterviewPageContent() {
       || voiceRecorderState === "paused"
       || voiceRecorderState === "transcribing_for_review"
     ) {
-      setVoiceErrorMessage(
-        lang === "es"
-          ? "Detenga la grabación antes de cambiar de modo."
-          : "Stop recording before switching modes.",
-      );
+      setVoiceErrorFeedback({ code: "switch_mode_while_recording" });
       return;
     }
 
@@ -238,11 +264,7 @@ function InterviewPageContent() {
       && !!voiceBlob
       && voiceRecorderState === "audio_ready";
     if (hasUnreviewedVoice && typeof window !== "undefined") {
-      const confirmed = window.confirm(
-        lang === "es"
-          ? "Tiene audio sin revisar. ¿Desea descartarlo y cambiar de modo?"
-          : "You have audio that has not been reviewed yet. Discard it and switch modes?",
-      );
+      const confirmed = window.confirm(t.page.discardVoiceSwitchConfirm);
       if (!confirmed) return;
       discardVoiceRecording();
     }
@@ -250,8 +272,7 @@ function InterviewPageContent() {
   }, [
     dispatch,
     discardVoiceRecording,
-    lang,
-    setVoiceErrorMessage,
+    setVoiceErrorFeedback,
     state,
     voiceBlob,
     voiceRecorderState,
@@ -271,6 +292,11 @@ function InterviewPageContent() {
 
   const handleSubmitReviewedVoiceAnswer = useCallback(() => {
     if (state.phase !== "active" || !state.textAnswer.trim()) return;
+    requestSubmit(state.textAnswer);
+  }, [requestSubmit, state]);
+
+  const handleTimeoutSubmit = useCallback(() => {
+    if (state.phase !== "active") return;
     requestSubmit(state.textAnswer);
   }, [requestSubmit, state]);
 
@@ -412,16 +438,49 @@ function InterviewPageContent() {
     && currentQuestion?.kind === "criterion";
 
   useEffect(() => {
+    if (state.phase !== "active" || !currentQuestion || currentQuestion.kind !== "criterion") {
+      previousAnswerWindowRef.current = null;
+      return;
+    }
+
+    const previous = previousAnswerWindowRef.current;
+    if (
+      previous
+      && previous.turnId === currentQuestion.turnId
+      && previous.answerSecondsLeft > 0
+      && answerSecondsLeft <= 0
+    ) {
+      liveExpiredTurnRef.current = currentQuestion.turnId;
+    }
+
+    previousAnswerWindowRef.current = {
+      turnId: currentQuestion.turnId,
+      answerSecondsLeft,
+    };
+  }, [answerSecondsLeft, currentQuestion, state.phase]);
+
+  useEffect(() => {
     if (!isTimerExpired) return;
     if (voiceRecorderState === "recording" || voiceRecorderState === "paused") {
       completeVoiceRecording();
     }
   }, [isTimerExpired, voiceRecorderState, completeVoiceRecording]);
 
+  useEffect(() => {
+    if (state.phase !== "active" || !currentQuestion || currentQuestion.kind !== "criterion") {
+      setShowTimeoutDialog(false);
+      return;
+    }
+    if (!isTimerExpired) return;
+    if (timedOutTurnRef.current === currentQuestion.turnId) return;
+    timedOutTurnRef.current = currentQuestion.turnId;
+    setShowTimeoutDialog(true);
+  }, [currentQuestion, isTimerExpired, state.phase]);
+
   const handleAgreeAndContinue = useCallback(() => {
     if (state.phase !== "active") return;
-    requestSubmit(lang === "es" ? "Entiendo" : "I understand");
-  }, [lang, requestSubmit, state.phase]);
+    requestSubmit(t.page.understandAnswer);
+  }, [requestSubmit, state.phase, t.page.understandAnswer]);
 
   const handleReloadPage = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -452,17 +511,42 @@ function InterviewPageContent() {
     : answerSecondsLeft <= 60
       ? "warning"
       : "normal";
-  const answerTimerMessage = answerSecondsLeft <= 30
-    ? (lang === "es"
-      ? "Quedan 0:30 o menos. Termine y envíe su respuesta."
-      : "0:30 or less remain. Finish and submit your answer.")
-    : answerSecondsLeft <= 60
-      ? (lang === "es"
-        ? "Queda 1:00 o menos. Termine y envíe su respuesta."
-        : "1:00 or less remain. Finish and submit your answer.")
-      : (lang === "es"
-        ? "Use este tiempo para revisar y enviar su respuesta final."
-        : "Use this time to review and submit your final answer.");
+  const answerTimerMessage = getAnswerTimerMessage(lang, answerSecondsLeft);
+  const reportErrorMessage = getReportErrorMessage(lang, reportError);
+  const voiceErrorMessage = getVoiceFeedbackMessage(lang, voiceError);
+  const voiceInfoMessage = getVoiceFeedbackMessage(lang, voiceInfo);
+  const hasRecoverableVoiceState =
+    voiceRecorderState === "audio_ready"
+    || voiceRecorderState === "transcribing_for_review"
+    || voiceRecorderState === "review_ready";
+  const hasUsableLocalRecoveryPath =
+    textAnswer.trim().length > 0
+    || hasRecoverableVoiceState;
+  const shouldShowTimeoutDialog =
+    showTimeoutDialog
+    && state.phase === "active"
+    && currentQuestion?.kind === "criterion"
+    && isTimerExpired;
+  const shouldAutoReviewTimedOutVoice =
+    shouldShowTimeoutDialog
+    && isVoiceMode
+    && voiceRecorderState === "audio_ready"
+    && timeoutReviewTurnRef.current !== currentQuestion?.turnId;
+  const isTimeoutDialogTranscribing =
+    shouldShowTimeoutDialog
+    && isVoiceMode
+    && (
+      voiceRecorderState === "recording"
+      || voiceRecorderState === "paused"
+      || voiceRecorderState === "transcribing_for_review"
+      || shouldAutoReviewTimedOutVoice
+    );
+  const isTimeoutDialogInterrupted =
+    shouldShowTimeoutDialog
+    && !isTimeoutDialogTranscribing
+    && !hasUsableLocalRecoveryPath
+    && currentQuestion?.turnId !== undefined
+    && liveExpiredTurnRef.current !== currentQuestion?.turnId;
   const canSwitchModes = getVoiceCapabilities({
     phase: state.phase,
     voiceRecorderState,
@@ -481,6 +565,12 @@ function InterviewPageContent() {
     submitMode,
     reportStatus,
   });
+
+  useEffect(() => {
+    if (!shouldAutoReviewTimedOutVoice || !currentQuestion?.turnId) return;
+    timeoutReviewTurnRef.current = currentQuestion.turnId;
+    void handleReviewVoiceAnswer();
+  }, [currentQuestion?.turnId, handleReviewVoiceAnswer, shouldAutoReviewTimedOutVoice]);
 
   return (
     <div className="interview-page flex flex-col min-h-screen">
@@ -507,7 +597,7 @@ function InterviewPageContent() {
           {state.phase === "loading" && (
             <Card className="text-center py-8">
               <p className="text-primary-darkest mb-3">
-                {lang === "es" ? "Cargando..." : "Loading..."}
+                {t.page.loading}
               </p>
               {startupWaitStatus && (
                 <p className="text-base sm:text-lg text-primary-dark leading-snug">{startupWaitStatus}</p>
@@ -532,7 +622,7 @@ function InterviewPageContent() {
               <ReportSection
                 completionSource={completionSource}
                 report={report}
-                reportError={reportError}
+                reportError={reportErrorMessage}
                 reportStatus={reportStatus}
                 reportWaitStatus={reportWaitStatus}
                 lang={lang}
@@ -543,7 +633,7 @@ function InterviewPageContent() {
 
               <Link href="/">
                 <Button fullWidth variant="secondary">
-                  {lang === "es" ? "Volver al inicio" : "Back to home"}
+                  {t.page.backHome}
                 </Button>
               </Link>
             </>
@@ -567,10 +657,19 @@ function InterviewPageContent() {
                 />
               )}
 
+              {shouldShowTimeoutDialog && (
+                <TimeoutDialog
+                  lang={lang}
+                  isInterrupted={isTimeoutDialogInterrupted}
+                  isTranscribing={isTimeoutDialogTranscribing}
+                  onSubmit={handleTimeoutSubmit}
+                />
+              )}
+
               {isSubmittingInQuestionFlow ? (
                 <Card className="mb-6 text-center py-10 px-4">
                   <p className="text-xs font-semibold uppercase tracking-wider text-primary">
-                    {lang === "es" ? "Procesando respuesta" : "Processing answer"}
+                    {t.page.processingAnswer}
                   </p>
                   {questionWaitStatus && (
                     <p className="mt-3 text-base sm:text-lg text-primary-dark leading-snug">
@@ -628,8 +727,8 @@ function InterviewPageContent() {
                       isVoicePreviewPlaying={isVoicePreviewPlaying}
                       onToggleVoicePreviewPlayback={toggleVoicePreviewPlayback}
                       voiceIsRecordingActive={voiceIsRecordingActive}
-                      voiceError={voiceError}
-                      voiceInfo={voiceInfo}
+                      voiceError={voiceErrorMessage}
+                      voiceInfo={voiceInfoMessage}
                       voiceIsRecordingPaused={voiceIsRecordingPaused}
                       onPrepareMicrophone={handleEnableMicrophone}
                       onDiscardVoiceRecording={discardVoiceRecording}

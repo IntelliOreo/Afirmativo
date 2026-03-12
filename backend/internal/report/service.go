@@ -15,15 +15,15 @@ import (
 )
 
 const (
-	sessionCompleted                 = "completed"
-	defaultAsyncReportWorkers        = 2
-	defaultAsyncReportQueueSize      = 64
-	defaultAsyncReportRecoveryBatch  = 50
-	defaultAsyncReportRecoveryEvery  = 10 * time.Second
-	defaultAsyncReportStaleAfter     = 3 * time.Minute
-	defaultAsyncReportJobTimeout     = 3 * time.Minute
-	reportAIMaxAttempts              = 3
-	reportAIRetryDelay               = 500 * time.Millisecond
+	sessionCompleted                = "completed"
+	defaultAsyncReportWorkers       = 2
+	defaultAsyncReportQueueSize     = 64
+	defaultAsyncReportRecoveryBatch = 50
+	defaultAsyncReportRecoveryEvery = 10 * time.Second
+	defaultAsyncReportStaleAfter    = 3 * time.Minute
+	defaultAsyncReportJobTimeout    = 3 * time.Minute
+	reportAIMaxAttempts             = 3
+	reportAIRetryDelay              = 500 * time.Millisecond
 )
 
 type AsyncConfig struct {
@@ -91,13 +91,14 @@ type Service struct {
 	areaConfigs []config.AreaConfig
 	nowFn       func() time.Time
 
-	asyncWorkers       int
-	asyncRecoveryBatch int
-	asyncRecoveryEvery time.Duration
-	asyncStaleAfter    time.Duration
-	asyncJobTimeout    time.Duration
-	asyncQueue         chan string
-	asyncRuntimeOnce   sync.Once
+	asyncWorkers          int
+	asyncRecoveryBatch    int
+	asyncRecoveryEvery    time.Duration
+	asyncStaleAfter       time.Duration
+	asyncJobTimeout       time.Duration
+	asyncQueue            chan string
+	asyncRuntimeOnce      sync.Once
+	asyncReportRequestIDs sync.Map
 }
 
 // NewService creates a new report service.
@@ -225,13 +226,14 @@ func (s *Service) enqueueReport(sessionCode string) bool {
 	if trimmed == "" || s.asyncQueue == nil {
 		return false
 	}
+	requestID := s.asyncReportRequestID(trimmed)
 
 	select {
 	case s.asyncQueue <- trimmed:
-		slog.Debug("async report queued for worker pickup", "session_code", trimmed)
+		slog.Debug("async report queued for worker pickup", "session_code", trimmed, "request_id", requestID)
 		return true
 	default:
-		slog.Warn("async report queue is full; report remains queued", "session_code", trimmed)
+		slog.Warn("async report queue is full; report remains queued", "session_code", trimmed, "request_id", requestID)
 		return false
 	}
 }
@@ -252,6 +254,9 @@ func (s *Service) GetReport(ctx context.Context, sessionCode string) (*Report, e
 }
 
 func (s *Service) GenerateReportAsync(ctx context.Context, sessionCode string) (*Report, error) {
+	if requestID := shared.RequestIDFromContext(ctx); requestID != "" {
+		s.asyncReportRequestIDs.Store(strings.TrimSpace(sessionCode), requestID)
+	}
 	if _, err := s.getCompletedSession(ctx, sessionCode); err != nil {
 		return nil, err
 	}
@@ -316,15 +321,18 @@ func (s *Service) processQueuedReport(ctx context.Context, sessionCode string) {
 	claimCtx, claimCancel := context.WithTimeout(ctx, 5*time.Second)
 	reportRecord, err := s.store.ClaimQueuedReport(claimCtx, sessionCode)
 	claimCancel()
+	requestID := s.asyncReportRequestID(sessionCode)
 	if err != nil {
-		slog.Error("failed to claim queued report", "session_code", sessionCode, "error", err)
+		slog.Error("failed to claim queued report", "session_code", sessionCode, "request_id", requestID, "error", err)
 		return
 	}
 	if reportRecord == nil {
 		return
 	}
+	defer s.asyncReportRequestIDs.Delete(reportRecord.SessionCode)
 
 	slog.Info("async report claimed",
+		"request_id", requestID,
 		"session_code", reportRecord.SessionCode,
 		"attempts", reportRecord.Attempts,
 	)
@@ -349,9 +357,9 @@ func (s *Service) processQueuedReport(ctx context.Context, sessionCode string) {
 
 	successCtx, successCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := s.store.MarkReportReady(successCtx, reportResult); err != nil {
-		slog.Error("failed to mark report ready", "session_code", reportRecord.SessionCode, "error", err)
+		slog.Error("failed to mark report ready", "session_code", reportRecord.SessionCode, "request_id", requestID, "error", err)
 	} else {
-		slog.Info("async report marked ready", "session_code", reportRecord.SessionCode)
+		slog.Info("async report marked ready", "session_code", reportRecord.SessionCode, "request_id", requestID)
 	}
 	successCancel()
 }
@@ -360,6 +368,7 @@ func (s *Service) markReportFailed(ctx context.Context, sessionCode string, err 
 	if errors.Is(err, context.Canceled) {
 		slog.Info("async report canceled before terminal persistence; leaving report for recovery",
 			"session_code", sessionCode,
+			"request_id", s.asyncReportRequestID(sessionCode),
 		)
 		return
 	}
@@ -371,6 +380,7 @@ func (s *Service) markReportFailed(ctx context.Context, sessionCode string, err 
 	if markErr != nil {
 		slog.Error("failed to mark report failed",
 			"session_code", sessionCode,
+			"request_id", s.asyncReportRequestID(sessionCode),
 			"error_code", errorCode,
 			"error", markErr,
 		)
@@ -379,9 +389,19 @@ func (s *Service) markReportFailed(ctx context.Context, sessionCode string, err 
 
 	slog.Warn("async report marked failed",
 		"session_code", sessionCode,
+		"request_id", s.asyncReportRequestID(sessionCode),
 		"error_code", errorCode,
 		"error", err,
 	)
+}
+
+func (s *Service) asyncReportRequestID(sessionCode string) string {
+	value, ok := s.asyncReportRequestIDs.Load(strings.TrimSpace(sessionCode))
+	if !ok {
+		return ""
+	}
+	requestID, _ := value.(string)
+	return strings.TrimSpace(requestID)
 }
 
 func reportFailureDetails(err error) (string, string) {

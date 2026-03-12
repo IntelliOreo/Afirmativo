@@ -547,6 +547,8 @@ page.tsx
 
 ## 13. Production Readiness Assessment
 
+**Deployment assumption**: The app targets low user volume and runs as a single frontend container + single backend container. The weaknesses below are scored with that constraint in mind -- items that would be critical at scale are noted but acceptable at current scope.
+
 ### Strengths
 
 1. **Async job processing with recovery** -- the recovery loop catches orphaned jobs every 10s. This is production-grade resilience.
@@ -562,23 +564,19 @@ page.tsx
 
 ### Weaknesses
 
-#### High Severity
-
-1. **In-memory channel as job queue** -- `asyncAnswerQueue chan string` lives in process memory. If the Go server restarts, all jobs in the channel are lost. The recovery loop re-picks from DB, but there is a **10s window** where jobs sit in limbo. Under load during deploys, this causes noticeable delays.
-
-2. **Single-server assumption** -- Rate limiters (`ratelimit.go`), lockout state (`lockout.go`), and the async job channel are all in-memory. Scaling to multiple backend instances requires moving these to Redis or similar shared state.
-
-3. **No dead-letter queue or alerting** -- Failed jobs are marked terminal but there is no mechanism to re-process them or alert on failure rates. During an extended AI provider outage, failed jobs accumulate silently with no operator visibility.
-
 #### Medium Severity
+
+1. **In-memory channel as job queue** -- `asyncAnswerQueue chan string` lives in process memory. If the Go server restarts, all jobs in the channel are lost. The recovery loop re-picks from DB, but there is a **10s window** where jobs sit in limbo. Acceptable at single-container scale; would need an external queue (e.g., Cloud Tasks, Redis) before horizontal scaling.
+
+2. **Single-server assumption** -- Rate limiters (`ratelimit.go`), lockout state (`lockout.go`), and the async job channel are all in-memory. Fine for one backend container; scaling to multiple instances requires moving these to shared state.
+
+3. **No dead-letter queue or alerting** -- Failed jobs are marked terminal but there is no mechanism to re-process them or alert on failure rates. At low volume, manual log inspection is feasible. Would need automated alerting before scaling.
 
 4. **Timer drift on frontend** -- The `TICK` uses `setInterval(1000)`. JavaScript timers are imprecise: tab backgrounding, heavy rendering, or GC pauses cause drift. The server is the source of truth for expiry, but the user sees a misleading countdown. A `Date.now()` comparison approach would be more accurate.
 
-5. **No distributed tracing** -- There is logging with session codes, but no distributed trace IDs (OpenTelemetry, X-Request-ID propagation). Debugging a specific user's flow across frontend -> backend -> AI provider requires correlating logs manually.
+5. **Partial request correlation** -- `X-Request-Id` is now propagated across HTTP requests and async worker logs, and the frontend logs it on failed calls. Full distributed tracing (OpenTelemetry spans across frontend -> backend -> AI provider) is not yet in place.
 
 6. **Fallback substitution is invisible to users** -- When AI retries exhaust and a fallback question/evaluation is used, the user does not know quality degraded. The interview continues with generic questions, potentially producing a less useful report.
-
-7. **Error messages are hardcoded in two languages** -- Some error messages in the frontend are inline bilingual strings (e.g., useInterviewMachine.ts:427-429). This does not scale and is easy to get out of sync.
 
 #### Low Severity / Not-Yet-Wired
 
@@ -623,3 +621,332 @@ page.tsx
 - **AI providers are interchangeable** -- the `InterviewAIClient` interface abstracts everything. Adding a new provider means implementing one method.
 - **The recovery loop is your safety net** -- if something goes wrong with the in-memory queue, the recovery loop will fix it within 10 seconds.
 - **Every DB call has a 5s timeout** -- follow the same pattern: `dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout); defer dbCancel()`.
+
+---
+
+The Full Answer → Next Question Pipeline
+
+FRONTEND (browser)                          BACKEND (Go server)                         BACKGROUND
+═══════════════════                         ═══════════════════                         ══════════
+
+1. User clicks submit
+       │
+       ▼
+2. dispatch(SUBMIT_REQUESTED)               
+   state: active → submitting               
+       │                                    
+       ▼                                    
+3. pendingAnswerStore.write()  ◄── localStorage checkpoint (crash safety)
+       │
+       ▼
+4. POST /api/interview/answer-async  ──────► 5. SubmitAnswerAsync()
+   { session_code, answer_text,                    │
+     question_text, turn_id,                       ▼
+     client_request_id }                     6. UpsertAnswerJob()  ◄── INSERT ... ON CONFLICT
+                                                   │                    (idempotency via client_request_id)
+                                                   ▼
+                                             7. Validate payload matches idempotency key
+                                                   │
+                                                   ▼
+                                             8. enqueueAsyncAnswerJob()  ──────► channel <- jobID
+                                                   │                                  │
+                                                   ▼                                  │
+   ◄─────────────────────────────────────── 9. Return { jobId, status: "queued" }     │
+       │                                                                              │
+       ▼                                                           ┌──────────────────┘
+10. Save jobId to pendingAnswerStore                               ▼
+       │                                                    11. Worker picks up jobID
+       ▼                                                           │
+11. Start polling loop                                             ▼
+       │                                                    12. ClaimQueuedAnswerJob()
+       │                                                        UPDATE SET status='running'
+       │                                                        WHERE status='queued'  ◄── atomic claim
+       │                                                           │
+       │                                                           ▼
+       │                                                    13. processTurnCore()
+       │                                                           │
+       │                                                           ├── GetSessionByCode()     ◄── sequential
+       │                                                           ├── GetFlowState()          ◄── sequential
+       │                                                           ├── refreshAreaState()      ◄── sequential
+       │                                                           ├── Check turnID match      ◄── sequential
+       │                                                           ├── Check time remaining    ◄── sequential
+       │                                                           │
+       │                                                           ▼
+       │                                                    14. callAIWithRetry()
+       │                                                        ┌─ Attempt 1: GenerateTurn() ──► Claude/Vertex
+       │                                                        │  (fail?) wait 3s
+       │                                                        ├─ Attempt 2: GenerateTurn() ──► Claude/Vertex  
+       │                                                        │  (fail?) wait 7s
+       │                                                        └─ Attempt 3: GenerateTurn() ──► Claude/Vertex
+       │                                                           │
+       │                                                           ▼  (or fallback if all fail)
+       │                                                    15. DecideCriterionTurn()
+       │                                                        - sufficient → mark complete, find next area
+       │                                                        - partial → follow-up in same area
+       │                                                        - insufficient → mark, move on
+       │                                                           │
+       │                                                           ▼
+       │                                                    16. [If moving to next area]
+       │                                                        callAIWithRetry() AGAIN  ◄── 2nd AI call!
+       │                                                        to generate the opening question
+       │                                                        for the NEW area
+       │                                                           │
+       │                                                           ▼
+       │                                                    17. ProcessCriterionTurn()  ◄── single DB transaction
+       │                                                        - Save answer
+       │                                                        - Update area status
+       │                                                        - Store next question as ActiveQuestion
+       │                                                        - Advance flow state
+       │                                                           │
+       │                                                           ▼
+       │                                                    18. MarkAnswerJobSucceeded()
+       │                                                        - Serialize next question to JSON payload
+       │                                                        - UPDATE SET status='succeeded', result_payload=...
+       │                                                           │
+       ▼                                                           │
+12. GET /api/interview/answer-jobs/{jobId} ──► GetAnswerJobResult()
+    attempt 0: wait ~1s                        status still "running" → return {status: "running"}
+       │
+       ▼
+    attempt 1: wait ~2s  ──────────────────► GetAnswerJobResult()
+                                              status = "succeeded" → deserialize payload
+                                              return { done, nextQuestion, timerRemainingS, ... }
+       │
+       ▼
+13. pendingAnswerStore.clear()
+       │
+       ▼
+14. dispatch(SUBMIT_SUCCEEDED)
+    state: submitting → active (with new question)
+       │
+       ▼
+15. User sees next question
+
+## What's Async vs Sequential
+Async (concurrent/non-blocking)
+What	Why async
+Worker processing vs frontend polling	The worker processes the job in a background goroutine while the frontend polls independently. They don't know about each other.
+AI call	Takes 5-30s. This is THE reason the whole pipeline is async.
+Recovery loop (every 10s)	Runs independently of both HTTP handlers and workers. Catches orphaned jobs.
+The 2nd AI call (next area opening question)	Happens inside the same worker, but it's a second round-trip to the AI provider — this is why some polls take longer than others.
+Sequential (must happen in order)
+Inside processTurnCore(), everything is strictly sequential:
+
+
+GetSession → GetFlowState → refreshAreaState → validate turnID
+    → AI call #1 (evaluate answer)
+        → DecideCriterionTurn (pure logic)
+            → [conditional] AI call #2 (next area opening question)
+                → ProcessCriterionTurn (DB transaction)
+                    → MarkAnswerJobSucceeded
+There is no parallelism inside the worker. This is deliberate — each step depends on the output of the previous step. The AI evaluation determines the decision, the decision determines whether a 2nd AI call is needed, and the DB transaction must include everything.
+
+## The Two AI Calls — This Is the Key Insight
+When the AI decides to stay in the same area (follow-up question), there is one AI call. The nextQuestion text comes directly from the evaluation response.
+
+When the AI decides to move to a new area, there are two AI calls in sequence:
+
+AI Call #1 — evaluate the current answer, get decision + evaluation
+AI Call #2 — generateNextAreaOpeningQuestion() at service.go:690-751 — generate an opening question for the next area, with full context of all previous answers
+This means area transitions take roughly 2x longer than follow-ups. The frontend polling backoff accounts for this — it starts at 1s intervals and grows to 30s.
+
+## The Firing Order Summary
+
+FIRE 1 (sync):   HTTP handler → UpsertAnswerJob → enqueue to channel → return jobId
+FIRE 2 (async):  Worker claims job → AI call(s) → DB update → mark succeeded
+FIRE 3 (async):  Frontend polls until succeeded → dispatch next question
+Fire 1 returns in <100ms. Fire 2 takes 5-60s depending on AI latency and whether it's 1 or 2 AI calls. Fire 3 adds 1-5s of polling overhead on top of Fire 2.
+
+so we made 2 ai call per answer, and separate asking for the answer evaluation or new question generation? can you point out where they are?
+Not exactly 2 AI calls per answer. It depends on what happens after evaluation. Let me point you to the exact locations.
+
+## When There's 1 AI Call (follow-up in same area)
+This is the common case. At service.go:514 inside the FlowStepCriterion branch:
+
+
+aiResult, err := s.callAIWithRetry(ctx, turnCtx, failureRecorder)
+This single call returns both the evaluation AND the next question in one response. The AIResponse struct contains:
+
+aiResult.Evaluation — how the answer scored (sufficient/partial/insufficient)
+aiResult.NextQuestion — the follow-up question text
+If DecideCriterionTurn() says "stay in this area" (CriterionTurnActionContinue), the aiResult.NextQuestion from this first call is used directly. One AI call total.
+
+## When There's 2 AI Calls (moving to a new area)
+When the decision is CriterionTurnActionNext (move to next area), a second AI call fires at service.go:572:
+
+
+nextQuestionText, nextAreaSubstituted, err = s.generateNextAreaOpeningQuestion(
+    ctx, sessionCode, nextArea, projectedAreas, projectedAnswers,
+    sess, preferredLanguage, timeRemainingS, failureRecorder,
+)
+This calls into service.go:690-751, which builds a fresh AITurnContext with IsOpeningTurn: true for the new area and calls:
+
+
+nextAreaAIResult, err := s.callAIWithRetry(ctx, openingTurnCtx, failureRecorder)
+The reason: the first AI call evaluated the answer in the context of the current area. But the opening question for the next area needs different context — different description, different sufficiency requirements, different status. So it's a separate prompt.
+
+## The FlowStepReadiness case also makes 1 AI call
+At service.go:416:
+
+
+aiResult, err := s.callAIWithRetry(ctx, turnCtx, failureRecorder)
+This generates the first criterion question after the readiness step. No evaluation here — it's just question generation with IsOpeningTurn: true.
+
+## Summary
+Scenario	AI Calls	Where
+Readiness → first criterion question	1	service.go:416
+Criterion answer, stay in same area	1	service.go:514
+Criterion answer, move to next area	2	service.go:514 + service.go:736
+Disclaimer acknowledgment	0	Pure state transition, no AI
+So it's 1 AI call most of the time, and 2 only on area transitions. The first call always does evaluation + suggested next question. The second call (when needed) generates a context-appropriate opening question for the new area, discarding the next-question from the first call.
+
+===
+
+Path A: Follow-Up in Same Area (1 AI Call)
+This happens when the AI says "partial" or "insufficient but follow-ups remain."
+
+
+processTurnCore() — FlowStepCriterion branch
+=============================================
+
+ 1. GetSessionByCode()                          ← DB read
+ 2. Check session not expired
+ 3. GetFlowState()                               ← DB read
+ 4. refreshAreaState()                           ← DB read
+ 5. Validate turnID == flowState.ExpectedTurnID
+ 6. Check timeRemainingS > 0
+ 7. GetAnswersBySession()                        ← DB read (history for AI context)
+ 8. Build AITurnContext with IsOpeningTurn=false
+
+ 9. ┌─────────────────────────────────────────┐
+    │  AI CALL #1: callAIWithRetry()          │  ← EVALUATE answer + suggest next question
+    │  Returns: Evaluation + NextQuestion     │
+    └─────────────────────────────────────────┘
+
+10. DecideCriterionTurn(evaluation, questionsCount, maxPerArea)
+    Result: { Action: "continue", MarkCurrentAs: "" }
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    "continue" = stay in this area, ask follow-up
+
+11. DetermineNextAreaAfterCriterionTurn()
+    Result: nextArea = currentArea (same area)
+
+12. Use aiResult.NextQuestion as the follow-up text  ← from AI Call #1
+13. Generate new turnID (crypto/rand)
+14. Build NextIssuedQuestion
+
+15. ProcessCriterionTurn()                       ← DB TRANSACTION
+    - Save answer to answers table
+    - Update area status
+    - Store NextIssuedQuestion as ActiveQuestion
+    - Advance ExpectedTurnID
+    - Increment QuestionNumber
+
+16. Return AnswerResult{
+      Done: false,
+      NextQuestion: follow-up question (same area),
+      Substituted: false,
+    }
+
+    → processAnswerJob() sees Substituted=false
+    → MarkAnswerJobSucceeded(payload with next question)
+    → Frontend polls, gets "succeeded", dispatches SUBMIT_SUCCEEDED
+    → User sees follow-up question in same area
+Path B: Move to Next Criterion Area (2 AI Calls)
+This happens when the AI says "sufficient", or "insufficient/partial but max questions reached."
+
+
+processTurnCore() — FlowStepCriterion branch
+=============================================
+
+ 1–8. (identical to Path A)
+
+ 9. ┌─────────────────────────────────────────┐
+    │  AI CALL #1: callAIWithRetry()          │  ← EVALUATE answer + suggest next question
+    │  Returns: Evaluation + NextQuestion     │
+    └─────────────────────────────────────────┘
+
+10. DecideCriterionTurn(evaluation, questionsCount, maxPerArea)
+    Result: { Action: "next", MarkCurrentAs: "complete" }
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    "next" = done with this area, move on
+
+11. DetermineNextAreaAfterCriterionTurn()
+    Result: nextArea = "credible-fear" (different area)
+
+12. decision.Action == "next", so DISCARD aiResult.NextQuestion
+    ↓
+13. ┌─────────────────────────────────────────┐
+    │  AI CALL #2: generateNextAreaOpening()  │  ← GENERATE opening question for NEW area
+    │  Builds fresh AITurnContext with:       │
+    │    - IsOpeningTurn = true               │
+    │    - CurrentAreaSlug = "credible-fear"  │
+    │    - New area's description/reqs        │
+    │    - Full answer history                │
+    │  Returns: NextQuestion text             │
+    └─────────────────────────────────────────┘
+
+14. Generate new turnID (crypto/rand)
+15. Build NextIssuedQuestion for the NEW area
+
+16. ProcessCriterionTurn()                       ← DB TRANSACTION
+    - Save answer to answers table
+    - Mark CURRENT area as "complete"
+    - Set NEW area to "in_progress"
+    - Apply pre_addressed flags to other areas
+    - Store NextIssuedQuestion as ActiveQuestion
+    - Advance ExpectedTurnID
+    - Increment QuestionNumber
+
+17. Return AnswerResult{
+      Done: false,
+      NextQuestion: opening question (NEW area),
+      Substituted: false,
+    }
+
+    → processAnswerJob() sees Substituted=false
+    → MarkAnswerJobSucceeded(payload with next question)
+    → Frontend polls, gets "succeeded", dispatches SUBMIT_SUCCEEDED
+    → User sees opening question for the new criterion area
+Path B with AI Failure (2 AI Calls, both fail)
+
+ 9. AI CALL #1: all 3 retries fail → ErrAIRetryExhausted
+    → substituted = true
+    → aiResult = fallbackEvaluation (partial + follow-up)
+    → aiResult.NextQuestion = fallbackQuestionForArea(currentArea)
+
+10. DecideCriterionTurn(fallback evaluation)
+    Result: { Action: "continue" }  ← fallback always says "partial, follow up"
+    NOTE: this means Path B BECOMES Path A when AI Call #1 fails!
+    The area is NOT marked complete. A generic follow-up is used.
+
+15. ProcessCriterionTurn()                       ← DB TRANSACTION COMMITS (with fallback data)
+
+16. Return AnswerResult{ Substituted: true }
+
+    → processAnswerJob() sees Substituted=true
+    → MarkAnswerJobFailed(status: "canceled", code: "AI_RETRY_EXHAUSTED")
+    → Frontend polls, sees "canceled", throws error
+    → User sees error screen with "Reload to continue"
+    → On reload: StartInterview() finds the fallback ActiveQuestion, returns it
+The Key Difference at a Glance
+
+                           AI Call #1 succeeds
+                          /                    \
+                   "continue"                "next"
+                   (same area)             (new area)
+                      |                        |
+                      |                   AI Call #2
+              Use NextQuestion            (opening question
+              from AI Call #1              for new area)
+                      |                        |
+                      v                        v
+              1 AI call total            2 AI calls total
+              ~5-15s latency             ~10-30s latency
+The branching decision point is service.go:570:
+
+
+if decision.Action == CriterionTurnActionNext {
+    nextQuestionText, nextAreaSubstituted, err = s.generateNextAreaOpeningQuestion(...)
+}
+That if is the fork. Everything before it is shared. Everything after it converges back at ProcessCriterionTurn().

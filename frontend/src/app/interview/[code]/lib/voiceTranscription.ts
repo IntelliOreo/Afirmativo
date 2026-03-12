@@ -15,12 +15,25 @@ export interface VoiceTokenResponse {
   code?: string;
 }
 
-export class VoiceTranscriptionHTTPError extends Error {
-  status: number;
+export type VoiceTranscriptionErrorReason =
+  | "missing_session_code"
+  | "voice_api_unconfigured"
+  | "session_unauthorized"
+  | "token_unavailable"
+  | "provider_authorization_failed"
+  | "provider_failed"
+  | "empty_transcript";
 
-  constructor(status: number, message: string) {
+export class VoiceTranscriptionError extends Error {
+  reason: VoiceTranscriptionErrorReason;
+  status: number;
+  requestId: string;
+
+  constructor(reason: VoiceTranscriptionErrorReason, status: number, message: string, requestId = "") {
     super(message);
+    this.reason = reason;
     this.status = status;
+    this.requestId = requestId;
   }
 }
 
@@ -54,7 +67,7 @@ async function mintToken(sessionCode: string, lang: Lang): Promise<VoiceTokenRes
     backend_path: "/api/voice/token",
   });
 
-  const { ok, status, data } = await api<VoiceTokenResponse>("/api/voice/token", {
+  const { ok, status, data, requestId } = await api<VoiceTokenResponse>("/api/voice/token", {
     method: "POST",
     body: { session_code: sessionCode },
     credentials: "include",
@@ -76,11 +89,14 @@ async function mintToken(sessionCode: string, lang: Lang): Promise<VoiceTokenRes
       error: data?.error ?? "missing_access_token",
       code: data?.code ?? "",
     });
-    throw new Error(
+    throw new VoiceTranscriptionError(
+      status === 401 ? "session_unauthorized" : "token_unavailable",
+      status,
       data?.error
-        || (status === 401
-          ? (lang === "es" ? "Sesión no autorizada." : "Session is not authorized.")
-          : (lang === "es" ? "No se pudo obtener token de voz." : "Failed to get voice token.")),
+        || (lang === "es"
+          ? "No se pudo obtener token de voz."
+          : "Failed to get voice token."),
+      requestId,
     );
   }
 
@@ -143,7 +159,10 @@ async function requestTranscription(
       status: response.status,
       error: errorMessage || "provider_non_2xx",
     });
-    throw new VoiceTranscriptionHTTPError(
+    throw new VoiceTranscriptionError(
+      response.status === 401 || response.status === 403
+        ? "provider_authorization_failed"
+        : "provider_failed",
       response.status,
       errorMessage
         || (lang === "es"
@@ -157,7 +176,9 @@ async function requestTranscription(
     log.warn("voice transcription returned empty transcript", {
       phase: "transcription_parse",
     });
-    throw new Error(
+    throw new VoiceTranscriptionError(
+      "empty_transcript",
+      response.status,
       lang === "es"
         ? "No se pudo obtener texto de la grabación."
         : "Could not extract text from recording.",
@@ -175,11 +196,19 @@ async function requestTranscription(
 export async function transcribeAudio(blob: Blob, lang: Lang, sessionCode: string): Promise<string> {
   const trimmedSessionCode = sessionCode.trim();
   if (!trimmedSessionCode) {
-    throw new Error(lang === "es" ? "Falta el código de sesión." : "Session code is missing.");
+    throw new VoiceTranscriptionError(
+      "missing_session_code",
+      400,
+      lang === "es" ? "Falta el codigo de sesion." : "Session code is missing.",
+    );
   }
 
   if (!voiceAPIURL) {
-    throw new Error(lang === "es" ? "VOICE_API_URL no está configurado." : "VOICE_API_URL is not configured.");
+    throw new VoiceTranscriptionError(
+      "voice_api_unconfigured",
+      500,
+      lang === "es" ? "VOICE_API_URL no esta configurado." : "VOICE_API_URL is not configured.",
+    );
   }
 
   const token = await mintToken(trimmedSessionCode, lang);
@@ -187,8 +216,8 @@ export async function transcribeAudio(blob: Blob, lang: Lang, sessionCode: strin
     return await requestTranscription(blob, lang, token.access_token, token.token_type, token.model);
   } catch (err) {
     if (
-      err instanceof VoiceTranscriptionHTTPError
-      && (err.status === 401 || err.status === 403)
+      err instanceof VoiceTranscriptionError
+      && err.reason === "provider_authorization_failed"
     ) {
       log.warn("voice transcription retrying after auth status", {
         phase: "transcription_retry",

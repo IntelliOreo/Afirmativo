@@ -57,7 +57,7 @@ describe("LandingPage", () => {
     });
   });
 
-  it("keeps the existing invalid PIN message", async () => {
+  it("shows the invalid PIN message in the active language only", async () => {
     verifySessionMock.mockResolvedValue({ ok: false, reason: "invalid_pin" });
 
     render(<LandingPage />);
@@ -71,7 +71,7 @@ describe("LandingPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Resume session" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Incorrect PIN. Please try again. / PIN incorrecto.")).toBeInTheDocument();
+      expect(screen.getByText("Incorrect PIN. Please try again.")).toBeInTheDocument();
     });
   });
 });

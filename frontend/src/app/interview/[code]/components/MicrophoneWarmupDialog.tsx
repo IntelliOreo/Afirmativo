@@ -4,6 +4,10 @@ import { Alert } from "@components/Alert";
 import { Button } from "@components/Button";
 import { Card } from "@components/Card";
 import type { Lang } from "@/lib/language";
+import {
+  getInterviewMessages,
+  getMicrophoneWarmupDialogCopy,
+} from "../messages/interviewMessages";
 import type {
   MicrophoneWarmupDialogMode,
   MicrophoneWarmupDialogState,
@@ -15,94 +19,6 @@ interface MicrophoneWarmupDialogProps {
   uiState: MicrophoneWarmupDialogState;
   onEnableMicrophone: () => Promise<void>;
   onDismiss: () => void;
-}
-
-function getDialogCopy(lang: Lang, mode: MicrophoneWarmupDialogMode, uiState: MicrophoneWarmupDialogState) {
-  const isSpanish = lang === "es";
-
-  if (uiState === "ready_handoff") {
-    return {
-      eyebrow: isSpanish ? "Micrófono listo" : "Microphone ready",
-      title: isSpanish ? "Su micrófono ya está preparado" : "Your microphone is ready",
-      body: isSpanish
-        ? "Terminando la conexión para que la entrevista continúe sin interrupciones."
-        : "Finishing the connection so the interview can continue without interruption.",
-      status: isSpanish ? "Micrófono conectado correctamente." : "Microphone connected successfully.",
-      statusVariant: "success" as const,
-      buttonLabel: isSpanish ? "Conectando..." : "Connecting...",
-    };
-  }
-
-  if (uiState === "warming") {
-    return {
-      eyebrow: isSpanish ? "Configurando micrófono" : "Preparing microphone",
-      title: isSpanish ? "Preparando el micrófono" : "Preparing the microphone",
-      body: isSpanish
-        ? "La primera conexión puede tardar un poco. Mantenga esta ventana abierta mientras terminamos."
-        : "The first connection can take a moment. Keep this window open while we finish.",
-      status: isSpanish ? "Conectando el micrófono. Esto puede tardar un momento." : "Connecting the microphone. This can take a moment.",
-      statusVariant: "info" as const,
-      buttonLabel: isSpanish ? "Conectando..." : "Connecting...",
-    };
-  }
-
-  if (uiState === "recovering") {
-    return {
-      eyebrow: isSpanish ? "Reconectando micrófono" : "Reconnecting microphone",
-      title: isSpanish ? "Volviendo a preparar el micrófono" : "Preparing the microphone again",
-      body: isSpanish
-        ? "La conexión del micrófono se interrumpió. Estamos intentando recuperarla antes de continuar."
-        : "The microphone connection was interrupted. We are restoring it before continuing.",
-      status: isSpanish ? "Reconectando el micrófono." : "Reconnecting the microphone.",
-      statusVariant: "warning" as const,
-      buttonLabel: isSpanish ? "Reconectando..." : "Reconnecting...",
-    };
-  }
-
-  if (uiState === "denied") {
-    return {
-      eyebrow: isSpanish ? "Permiso requerido" : "Permission required",
-      title: isSpanish ? "Necesitamos acceso al micrófono" : "We need microphone access",
-      body: isSpanish
-        ? "Puede intentarlo otra vez cuando quiera responder por voz."
-        : "You can try again whenever you want to answer by voice.",
-      status: isSpanish
-        ? "No se concedió permiso al micrófono. Puede volver a intentarlo."
-        : "Microphone permission was not granted. You can try again.",
-      statusVariant: "error" as const,
-      buttonLabel: isSpanish ? "Habilitar micrófono" : "Enable microphone",
-    };
-  }
-
-  if (uiState === "error") {
-    return {
-      eyebrow: isSpanish ? "Micrófono no disponible" : "Microphone unavailable",
-      title: isSpanish ? "No pudimos preparar el micrófono" : "We could not prepare the microphone",
-      body: isSpanish
-        ? "Inténtelo otra vez. Si el problema continúa, puede seguir con texto por ahora."
-        : "Try again. If the problem continues, you can keep going with text for now.",
-      status: isSpanish
-        ? "El micrófono necesita reconectarse antes de la próxima grabación."
-        : "The microphone needs to reconnect before the next recording.",
-      statusVariant: "error" as const,
-      buttonLabel: isSpanish
-        ? (mode === "reconnect" ? "Reconectar micrófono" : "Reintentar micrófono")
-        : (mode === "reconnect" ? "Reconnect microphone" : "Retry microphone"),
-    };
-  }
-
-  return {
-    eyebrow: isSpanish ? "Micrófono opcional" : "Optional microphone setup",
-    title: isSpanish ? "Prepare el micrófono ahora" : "Prepare the microphone now",
-    body: isSpanish
-      ? "Si piensa responder por voz, este es el mejor momento para conceder permiso al micrófono. Una vez habilitado, el indicador del navegador puede permanecer encendido hasta la etapa del reporte."
-      : "If you plan to answer by voice, this is the best time to grant microphone permission. Once enabled, the browser indicator may stay on until the report stage.",
-    status: isSpanish
-      ? "Si piensa responder por voz, habilite el micrófono ahora para evitar demora cuando grabe."
-      : "If you plan to answer by voice, enable the microphone now to avoid delay when you record.",
-    statusVariant: "info" as const,
-    buttonLabel: isSpanish ? "Habilitar micrófono" : "Enable microphone",
-  };
 }
 
 function AnimatedMicrophoneVisual({ uiState }: { uiState: MicrophoneWarmupDialogState }) {
@@ -178,7 +94,8 @@ export function MicrophoneWarmupDialog({
   onEnableMicrophone,
   onDismiss,
 }: MicrophoneWarmupDialogProps) {
-  const copy = getDialogCopy(lang, mode, uiState);
+  const copy = getMicrophoneWarmupDialogCopy(lang, mode, uiState);
+  const t = getInterviewMessages(lang).microphoneDialog;
   const isBusy = uiState === "warming" || uiState === "recovering" || uiState === "ready_handoff";
 
   return (
@@ -211,9 +128,7 @@ export function MicrophoneWarmupDialog({
             onClick={onDismiss}
             disabled={isBusy}
           >
-            {mode === "reconnect"
-              ? (lang === "es" ? "Cerrar" : "Close")
-              : (lang === "es" ? "Ahora no" : "Not now")}
+            {mode === "reconnect" ? t.dismissReconnect : t.dismissInitial}
           </Button>
           <Button
             type="button"

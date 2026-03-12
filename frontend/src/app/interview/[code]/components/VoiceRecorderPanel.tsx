@@ -5,6 +5,11 @@ import { Button } from "@components/Button";
 import { Card } from "@components/Card";
 import type { Lang } from "@/lib/language";
 import { formatDurationLabel, VOICE_MAX_SECONDS, VOICE_WAVE_BARS } from "../constants";
+import {
+  getInterviewMessages,
+  getMicSetupCopy,
+  getRecorderStatusMessage,
+} from "../messages/interviewMessages";
 import type { MicWarmState, VoiceRecorderState } from "../viewTypes";
 import { formatBytes } from "../utils";
 
@@ -45,97 +50,6 @@ interface VoiceRecorderPanelProps {
   onSubmitAnswer: () => Promise<void> | void;
 }
 
-function getRecorderStatusMessage(
-  lang: Lang,
-  voiceRecorderState: VoiceRecorderState,
-  voiceIsRecordingPaused: boolean,
-  voiceIsRecordingActive: boolean,
-): string {
-  if (voiceRecorderState === "idle") {
-    return lang === "es" ? "Pulse Record para empezar." : "Press Record to begin.";
-  }
-  if (voiceIsRecordingPaused) {
-    return lang === "es" ? "Grabación en pausa." : "Recording paused.";
-  }
-  if (voiceIsRecordingActive) {
-    return lang === "es" ? "Grabando..." : "Recording...";
-  }
-  if (voiceRecorderState === "transcribing_for_review") {
-    return lang === "es" ? "Preparando la transcripción..." : "Preparing transcript...";
-  }
-  if (voiceRecorderState === "review_ready") {
-    return lang === "es"
-      ? "Transcripción lista. Revísela y envíe su respuesta."
-      : "Transcript ready. Review it and submit your answer.";
-  }
-  return lang === "es"
-    ? "Audio listo. Revise la transcripción antes de enviar."
-    : "Audio ready. Review the transcript before submitting.";
-}
-
-function getMicSetupCopy(
-  lang: Lang,
-  hasMicOptIn: boolean,
-  micWarmState: MicWarmState,
-): { message: string; buttonLabel: string; variant: "info" | "warning" | "error"; busy: boolean } {
-  if (micWarmState === "warming") {
-    return {
-      message: lang === "es"
-        ? "Conectando el micrófono. Esto puede tardar un momento."
-        : "Connecting the microphone. This can take a moment.",
-      buttonLabel: lang === "es" ? "Conectando..." : "Connecting...",
-      variant: "info",
-      busy: true,
-    };
-  }
-
-  if (micWarmState === "recovering") {
-    return {
-      message: lang === "es"
-        ? "Reconectando el micrófono para que la próxima grabación empiece sin problemas."
-        : "Reconnecting the microphone so the next recording can start cleanly.",
-      buttonLabel: lang === "es" ? "Reconectando..." : "Reconnecting...",
-      variant: "warning",
-      busy: true,
-    };
-  }
-
-  if (micWarmState === "denied") {
-    return {
-      message: lang === "es"
-        ? "No se concedió acceso al micrófono. Vuelva a intentarlo cuando quiera usar voz."
-        : "Microphone access was not granted. Try again when you want to use voice.",
-      buttonLabel: lang === "es" ? "Habilitar micrófono" : "Enable microphone",
-      variant: "error",
-      busy: false,
-    };
-  }
-
-  if (micWarmState === "error") {
-    return {
-      message: lang === "es"
-        ? "El micrófono necesita reconectarse antes de la próxima grabación."
-        : "The microphone needs to reconnect before the next recording.",
-      buttonLabel: lang === "es" ? "Reconectar micrófono" : "Reconnect microphone",
-      variant: "error",
-      busy: false,
-    };
-  }
-
-  return {
-    message: hasMicOptIn
-      ? (lang === "es"
-        ? "El micrófono quedará listo mientras continúa con la entrevista."
-        : "The microphone will stay ready while you continue the interview.")
-      : (lang === "es"
-        ? "Si piensa responder por voz, habilite el micrófono ahora para evitar demora cuando grabe."
-        : "If you plan to answer by voice, enable the microphone now to avoid delay when you record."),
-    buttonLabel: lang === "es" ? "Habilitar micrófono" : "Enable microphone",
-    variant: hasMicOptIn ? "info" : "warning",
-    busy: false,
-  };
-}
-
 export function VoiceRecorderPanel({
   lang,
   hasMicOptIn,
@@ -172,6 +86,7 @@ export function VoiceRecorderPanel({
   onTranscriptChange,
   onSubmitAnswer,
 }: VoiceRecorderPanelProps) {
+  const t = getInterviewMessages(lang).voice;
   const voiceLimitLabel = formatDurationLabel(VOICE_MAX_SECONDS, lang);
   const micSetupCopy = getMicSetupCopy(lang, hasMicOptIn, micWarmState);
   const shouldShowMicSetup =
@@ -189,16 +104,16 @@ export function VoiceRecorderPanel({
     voiceRecorderState === "review_ready";
   const primaryButtonLabel =
     voiceRecorderState === "transcribing_for_review"
-      ? (lang === "es" ? "Revisando transcripción..." : "Reviewing transcript...")
+      ? t.reviewingTranscript
       : voiceRecorderState === "review_ready"
-        ? (lang === "es" ? "Enviar respuesta" : "Submit answer")
-        : (lang === "es" ? "Revisar transcripción" : "Review transcript");
+        ? t.submitAnswer
+        : t.reviewTranscript;
 
   return (
     <Card className="mb-4">
       <div className={`mb-4 rounded-lg border px-4 py-3 ${timerToneClass}`}>
         <p className="text-xs font-semibold uppercase tracking-wide">
-          {lang === "es" ? "Envíe esta respuesta en" : "Submit this answer in"}
+          {t.submitWindowLabel}
         </p>
         <p className="mt-1 text-2xl font-bold">{answerTimerLabel}</p>
         <p className="mt-2 text-sm leading-snug">{answerTimerMessage}</p>
@@ -211,7 +126,7 @@ export function VoiceRecorderPanel({
         <button
           type="button"
           className="h-9 w-9 rounded-full border border-primary text-primary text-sm font-bold disabled:opacity-40 disabled:cursor-not-allowed"
-          aria-label={lang === "es" ? "Reproducir audio grabado" : "Play recorded audio"}
+          aria-label={t.playbackAria}
           disabled={!canPreviewRecording}
           onClick={() => { void onToggleVoicePreviewPlayback(); }}
         >
@@ -263,9 +178,7 @@ export function VoiceRecorderPanel({
 
       {voiceWarningRemaining !== null && (
         <Alert variant="warning" className="mb-4">
-          {lang === "es"
-            ? `Quedan ${voiceWarningRemaining}s para llegar al límite de ${voiceLimitLabel}.`
-            : `${voiceWarningRemaining}s remain before the limit of ${voiceLimitLabel}.`}
+          {t.warningBeforeLimit(voiceWarningRemaining, voiceLimitLabel)}
         </Alert>
       )}
 
@@ -292,21 +205,21 @@ export function VoiceRecorderPanel({
 
       {voiceBlob && (
         <p className="text-sm text-primary-darkest mb-4">
-          {lang === "es" ? "Audio listo" : "Audio ready"}: {formatBytes(voiceBlob.size)}
+          {t.audioReadyLabel}: {formatBytes(voiceBlob.size)}
         </p>
       )}
 
       {isTranscriptVisible && (
         <div className="mb-5">
           <label className="block font-semibold text-primary-darkest mb-2">
-            {lang === "es" ? "Transcripción revisable" : "Reviewable transcript"}
+            {t.reviewableTranscript}
           </label>
           <textarea
             value={transcriptText}
             onChange={(event) => onTranscriptChange(event.target.value)}
             rows={6}
             className="w-full px-3 py-3 text-base border border-base-lighter rounded focus:outline-none focus:ring-2 focus:ring-primary resize-none"
-            placeholder={lang === "es" ? "Edite la transcripción aquí..." : "Edit the transcript here..."}
+            placeholder={t.transcriptPlaceholder}
             readOnly={isTimerExpired}
           />
         </div>
@@ -325,8 +238,8 @@ export function VoiceRecorderPanel({
           </Button>
           <span className="text-xs font-semibold text-primary-darkest">
             {voiceRecorderState === "review_ready" || voiceRecorderState === "audio_ready"
-              ? (lang === "es" ? "Regrabar" : "Re-record")
-              : (lang === "es" ? "Descartar" : "Discard")}
+              ? t.rerecord
+              : t.discard}
           </span>
         </div>
 
@@ -356,18 +269,10 @@ export function VoiceRecorderPanel({
             ✓
           </Button>
           <span className="text-xs font-semibold text-primary-darkest">
-            {lang === "es" ? "Complete" : "Complete"}
+            {t.complete}
           </span>
         </div>
       </div>
-
-      {isTimerExpired && (
-        <div className="mb-4 rounded-lg border border-danger bg-danger-lightest px-4 py-3 text-danger-dark text-sm font-semibold">
-          {lang === "es"
-            ? "Se acabó el tiempo — por favor envíe su respuesta ahora."
-            : "Time is up — please submit your answer now."}
-        </div>
-      )}
 
       <Button
         type="button"

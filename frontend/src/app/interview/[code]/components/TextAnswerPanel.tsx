@@ -3,6 +3,7 @@
 import { Button } from "@components/Button";
 import { Card } from "@components/Card";
 import type { Lang } from "@/lib/language";
+import { getInterviewMessages } from "../messages/interviewMessages";
 
 interface TextAnswerPanelProps {
   lang: Lang;
@@ -31,6 +32,7 @@ export function TextAnswerPanel({
   onTextAnswerChange,
   onSubmitAnswer,
 }: TextAnswerPanelProps) {
+  const t = getInterviewMessages(lang).textAnswer;
   const timerToneClass =
     answerTimerTone === "danger"
       ? "border-danger bg-danger-lightest text-danger-dark"
@@ -42,7 +44,7 @@ export function TextAnswerPanel({
     <Card className="mb-4">
       <div className={`mb-4 rounded-lg border px-4 py-3 ${timerToneClass}`}>
         <p className="text-xs font-semibold uppercase tracking-wide">
-          {lang === "es" ? "Envíe esta respuesta en" : "Submit this answer in"}
+          {t.submitWindowLabel}
         </p>
         <p className="mt-1 text-2xl font-bold">{answerTimerLabel}</p>
         <p className="mt-2 text-sm leading-snug">{answerTimerMessage}</p>
@@ -50,11 +52,9 @@ export function TextAnswerPanel({
 
       <div className="mb-4">
         <label className="block font-semibold text-primary-darkest mb-2">
-          {lang === "es" ? "Borrador final" : "Final draft"}
+          {t.finalDraft}
           <span className="block text-sm font-normal text-gray-500">
-            {lang === "es"
-              ? "Responda en su idioma seleccionado"
-              : "Please answer in your selected language"}
+            {t.answerInSelectedLanguage}
           </span>
         </label>
         <textarea
@@ -64,27 +64,15 @@ export function TextAnswerPanel({
           rows={6}
           readOnly={isReadOnly || isTimerExpired}
           className="w-full px-3 py-3 text-base border border-base-lighter rounded focus:outline-none focus:ring-2 focus:ring-primary resize-none"
-          placeholder={
-            lang === "es"
-              ? "Escriba su respuesta aquí..."
-              : "Type your answer here..."
-          }
+          placeholder={t.placeholder}
         />
         <p className="mt-2 text-right text-sm text-primary-darkest">
-          {lang === "es" ? "Caracteres" : "Characters"}: {textAnswerCharCount} / {maxChars}
+          {t.characters}: {textAnswerCharCount} / {maxChars}
         </p>
       </div>
 
-      {isTimerExpired && (
-        <div className="mb-4 rounded-lg border border-danger bg-danger-lightest px-4 py-3 text-danger-dark text-sm font-semibold">
-          {lang === "es"
-            ? "Se acab\u00f3 el tiempo \u2014 por favor env\u00ede su respuesta ahora."
-            : "Time is up \u2014 please submit your answer now."}
-        </div>
-      )}
-
       <Button fullWidth disabled={!textAnswer.trim() || isReadOnly} onClick={() => { void onSubmitAnswer(); }}>
-        {lang === "es" ? "Enviar respuesta" : "Submit answer"}
+        {t.submit}
       </Button>
     </Card>
   );

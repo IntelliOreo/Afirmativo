@@ -4,15 +4,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { log } from "@/lib/logger";
 import type { Lang } from "@/lib/language";
 import {
-  formatDurationLabel,
   VOICE_CHUNK_TIMESLICE_MS,
   VOICE_MAX_SECONDS,
   VOICE_MIME_CANDIDATES,
   VOICE_TICK_INTERVAL_MS,
   VOICE_WARNING_SECONDS,
 } from "../constants";
-import { transcribeAudio } from "../lib/voiceTranscription";
-import type { MicWarmState, VoiceRecorderState } from "../viewTypes";
+import { VoiceTranscriptionError, transcribeAudio } from "../lib/voiceTranscription";
+import type { MicWarmState, VoiceFeedback, VoiceRecorderState } from "../viewTypes";
 import { useVoicePreview } from "./useVoicePreview";
 import { useVoiceTicker } from "./useVoiceTicker";
 
@@ -32,8 +31,8 @@ interface UseVoiceRecorderResult {
   voiceBlob: Blob | null;
   voicePreviewUrl: string | null;
   isVoicePreviewPlaying: boolean;
-  voiceError: string;
-  voiceInfo: string;
+  voiceError: VoiceFeedback | null;
+  voiceInfo: VoiceFeedback | null;
   isRecordingActive: boolean;
   isRecordingPaused: boolean;
   prepareMicrophone: () => Promise<boolean>;
@@ -42,7 +41,7 @@ interface UseVoiceRecorderResult {
   discardVoiceRecording: () => void;
   toggleVoicePreviewPlayback: () => Promise<void>;
   reviewVoiceRecording: (sessionCode: string) => Promise<string | null>;
-  setVoiceErrorMessage: (message: string) => void;
+  setVoiceErrorFeedback: (feedback: VoiceFeedback | null) => void;
 }
 
 function getStreamTracks(stream: MediaStream | null): MediaStreamTrack[] {
@@ -70,8 +69,8 @@ export function useVoiceRecorder({
   const [voiceRecorderState, setVoiceRecorderState] = useState<VoiceRecorderState>("idle");
   const [micWarmState, setMicWarmState] = useState<MicWarmState>("cold");
   const [voiceBlob, setVoiceBlob] = useState<Blob | null>(null);
-  const [voiceError, setVoiceError] = useState("");
-  const [voiceInfo, setVoiceInfo] = useState("");
+  const [voiceError, setVoiceError] = useState<VoiceFeedback | null>(null);
+  const [voiceInfo, setVoiceInfo] = useState<VoiceFeedback | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -87,28 +86,6 @@ export function useVoiceRecorder({
   shouldKeepMicWarmRef.current = shouldKeepMicWarm;
   voiceBlobRef.current = voiceBlob;
 
-  const microphoneAccessMessage = useCallback((permissionDenied: boolean) => (
-    permissionDenied
-      ? (langRef.current === "es"
-        ? "Permita el acceso al micrófono para grabar por voz."
-        : "Allow microphone access to record by voice.")
-      : (langRef.current === "es"
-        ? "No se pudo acceder al micrófono."
-        : "Unable to access microphone.")
-  ), []);
-
-  const recordingFailureMessage = useCallback(() => (
-    langRef.current === "es"
-      ? "No se pudo completar la grabación."
-      : "Unable to complete recording."
-  ), []);
-
-  const noAudioDetectedMessage = useCallback(() => (
-    langRef.current === "es"
-      ? "No se detecto audio. Intente grabar de nuevo."
-      : "No audio detected. Please record again."
-  ), []);
-
   const completeVoiceRecordingRef = useRef<() => void>(() => {});
   const {
     durationSeconds: voiceDurationSeconds,
@@ -123,12 +100,7 @@ export function useVoiceRecorder({
     warningMilestones: VOICE_WARNING_SECONDS,
     tickIntervalMs: VOICE_TICK_INTERVAL_MS,
     onLimitReached: () => {
-      const limitLabel = formatDurationLabel(VOICE_MAX_SECONDS, langRef.current);
-      setVoiceInfo(
-        langRef.current === "es"
-          ? `Se alcanzó el límite de ${limitLabel} y la grabación se detuvo.`
-          : `The limit of ${limitLabel} was reached and recording stopped.`,
-      );
+      setVoiceInfo({ code: "limit_reached" });
       completeVoiceRecordingRef.current();
     },
   });
@@ -249,11 +221,7 @@ export function useVoiceRecorder({
       || !navigator.mediaDevices?.getUserMedia
     ) {
       if (mode === "start") {
-        setVoiceError(
-          langRef.current === "es"
-            ? "Este navegador no soporta grabacion de audio."
-            : "This browser does not support audio recording.",
-        );
+        setVoiceError({ code: "browser_unsupported" });
       } else {
         setMicWarmState("error");
       }
@@ -274,7 +242,7 @@ export function useVoiceRecorder({
         }
 
         cacheWarmStream(stream);
-        setVoiceError("");
+        setVoiceError(null);
         return stream;
       })
       .catch((error: unknown) => {
@@ -284,7 +252,11 @@ export function useVoiceRecorder({
         setMicWarmState(nextState);
 
         if (mode === "start") {
-          setVoiceError(microphoneAccessMessage(nextState === "denied"));
+          setVoiceError({
+            code: nextState === "denied"
+              ? "microphone_permission_denied"
+              : "microphone_unavailable",
+          });
         }
         return null;
       })
@@ -296,7 +268,7 @@ export function useVoiceRecorder({
 
     warmStreamPromiseRef.current = acquisitionPromise;
     return acquisitionPromise;
-  }, [cacheWarmStream, isWarmStreamLive, microphoneAccessMessage, releaseWarmStream]);
+  }, [cacheWarmStream, isWarmStreamLive, releaseWarmStream]);
 
   const prepareMicrophone = useCallback(async (): Promise<boolean> => {
     const stream = await ensureWarmStream("prepare");
@@ -369,8 +341,8 @@ export function useVoiceRecorder({
     clearPreview();
     setVoiceBlob(null);
     setVoiceRecorderState("idle");
-    setVoiceError("");
-    setVoiceInfo("");
+    setVoiceError(null);
+    setVoiceInfo(null);
     stopEphemeralStreamIfNeeded();
   }, [
     clearPreview,
@@ -447,27 +419,19 @@ export function useVoiceRecorder({
     if (typeof window === "undefined") return;
 
     if (!window.isSecureContext && window.location.hostname !== "localhost") {
-      setVoiceError(
-        langRef.current === "es"
-          ? "La grabacion de voz requiere HTTPS o localhost."
-          : "Voice recording requires HTTPS or localhost.",
-      );
+      setVoiceError({ code: "secure_context_required" });
       return;
     }
 
     if (typeof MediaRecorder === "undefined") {
-      setVoiceError(
-        langRef.current === "es"
-          ? "Este navegador no soporta grabacion de audio."
-          : "This browser does not support audio recording.",
-      );
+      setVoiceError({ code: "browser_unsupported" });
       return;
     }
 
     const isPristineIdle =
       voiceRecorderState === "idle"
-      && voiceError === ""
-      && voiceInfo === ""
+      && voiceError == null
+      && voiceInfo == null
       && voiceBlobRef.current == null;
     if (!isPristineIdle) {
       discardVoiceRecording();
@@ -507,8 +471,8 @@ export function useVoiceRecorder({
         clearPreview();
         setVoiceBlob(null);
         setVoiceRecorderState("idle");
-        setVoiceInfo("");
-        setVoiceError(recordingFailureMessage());
+        setVoiceInfo(null);
+        setVoiceError({ code: "recording_failed" });
       };
 
       recorder.onstop = () => {
@@ -523,7 +487,7 @@ export function useVoiceRecorder({
             setVoiceRecorderState("idle");
             setVoiceBlob(null);
             resolvePendingStop(null);
-            setVoiceError(noAudioDetectedMessage());
+            setVoiceError({ code: "no_audio_detected" });
             stopEphemeralStreamIfNeeded();
             return;
           }
@@ -534,7 +498,7 @@ export function useVoiceRecorder({
             setVoiceRecorderState("idle");
             setVoiceBlob(null);
             resolvePendingStop(null);
-            setVoiceError(noAudioDetectedMessage());
+            setVoiceError({ code: "no_audio_detected" });
             stopEphemeralStreamIfNeeded();
             return;
           }
@@ -542,11 +506,7 @@ export function useVoiceRecorder({
           setVoiceBlob(blob);
           setPreviewBlob(blob);
           setVoiceRecorderState("audio_ready");
-          setVoiceInfo(
-            langRef.current === "es"
-              ? "Audio listo. Revise la transcripción antes de enviar."
-              : "Audio ready. Review the transcript before submitting.",
-          );
+          setVoiceInfo({ code: "audio_ready" });
           resolvePendingStop(blob);
           stopEphemeralStreamIfNeeded();
         });
@@ -557,8 +517,8 @@ export function useVoiceRecorder({
       resetVoiceTicker();
       clearPreview();
       setVoiceBlob(null);
-      setVoiceError("");
-      setVoiceInfo("");
+      setVoiceError(null);
+      setVoiceInfo(null);
       setVoiceRecorderState("recording");
       recorder.start(VOICE_CHUNK_TIMESLICE_MS);
       startVoiceTicker();
@@ -575,8 +535,8 @@ export function useVoiceRecorder({
       clearPreview();
       setVoiceBlob(null);
       setVoiceRecorderState("idle");
-      setVoiceInfo("");
-      setVoiceError(microphoneAccessMessage(false));
+      setVoiceInfo(null);
+      setVoiceError({ code: "microphone_unavailable" });
     }
   }, [
     clearPreview,
@@ -585,10 +545,7 @@ export function useVoiceRecorder({
     ensureWarmStream,
     invalidateDeferredWork,
     isActive,
-    microphoneAccessMessage,
-    noAudioDetectedMessage,
     pauseVoiceRecording,
-    recordingFailureMessage,
     releaseWarmStream,
     resetVoiceTicker,
     resolvePendingStop,
@@ -607,11 +564,7 @@ export function useVoiceRecorder({
     try {
       await togglePlayback();
     } catch {
-      setVoiceError(
-        langRef.current === "es"
-          ? "No se pudo reproducir el audio grabado."
-          : "Unable to play the recorded audio.",
-      );
+      setVoiceError({ code: "audio_playback_failed" });
     }
   }, [togglePlayback]);
 
@@ -631,21 +584,13 @@ export function useVoiceRecorder({
 
     stopPlayback();
     setVoiceRecorderState("transcribing_for_review");
-    setVoiceError("");
-    setVoiceInfo(
-      langRef.current === "es"
-        ? "Preparando la transcripción para revisar..."
-        : "Preparing the transcript for review...",
-    );
+    setVoiceError(null);
+    setVoiceInfo({ code: "preparing_transcript" });
 
     try {
       const transcript = await transcribeAudio(audioBlob, langRef.current, trimmedSessionCode);
       setVoiceRecorderState("review_ready");
-      setVoiceInfo(
-        langRef.current === "es"
-          ? "Transcripción lista. Revísela y envíe su respuesta."
-          : "Transcript ready. Review it and submit your answer.",
-      );
+      setVoiceInfo({ code: "transcript_ready" });
       log.info("voice review transcription completed", {
         phase: "review_done",
         transcript_length: transcript.length,
@@ -653,20 +598,22 @@ export function useVoiceRecorder({
       return transcript;
     } catch (err) {
       setVoiceRecorderState("audio_ready");
-      setVoiceInfo(
-        langRef.current === "es"
-          ? "Audio listo. Puede intentar revisar la transcripción otra vez."
-          : "Audio ready. You can try reviewing the transcript again.",
-      );
+      setVoiceInfo({ code: "audio_ready_retry_review" });
       log.error("voice review transcription failed", {
         phase: "review_error",
         error: err instanceof Error ? err.message : "unknown_error",
       });
-      setVoiceError(
-        err instanceof Error
-          ? err.message
-          : (langRef.current === "es" ? "Error de transcripción." : "Transcription error."),
-      );
+      if (err instanceof VoiceTranscriptionError) {
+        if (err.reason === "session_unauthorized") {
+          setVoiceError({ code: "session_unauthorized", requestId: err.requestId });
+        } else if (err.reason === "voice_api_unconfigured" || err.reason === "token_unavailable") {
+          setVoiceError({ code: "voice_api_unavailable", requestId: err.requestId });
+        } else {
+          setVoiceError({ code: "transcription_failed", requestId: err.requestId });
+        }
+      } else {
+        setVoiceError({ code: "transcription_failed" });
+      }
       return null;
     }
   }, [isActive, stopPlayback, voiceRecorderState]);
@@ -713,6 +660,6 @@ export function useVoiceRecorder({
     discardVoiceRecording,
     toggleVoicePreviewPlayback,
     reviewVoiceRecording,
-    setVoiceErrorMessage: setVoiceError,
+    setVoiceErrorFeedback: setVoiceError,
   };
 }

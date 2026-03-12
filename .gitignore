@@ -83,6 +83,6 @@ dev-all.sh
 
 
 backend/server
-
+backend/.gocache/
 utils/
 utils/design

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/afirmativo/backend/internal/session"
+	"github.com/afirmativo/backend/internal/shared"
 )
 
 const (
@@ -147,18 +148,19 @@ func (s *Service) enqueueAsyncAnswerJob(jobID string) bool {
 	if id == "" {
 		return false
 	}
+	requestID := s.asyncAnswerRequestID(id)
 	if s.asyncAnswerQueue == nil {
-		slog.Warn("async answer queue is not configured; job remains queued", "job_id", id)
+		slog.Warn("async answer queue is not configured; job remains queued", "job_id", id, "request_id", requestID)
 		return false
 	}
 
 	select {
 	case s.asyncAnswerQueue <- id:
-		slog.Debug("async answer job queued for worker pickup", "job_id", id)
+		slog.Debug("async answer job queued for worker pickup", "job_id", id, "request_id", requestID)
 		return true
 	default:
 		// Leave status as queued in DB; recovery loop will retry enqueue.
-		slog.Warn("async answer queue is full; job remains queued", "job_id", id)
+		slog.Warn("async answer queue is full; job remains queued", "job_id", id, "request_id", requestID)
 		return false
 	}
 }
@@ -224,6 +226,9 @@ func (s *Service) SubmitAnswerAsync(ctx context.Context, sessionCode, answerText
 	if err != nil {
 		return nil, fmt.Errorf("upsert async answer job: %w", err)
 	}
+	if requestID := shared.RequestIDFromContext(ctx); requestID != "" {
+		s.asyncAnswerRequestIDs.Store(job.ID, requestID)
+	}
 
 	// Idempotency key must map to the same semantic request payload.
 	if strings.TrimSpace(job.TurnID) != strings.TrimSpace(turnID) ||
@@ -244,6 +249,7 @@ func (s *Service) SubmitAnswerAsync(ctx context.Context, sessionCode, answerText
 	}
 
 	slog.Info("async answer job accepted",
+		"request_id", s.asyncAnswerRequestID(job.ID),
 		"session_code", job.SessionCode,
 		"client_request_id", job.ClientRequestID,
 		"job_id", job.ID,
@@ -270,6 +276,7 @@ func (s *Service) GetAnswerJobResult(ctx context.Context, sessionCode, jobID str
 	}
 
 	slog.Debug("async answer job fetched",
+		"request_id", s.asyncAnswerRequestID(job.ID),
 		"session_code", sessionCode,
 		"job_id", job.ID,
 		"client_request_id", job.ClientRequestID,
@@ -316,16 +323,19 @@ func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
 	claimCtx, claimCancel := context.WithTimeout(ctx, dbTimeout)
 	job, err := s.jobStore.ClaimQueuedAnswerJob(claimCtx, jobID)
 	claimCancel()
+	requestID := s.asyncAnswerRequestID(jobID)
 	if err != nil {
-		slog.Error("failed to claim async answer job", "job_id", jobID, "error", err)
+		slog.Error("failed to claim async answer job", "job_id", jobID, "request_id", requestID, "error", err)
 		return
 	}
 	if job == nil {
-		slog.Debug("async answer job not claimable", "job_id", jobID)
+		slog.Debug("async answer job not claimable", "job_id", jobID, "request_id", requestID)
 		return
 	}
+	defer s.asyncAnswerRequestIDs.Delete(job.ID)
 
 	slog.Info("async answer job claimed",
+		"request_id", requestID,
 		"session_code", job.SessionCode,
 		"client_request_id", job.ClientRequestID,
 		"job_id", job.ID,
@@ -352,6 +362,7 @@ func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
 		}
 
 		slog.Warn("async answer job processing failed",
+			"request_id", requestID,
 			"session_code", job.SessionCode,
 			"client_request_id", job.ClientRequestID,
 			"job_id", job.ID,
@@ -370,6 +381,7 @@ func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
 		failCancel()
 		if markErr != nil {
 			slog.Error("failed to mark async answer job as failed",
+				"request_id", requestID,
 				"session_code", job.SessionCode,
 				"client_request_id", job.ClientRequestID,
 				"job_id", job.ID,
@@ -379,6 +391,7 @@ func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
 			)
 		} else {
 			slog.Info("async answer job marked terminal",
+				"request_id", requestID,
 				"session_code", job.SessionCode,
 				"client_request_id", job.ClientRequestID,
 				"job_id", job.ID,
@@ -400,6 +413,7 @@ func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
 		cancelCancel()
 		if markErr != nil {
 			slog.Error("failed to mark async answer job as canceled",
+				"request_id", requestID,
 				"session_code", job.SessionCode,
 				"client_request_id", job.ClientRequestID,
 				"job_id", job.ID,
@@ -407,6 +421,7 @@ func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
 			)
 		} else {
 			slog.Info("async answer job marked terminal",
+				"request_id", requestID,
 				"session_code", job.SessionCode,
 				"client_request_id", job.ClientRequestID,
 				"job_id", job.ID,
@@ -429,6 +444,7 @@ func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
 		failCancel()
 		if markErr != nil {
 			slog.Error("failed to mark async answer job serialization failure",
+				"request_id", requestID,
 				"session_code", job.SessionCode,
 				"client_request_id", job.ClientRequestID,
 				"job_id", job.ID,
@@ -436,6 +452,7 @@ func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
 			)
 		} else {
 			slog.Warn("async answer job serialization failure",
+				"request_id", requestID,
 				"session_code", job.SessionCode,
 				"client_request_id", job.ClientRequestID,
 				"job_id", job.ID,
@@ -448,6 +465,7 @@ func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
 	successCtx, successCancel := context.WithTimeout(ctx, dbTimeout)
 	if err := s.jobStore.MarkAnswerJobSucceeded(successCtx, job.ID, payload); err != nil {
 		slog.Error("failed to mark async answer job as succeeded",
+			"request_id", requestID,
 			"session_code", job.SessionCode,
 			"client_request_id", job.ClientRequestID,
 			"job_id", job.ID,
@@ -455,6 +473,7 @@ func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
 		)
 	} else {
 		slog.Info("async answer job marked terminal",
+			"request_id", requestID,
 			"session_code", job.SessionCode,
 			"client_request_id", job.ClientRequestID,
 			"job_id", job.ID,
@@ -462,6 +481,15 @@ func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
 		)
 	}
 	successCancel()
+}
+
+func (s *Service) asyncAnswerRequestID(jobID string) string {
+	value, ok := s.asyncAnswerRequestIDs.Load(strings.TrimSpace(jobID))
+	if !ok {
+		return ""
+	}
+	requestID, _ := value.(string)
+	return strings.TrimSpace(requestID)
 }
 
 func toAnswerJobPayload(result *AnswerResult) *answerJobPayload {

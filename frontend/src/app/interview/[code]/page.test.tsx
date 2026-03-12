@@ -36,7 +36,7 @@ vi.mock("./hooks/useInterviewReport", () => ({
   useInterviewReport: () => ({
     reportStatus: "idle",
     report: null,
-    reportError: "",
+    reportError: null,
     loadReport: loadReportMock,
     resumeReport: resumeReportMock,
     printReport: printReportMock,
@@ -99,8 +99,8 @@ function makeVoiceRecorderState(overrides: Record<string, unknown> = {}) {
     voiceBlob: null,
     voicePreviewUrl: null,
     isVoicePreviewPlaying: false,
-    voiceError: "",
-    voiceInfo: "",
+    voiceError: null,
+    voiceInfo: null,
     isRecordingActive: false,
     isRecordingPaused: false,
     prepareMicrophone: vi.fn(async () => false),
@@ -109,8 +109,7 @@ function makeVoiceRecorderState(overrides: Record<string, unknown> = {}) {
     discardVoiceRecording: vi.fn(),
     toggleVoicePreviewPlayback: vi.fn(async () => {}),
     reviewVoiceRecording: vi.fn(async () => null),
-    finalizeVoiceRecording: vi.fn(async () => null),
-    setVoiceErrorMessage: vi.fn(),
+    setVoiceErrorFeedback: vi.fn(),
     ...overrides,
   };
 }
@@ -427,5 +426,166 @@ describe("InterviewPage", () => {
 
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.getByText("Preparing the microphone again")).toBeInTheDocument();
+  });
+
+  it("shows the timeout dialog with a working submit CTA when text expires live", async () => {
+    let answerSecondsLeft = 1;
+    const machineState = makeMachineState({
+      phase: "active",
+      question: activeQuestion,
+      secondsLeft: 600,
+      answerSecondsLeft,
+      textAnswer: "Final answer",
+      inputMode: "text",
+    });
+
+    machineMock.mockImplementation(() => ({
+      ...machineState,
+      state: {
+        ...machineState.state,
+        answerSecondsLeft,
+      },
+    }));
+
+    const { rerender } = render(<InterviewPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Active question")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Submit now to continue to the next question.")).not.toBeInTheDocument();
+
+    answerSecondsLeft = 0;
+    rerender(<InterviewPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Submit now to continue to the next question.")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Submit answer" })[0]);
+
+    expect(machineState.requestSubmit).toHaveBeenCalledWith("Final answer");
+  });
+
+  it("allows an empty timeout submit after text expires live", async () => {
+    let answerSecondsLeft = 1;
+    const machineState = makeMachineState({
+      phase: "active",
+      question: activeQuestion,
+      secondsLeft: 600,
+      answerSecondsLeft,
+      textAnswer: "",
+      inputMode: "text",
+    });
+
+    machineMock.mockImplementation(() => ({
+      ...machineState,
+      state: {
+        ...machineState.state,
+        answerSecondsLeft,
+      },
+    }));
+
+    const { rerender } = render(<InterviewPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Active question")).toBeInTheDocument();
+    });
+
+    answerSecondsLeft = 0;
+    rerender(<InterviewPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Submit now to continue to the next question.")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Submit answer" })[0]);
+
+    expect(machineState.requestSubmit).toHaveBeenCalledWith("");
+  });
+
+  it("opens the timeout dialog with interrupted copy when reloading onto an expired turn", async () => {
+    const machineState = makeMachineState({
+      phase: "active",
+      question: activeQuestion,
+      secondsLeft: 600,
+      answerSecondsLeft: 0,
+      textAnswer: "",
+      inputMode: "text",
+    });
+    machineMock.mockReturnValue(machineState);
+
+    render(<InterviewPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("This page reopened after the answer window ended. Submit now to continue.")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Submit answer" })[0]);
+
+    expect(machineState.requestSubmit).toHaveBeenCalledWith("");
+  });
+
+  it("auto-stops active voice recording when time expires", async () => {
+    let answerSecondsLeft = 1;
+    const completeVoiceRecording = vi.fn();
+    const machineState = makeMachineState({
+      phase: "active",
+      question: activeQuestion,
+      secondsLeft: 600,
+      answerSecondsLeft,
+      textAnswer: "",
+      inputMode: "voice",
+    });
+
+    machineMock.mockImplementation(() => ({
+      ...machineState,
+      state: {
+        ...machineState.state,
+        answerSecondsLeft,
+      },
+    }));
+    voiceRecorderMock.mockReturnValue(makeVoiceRecorderState({
+      voiceRecorderState: "recording",
+      isRecordingActive: true,
+      completeVoiceRecording,
+    }));
+
+    const { rerender } = render(<InterviewPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Voice section 0")).toBeInTheDocument();
+    });
+
+    answerSecondsLeft = 0;
+    rerender(<InterviewPage />);
+
+    await waitFor(() => {
+      expect(completeVoiceRecording).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("starts voice transcription automatically when timed-out audio is ready", async () => {
+    const reviewVoiceRecording = vi.fn(async () => null);
+    machineMock.mockReturnValue(
+      makeMachineState({
+        phase: "active",
+        question: activeQuestion,
+        secondsLeft: 600,
+        answerSecondsLeft: 0,
+        textAnswer: "",
+        inputMode: "voice",
+      }),
+    );
+    voiceRecorderMock.mockReturnValue(makeVoiceRecorderState({
+      voiceRecorderState: "audio_ready",
+      reviewVoiceRecording,
+      voiceBlob: new Blob(["audio"], { type: "audio/webm" }),
+    }));
+
+    render(<InterviewPage />);
+
+    await waitFor(() => {
+      expect(reviewVoiceRecording).toHaveBeenCalledWith("AP-123");
+    });
   });
 });

@@ -36,6 +36,8 @@ describe("verifySession", () => {
   it("maps status codes and network failures to typed reasons", async () => {
     apiMock.mockResolvedValueOnce({ ok: false, status: 404, data: null });
     apiMock.mockResolvedValueOnce({ ok: false, status: 410, data: null });
+    apiMock.mockResolvedValueOnce({ ok: false, status: 429, data: null });
+    apiMock.mockResolvedValueOnce({ ok: false, status: 500, data: null });
     apiMock.mockResolvedValueOnce({ ok: false, status: 401, data: null });
     apiMock.mockRejectedValueOnce(new Error("offline"));
 
@@ -46,6 +48,14 @@ describe("verifySession", () => {
     await expect(verifySession("AP-123", "1234")).resolves.toEqual({
       ok: false,
       reason: "expired",
+    });
+    await expect(verifySession("AP-123", "1234")).resolves.toEqual({
+      ok: false,
+      reason: "rate_limited",
+    });
+    await expect(verifySession("AP-123", "1234")).resolves.toEqual({
+      ok: false,
+      reason: "server",
     });
     await expect(verifySession("AP-123", "1234")).resolves.toEqual({
       ok: false,

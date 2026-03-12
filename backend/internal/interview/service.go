@@ -45,15 +45,15 @@ type asyncAnswerJobStore = AsyncAnswerJobStore
 
 // Service contains interview business logic.
 type Service struct {
-	sessionStarter   SessionStarter
-	sessionGetter    SessionGetter
-	sessionCompleter SessionCompleter
-	stateStore       interviewStateStore
-	jobStore         asyncAnswerJobStore
-	aiClient         InterviewAIClient
-	areaConfigs      []config.AreaConfig
-	openingTextEn    string
-	openingTextEs    string
+	sessionStarter         SessionStarter
+	sessionGetter          SessionGetter
+	sessionCompleter       SessionCompleter
+	stateStore             interviewStateStore
+	jobStore               asyncAnswerJobStore
+	aiClient               InterviewAIClient
+	areaConfigs            []config.AreaConfig
+	openingTextEn          string
+	openingTextEs          string
 	readinessTextEn        string
 	readinessTextEs        string
 	answerTimeLimitSeconds int
@@ -66,6 +66,7 @@ type Service struct {
 	asyncAnswerJobTimeout    time.Duration
 	asyncAnswerQueue         chan string
 	asyncRuntimeStartOnce    sync.Once
+	asyncAnswerRequestIDs    sync.Map
 }
 
 // NewService creates a Service with the given dependencies.
@@ -314,6 +315,14 @@ func (s *Service) processTurnCore(
 	}
 
 	preferredLanguage := normalizePreferredLanguage(sess.PreferredLanguage)
+
+	if strings.TrimSpace(answerText) == "" {
+		answerText = emptyAnswerPlaceholder(preferredLanguage)
+		slog.Info("empty answer replaced with placeholder",
+			"session_code", sessionCode,
+			"preferred_language", preferredLanguage,
+		)
+	}
 
 	switch flowState.Step {
 	case FlowStepDisclaimer:
@@ -960,6 +969,13 @@ func newTurnID() (string, error) {
 		return "", fmt.Errorf("read random bytes: %w", err)
 	}
 	return hex.EncodeToString(b[:]), nil
+}
+
+func emptyAnswerPlaceholder(preferredLanguage string) string {
+	if strings.EqualFold(strings.TrimSpace(preferredLanguage), "en") {
+		return "[The candidate did not provide an answer within the time limit]"
+	}
+	return "[El candidato no proporcionó una respuesta dentro del tiempo límite]"
 }
 
 func normalizePreferredLanguage(language string) string {

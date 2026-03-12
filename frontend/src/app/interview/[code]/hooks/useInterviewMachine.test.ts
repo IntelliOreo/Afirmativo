@@ -384,7 +384,7 @@ describe("useInterviewMachine", () => {
     });
   });
 
-  it("routes final auto submit failures into reload recovery instead of fake completion", async () => {
+  it("surfaces submit failures without faking completion", async () => {
     vi.useFakeTimers();
     apiMock.mockResolvedValue({
       ok: true,
@@ -420,7 +420,7 @@ describe("useInterviewMachine", () => {
     });
 
     act(() => {
-      result.current.requestSubmit("Last answer", "finalAuto");
+      result.current.requestSubmit("Last answer");
     });
 
     await act(async () => {
@@ -432,8 +432,8 @@ describe("useInterviewMachine", () => {
     expect(result.current.canRetryPendingRecovery).toBe(true);
     expect(result.current.state).toEqual({
       phase: "error",
-      message: "Automatic final submission could not be confirmed. Reload to continue.",
-      code: "FINAL_AUTO_RECOVERY_REQUIRED",
+      message: "backend uncertain",
+      code: "",
     });
   });
 });

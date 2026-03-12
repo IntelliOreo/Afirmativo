@@ -224,6 +224,7 @@ func main() {
 	// Apply middleware.
 	handler := shared.Chain(mux,
 		shared.CORS(cfg.FrontendURL),
+		shared.RequestID,
 		shared.SecurityHeaders,
 		shared.Logger,
 	)

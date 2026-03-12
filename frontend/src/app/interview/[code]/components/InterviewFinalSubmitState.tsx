@@ -2,6 +2,7 @@
 
 import { Card } from "@components/Card";
 import type { Lang } from "@/lib/language";
+import { getInterviewMessages } from "../messages/interviewMessages";
 
 interface InterviewFinalSubmitStateProps {
   lang: Lang;
@@ -12,15 +13,15 @@ export function InterviewFinalSubmitState({
   lang,
   finalSubmitWaitStatus,
 }: InterviewFinalSubmitStateProps) {
+  const t = getInterviewMessages(lang).finalSubmit;
+
   return (
     <Card className="text-center py-12">
       <h1 className="text-2xl font-bold text-primary-dark mb-4">
-        {lang === "es" ? "Finalizando su respuesta" : "Finalizing your answer"}
+        {t.title}
       </h1>
       <p className="text-primary-darkest mb-6">
-        {lang === "es"
-          ? "Bloqueamos la edición mientras terminamos de transcribir y enviar su respuesta."
-          : "Editing is locked while we finish transcribing and submitting your answer."}
+        {t.body}
       </p>
       {finalSubmitWaitStatus && (
         <p className="text-base sm:text-lg text-primary-dark leading-snug mb-6">

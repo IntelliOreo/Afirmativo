@@ -113,8 +113,7 @@ describe("getVoiceCapabilities", () => {
 });
 
 describe("isReloadRecoveryErrorCode", () => {
-  it("treats final auto recovery as reloadable", () => {
-    expect(isReloadRecoveryErrorCode("FINAL_AUTO_RECOVERY_REQUIRED")).toBe(true);
+  it("treats reload-only recovery failures as reloadable", () => {
     expect(isReloadRecoveryErrorCode("AI_RETRY_EXHAUSTED")).toBe(true);
   });
 
@@ -127,7 +126,6 @@ describe("isPendingRecoveryRetryableErrorCode", () => {
   it("treats transient pending recovery errors as retryable", () => {
     expect(isPendingRecoveryRetryableErrorCode("")).toBe(true);
     expect(isPendingRecoveryRetryableErrorCode("ASYNC_POLL_TIMEOUT")).toBe(true);
-    expect(isPendingRecoveryRetryableErrorCode("FINAL_AUTO_RECOVERY_REQUIRED")).toBe(true);
   });
 
   it("does not mark terminal flow conflicts as retryable", () => {

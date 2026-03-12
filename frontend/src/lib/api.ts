@@ -12,6 +12,7 @@ interface ApiResult<T> {
   ok: boolean;
   status: number;
   data: T | null;
+  requestId: string;
 }
 
 function bodyKeys(body: unknown): string[] | undefined {
@@ -68,6 +69,7 @@ export async function api<T = unknown>(
   });
 
   const elapsed = Math.round(performance.now() - start);
+  const requestId = res.headers.get("X-Request-Id") ?? "";
 
   let data: T | null = null;
   const contentType = res.headers.get("content-type");
@@ -76,10 +78,18 @@ export async function api<T = unknown>(
   }
 
   if (!res.ok) {
-    log.warn(`${method} ${path} failed`, { status: res.status, elapsed_ms: elapsed });
+    log.warn(`${method} ${path} failed`, {
+      status: res.status,
+      elapsed_ms: elapsed,
+      request_id: requestId || undefined,
+    });
   } else {
-    log.debug(`${method} ${path} done`, { status: res.status, elapsed_ms: elapsed });
+    log.debug(`${method} ${path} done`, {
+      status: res.status,
+      elapsed_ms: elapsed,
+      request_id: requestId || undefined,
+    });
   }
 
-  return { ok: res.ok, status: res.status, data };
+  return { ok: res.ok, status: res.status, data, requestId };
 }

@@ -2,7 +2,7 @@ import { api } from "@/lib/api";
 
 export type VerifyResult =
   | { ok: true; interviewStartedAt?: string }
-  | { ok: false; reason: "not_found" | "expired" | "invalid_pin" | "network" | "unknown" };
+  | { ok: false; reason: "not_found" | "expired" | "invalid_pin" | "rate_limited" | "server" | "network" | "unknown" };
 
 export type SessionAccessResult =
   | { ok: true }
@@ -27,6 +27,12 @@ export async function verifySession(sessionCode: string, pin: string): Promise<V
     }
     if (result.status === 410) {
       return { ok: false, reason: "expired" };
+    }
+    if (result.status === 429) {
+      return { ok: false, reason: "rate_limited" };
+    }
+    if (result.status >= 500) {
+      return { ok: false, reason: "server" };
     }
     if (!result.ok) {
       return { ok: false, reason: "invalid_pin" };

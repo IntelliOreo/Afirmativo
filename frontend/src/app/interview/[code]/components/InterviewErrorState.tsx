@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Alert } from "@components/Alert";
 import { Button } from "@components/Button";
 import type { Lang } from "@/lib/language";
+import { getInterviewMessages } from "../messages/interviewMessages";
 
 interface InterviewErrorStateProps {
   lang: Lang;
@@ -24,47 +25,45 @@ export function InterviewErrorState({
   onRetryPendingAnswer,
   onReloadPage,
 }: InterviewErrorStateProps) {
+  const t = getInterviewMessages(lang).error;
+
   return (
     <>
       <Alert variant="error" className="mb-4">
-        {lang === "es" ? "Error: " : "Error: "}
+        {t.prefix}{" "}
         {error}
       </Alert>
       {canRetryPendingAnswer ? (
         <>
           <p className="text-primary-darkest mb-4">
-            {lang === "es"
-              ? "Tiene una respuesta pendiente guardada. Intente reenviarla o recargue la página para continuar."
-              : "A pending answer is still saved. Retry sending it or reload the page to continue."}
+            {t.pendingAnswerBody}
           </p>
           <Button fullWidth className="mb-3" onClick={onRetryPendingAnswer}>
-            {lang === "es" ? "Reintentar envío" : "Retry send"}
+            {t.retryPendingAnswer}
           </Button>
           <Button fullWidth className="mb-3" variant="secondary" onClick={onReloadPage}>
-            {lang === "es" ? "Recargar página" : "Reload page"}
+            {t.reloadPage}
           </Button>
         </>
       ) : isReloadRecoveryError ? (
         <>
           <p className="text-primary-darkest mb-4">
-            {lang === "es"
-              ? "Esta sesión se desincronizó. Recargue esta página para obtener el estado más reciente de la entrevista."
-              : "This session got out of sync. Reload this page to fetch the latest interview state."}
+            {t.reloadRecoveryBody}
           </p>
           <Button fullWidth className="mb-3" onClick={onReloadPage}>
-            {lang === "es" ? "Recargar página" : "Reload page"}
+            {t.reloadPage}
           </Button>
         </>
       ) : (
         <Link href={`/session/${code}`}>
           <Button fullWidth className="mb-3">
-            {lang === "es" ? "Recuperar sesión con PIN" : "Recover session with PIN"}
+            {t.recoverWithPin}
           </Button>
         </Link>
       )}
       <Link href="/">
         <Button fullWidth variant="secondary">
-          {lang === "es" ? "Volver al inicio" : "Back to home"}
+          {t.backHome}
         </Button>
       </Link>
     </>

@@ -1,6 +1,7 @@
 "use client";
 
 import type { Lang } from "@/lib/language";
+import { getInterviewMessages } from "../messages/interviewMessages";
 import type { Question } from "../models";
 
 interface InterviewProgressHeaderProps {
@@ -28,13 +29,15 @@ export function InterviewProgressHeader({
   question: _question,
   progressPct,
 }: InterviewProgressHeaderProps) {
+  const t = getInterviewMessages(lang).progress;
+
   return (
     <div className={isBlinkingTimer ? "animate-pulse" : ""}>
       <div
         className={`flex flex-col items-start gap-1 px-4 py-2 text-sm font-semibold sm:flex-row sm:items-center sm:justify-between ${getTimerBannerTone(isWrapup, isWarning)}`}
       >
         <span>
-          {lang === "es" ? "Tiempo máximo restante" : "Maximum interview time remaining"}: {timerLabel}
+          {t.timeRemaining}: {timerLabel}
         </span>
       </div>
 

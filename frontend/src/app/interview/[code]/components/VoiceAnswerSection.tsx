@@ -5,6 +5,7 @@ import type { Lang } from "@/lib/language";
 import {
   VOICE_MAX_SECONDS,
 } from "../constants";
+import { getAnswerTimerMessage, getVoiceReviewWarning } from "../messages/interviewMessages";
 import { formatClock, getVoiceCapabilities } from "../utils";
 import type { MicWarmState, VoiceRecorderState } from "../viewTypes";
 import { VoiceRecorderPanel } from "./VoiceRecorderPanel";
@@ -42,22 +43,6 @@ function answerTimerTone(answerSecondsLeft: number): "normal" | "warning" | "dan
   return "normal";
 }
 
-function answerTimerMessage(lang: Lang, answerSecondsLeft: number): string {
-  if (answerSecondsLeft <= 30) {
-    return lang === "es"
-      ? "Quedan 0:30 o menos. Termine y envíe su respuesta."
-      : "0:30 or less remain. Finish and submit your answer.";
-  }
-  if (answerSecondsLeft <= 60) {
-    return lang === "es"
-      ? "Queda 1:00 o menos. Termine y envíe su respuesta."
-      : "1:00 or less remain. Finish and submit your answer.";
-  }
-  return lang === "es"
-    ? "Use este tiempo para revisar y enviar su respuesta final."
-    : "Use this time to review and submit your final answer.";
-}
-
 export const VoiceAnswerSection = memo(function VoiceAnswerSection({
   lang,
   hasMicOptIn,
@@ -92,9 +77,7 @@ export const VoiceAnswerSection = memo(function VoiceAnswerSection({
     : Math.max(0, VOICE_MAX_SECONDS - voiceWarningSeconds);
   const voiceReviewWarning =
     (voiceRecorderState === "recording" || voiceRecorderState === "paused") && answerSecondsLeft <= 60
-      ? (lang === "es"
-        ? "Deténgase pronto para dejar tiempo para revisar antes de enviar."
-        : "Stop soon to leave time to review before submit.")
+      ? getVoiceReviewWarning(lang)
       : "";
   const voiceCaps = getVoiceCapabilities({
     phase: "active",
@@ -113,7 +96,7 @@ export const VoiceAnswerSection = memo(function VoiceAnswerSection({
       onPrepareMicrophone={onPrepareMicrophone}
       answerTimerLabel={formatClock(answerSecondsLeft)}
       answerTimerTone={answerTimerTone(answerSecondsLeft)}
-      answerTimerMessage={answerTimerMessage(lang, answerSecondsLeft)}
+      answerTimerMessage={getAnswerTimerMessage(lang, answerSecondsLeft)}
       voiceTimerLabel={voiceTimerLabel}
       canPreviewRecording={voiceCaps.canPreviewRecording}
       isVoicePreviewPlaying={isVoicePreviewPlaying}

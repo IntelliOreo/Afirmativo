@@ -3,6 +3,7 @@
 import { memo } from "react";
 import { Button } from "@components/Button";
 import type { Lang } from "@/lib/language";
+import { getInterviewMessages } from "../messages/interviewMessages";
 import type { InputMode } from "../viewTypes";
 
 interface InputModeSwitchProps {
@@ -20,6 +21,8 @@ export const InputModeSwitch = memo(function InputModeSwitch({
   onSelectText,
   onSelectVoice,
 }: InputModeSwitchProps) {
+  const t = getInterviewMessages(lang).inputMode;
+
   return (
     <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
       <Button
@@ -28,7 +31,7 @@ export const InputModeSwitch = memo(function InputModeSwitch({
         disabled={!canSwitchModes}
         onClick={onSelectText}
       >
-        {lang === "es" ? "Entrada por texto" : "Text input"}
+        {t.text}
       </Button>
       <Button
         type="button"
@@ -36,7 +39,7 @@ export const InputModeSwitch = memo(function InputModeSwitch({
         disabled={!canSwitchModes}
         onClick={onSelectVoice}
       >
-        {lang === "es" ? "Entrada por voz" : "Voice input"}
+        {t.voice}
       </Button>
     </div>
   );

@@ -11,7 +11,7 @@ import {
 import type { InterviewReportDto } from "../dto";
 import { mapReport } from "../mappers";
 import type { InterviewReport } from "../models";
-import type { ReportStatus } from "../viewTypes";
+import type { ReportErrorState, ReportStatus } from "../viewTypes";
 import { wait, withJitter } from "../utils";
 
 interface ReportErrorResponse {
@@ -22,7 +22,7 @@ interface ReportErrorResponse {
 interface UseInterviewReportResult {
   reportStatus: ReportStatus;
   report: InterviewReport | null;
-  reportError: string;
+  reportError: ReportErrorState | null;
   resetReportState: () => void;
   loadReport: () => Promise<void>;
   resumeReport: () => Promise<void>;
@@ -33,24 +33,31 @@ function isReportNotStarted(status: number, data: ReportErrorResponse | null): b
   return status === 404 && data?.code === "REPORT_NOT_STARTED";
 }
 
+function mapReportError(
+  code: ReportErrorState["code"],
+  requestId = "",
+): ReportErrorState {
+  return requestId ? { code, requestId } : { code };
+}
+
 export function useInterviewReport(code: string): UseInterviewReportResult {
   const [reportStatus, setReportStatus] = useState<ReportStatus>("idle");
   const [report, setReport] = useState<InterviewReport | null>(null);
-  const [reportError, setReportError] = useState("");
+  const [reportError, setReportError] = useState<ReportErrorState | null>(null);
   const pollGenerationRef = useRef(0);
 
   const resetReportState = useCallback(() => {
     pollGenerationRef.current += 1;
     setReportStatus("idle");
     setReport(null);
-    setReportError("");
+    setReportError(null);
   }, []);
 
   const resumeReport = useCallback(async () => {
-    setReportError("");
+    setReportError(null);
 
     try {
-      const { ok, status: httpStatus, data } = await api<InterviewReportDto & ReportErrorResponse>(`/api/report/${code}`, {
+      const { ok, status: httpStatus, data, requestId } = await api<InterviewReportDto & ReportErrorResponse>(`/api/report/${code}`, {
         credentials: "include",
       });
 
@@ -66,23 +73,31 @@ export function useInterviewReport(code: string): UseInterviewReportResult {
       }
 
       if (!ok || !data) {
-        throw new Error(data?.error ?? "Failed to load report");
+        if (httpStatus >= 500 && data?.code === "GENERATION_FAILED") {
+          setReportError(mapReportError("generation_failed", requestId));
+        } else if (httpStatus >= 500) {
+          setReportError(mapReportError("load_failed", requestId));
+        } else {
+          setReportError(mapReportError("unknown", requestId));
+        }
+        setReportStatus("error");
+        return;
       }
 
       setReport(mapReport(data));
       setReportStatus("ready");
-    } catch (err) {
-      setReportError(err instanceof Error ? err.message : "Unknown error");
+    } catch {
+      setReportError(mapReportError("network"));
       setReportStatus("error");
     }
   }, [code]);
 
   const loadReport = useCallback(async () => {
-    setReportError("");
+    setReportError(null);
     setReportStatus("loading");
 
     try {
-      const { ok, status: httpStatus, data } = await api<InterviewReportDto & ReportErrorResponse>(
+      const { ok, status: httpStatus, data, requestId } = await api<InterviewReportDto & ReportErrorResponse>(
         `/api/report/${code}/generate`,
         {
           method: "POST",
@@ -96,13 +111,21 @@ export function useInterviewReport(code: string): UseInterviewReportResult {
       }
 
       if (!ok || !data) {
-        throw new Error(data?.error ?? "Failed to queue report");
+        if (httpStatus >= 500 && data?.code === "GENERATION_FAILED") {
+          setReportError(mapReportError("generation_failed", requestId));
+        } else if (httpStatus >= 500 || httpStatus >= 400) {
+          setReportError(mapReportError("queue_failed", requestId));
+        } else {
+          setReportError(mapReportError("unknown", requestId));
+        }
+        setReportStatus("error");
+        return;
       }
 
       setReport(mapReport(data));
       setReportStatus("ready");
-    } catch (err) {
-      setReportError(err instanceof Error ? err.message : "Unknown error");
+    } catch {
+      setReportError(mapReportError("network"));
       setReportStatus("error");
     }
   }, [code]);
@@ -124,13 +147,13 @@ export function useInterviewReport(code: string): UseInterviewReportResult {
 
       while (!canceled) {
         if (Date.now() - startedAt >= ASYNC_POLL_TIMEOUT_MS) {
-          setReportError("Report polling timed out. Try again.");
+          setReportError(mapReportError("polling_timed_out"));
           setReportStatus("error");
           return;
         }
 
         try {
-          const { ok, status: httpStatus, data } = await api<InterviewReportDto & ReportErrorResponse>(
+          const { ok, status: httpStatus, data, requestId } = await api<InterviewReportDto & ReportErrorResponse>(
             `/api/report/${code}`,
             { credentials: "include" },
           );
@@ -156,7 +179,7 @@ export function useInterviewReport(code: string): UseInterviewReportResult {
               consecutiveTransientFailures += 1;
               if (consecutiveTransientFailures >= ASYNC_POLL_CIRCUIT_BREAKER_FAILURES) {
                 await wait(withJitter(ASYNC_POLL_CIRCUIT_BREAKER_COOLDOWN_MS));
-                setReportError("Report polling paused after repeated failures. Try again.");
+                setReportError(mapReportError("polling_paused", requestId));
                 setReportStatus("error");
                 return;
               }
@@ -167,7 +190,12 @@ export function useInterviewReport(code: string): UseInterviewReportResult {
               continue;
             }
 
-            throw new Error(data?.error ?? "Failed to load report");
+            setReportError(mapReportError(
+              data?.code === "GENERATION_FAILED" ? "generation_failed" : "load_failed",
+              requestId,
+            ));
+            setReportStatus("error");
+            return;
           }
 
           setReport(mapReport(data));
@@ -179,7 +207,7 @@ export function useInterviewReport(code: string): UseInterviewReportResult {
             consecutiveTransientFailures += 1;
             if (consecutiveTransientFailures >= ASYNC_POLL_CIRCUIT_BREAKER_FAILURES) {
               await wait(withJitter(ASYNC_POLL_CIRCUIT_BREAKER_COOLDOWN_MS));
-              setReportError("Report polling paused after repeated network failures. Try again.");
+              setReportError(mapReportError("polling_paused"));
               setReportStatus("error");
               return;
             }
@@ -190,7 +218,7 @@ export function useInterviewReport(code: string): UseInterviewReportResult {
             continue;
           }
 
-          setReportError(err instanceof Error ? err.message : "Unknown error");
+          setReportError(mapReportError("network"));
           setReportStatus("error");
           return;
         }
