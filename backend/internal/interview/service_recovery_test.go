@@ -113,29 +113,24 @@ func newServiceForRecoveryTests(store Store, sessions *fakeInterviewSessionStore
 	if sessions == nil {
 		sessions = &fakeInterviewSessionStore{}
 	}
-	return NewService(
-		sessions,
-		sessions,
-		sessions,
-		store,
-		ai,
-		[]config.AreaConfig{
-			{
-				ID:                      1,
-				Slug:                    "protected_ground",
-				Label:                   "Protected ground",
-				Description:             "Criterion description",
-				SufficiencyRequirements: "Sufficiency requirements",
-				FallbackQuestion:        "Fallback protected ground question",
-			},
+	settings := defaultInterviewSettings()
+	settings.AreaConfigs = []config.AreaConfig{
+		{
+			ID:                      1,
+			Slug:                    "protected_ground",
+			Label:                   "Protected ground",
+			Description:             "Criterion description",
+			SufficiencyRequirements: "Sufficiency requirements",
+			FallbackQuestion:        "Fallback protected ground question",
 		},
-		"Opening disclaimer EN",
-		"Opening disclaimer ES",
-		"Default readiness EN",
-		"Default readiness ES",
-		300,
-		AsyncConfig{},
-	)
+	}
+	return NewService(Deps{
+		SessionStarter:   sessions,
+		SessionGetter:    sessions,
+		SessionCompleter: sessions,
+		Store:            store,
+		AIClient:         ai,
+	}, settings)
 }
 
 func activeSession(sessionCode, preferredLanguage string) *session.Session {

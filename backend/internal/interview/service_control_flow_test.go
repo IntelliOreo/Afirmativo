@@ -15,37 +15,32 @@ func newServiceForControlFlowTests(store Store, sessions *fakeInterviewSessionSt
 	if sessions == nil {
 		sessions = &fakeInterviewSessionStore{}
 	}
-	return NewService(
-		sessions,
-		sessions,
-		sessions,
-		store,
-		ai,
-		[]config.AreaConfig{
-			{
-				ID:                      1,
-				Slug:                    "protected_ground",
-				Label:                   "Protected ground",
-				Description:             "Protected ground description",
-				SufficiencyRequirements: "Protected ground sufficiency requirements",
-				FallbackQuestion:        "Fallback protected ground question",
-			},
-			{
-				ID:                      2,
-				Slug:                    "social_group",
-				Label:                   "Social group",
-				Description:             "Social group description",
-				SufficiencyRequirements: "Social group sufficiency requirements",
-				FallbackQuestion:        "Fallback social group question",
-			},
+	settings := defaultInterviewSettings()
+	settings.AreaConfigs = []config.AreaConfig{
+		{
+			ID:                      1,
+			Slug:                    "protected_ground",
+			Label:                   "Protected ground",
+			Description:             "Protected ground description",
+			SufficiencyRequirements: "Protected ground sufficiency requirements",
+			FallbackQuestion:        "Fallback protected ground question",
 		},
-		"Opening disclaimer EN",
-		"Opening disclaimer ES",
-		"Default readiness EN",
-		"Default readiness ES",
-		300,
-		AsyncConfig{},
-	)
+		{
+			ID:                      2,
+			Slug:                    "social_group",
+			Label:                   "Social group",
+			Description:             "Social group description",
+			SufficiencyRequirements: "Social group sufficiency requirements",
+			FallbackQuestion:        "Fallback social group question",
+		},
+	}
+	return NewService(Deps{
+		SessionStarter:   sessions,
+		SessionGetter:    sessions,
+		SessionCompleter: sessions,
+		Store:            store,
+		AIClient:         ai,
+	}, settings)
 }
 
 func TestProcessTurn_TimeoutFinishesInterview(t *testing.T) {

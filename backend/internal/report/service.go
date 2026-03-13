@@ -15,47 +15,10 @@ import (
 )
 
 const (
-	sessionCompleted                = "completed"
-	defaultAsyncReportWorkers       = 2
-	defaultAsyncReportQueueSize     = 64
-	defaultAsyncReportRecoveryBatch = 50
-	defaultAsyncReportRecoveryEvery = 10 * time.Second
-	defaultAsyncReportStaleAfter    = 3 * time.Minute
-	defaultAsyncReportJobTimeout    = 3 * time.Minute
-	reportAIMaxAttempts             = 3
-	reportAIRetryDelay              = 500 * time.Millisecond
+	sessionCompleted    = "completed"
+	reportAIMaxAttempts = 3
+	reportAIRetryDelay  = 500 * time.Millisecond
 )
-
-type AsyncConfig struct {
-	Workers       int
-	QueueSize     int
-	RecoveryBatch int
-	RecoveryEvery time.Duration
-	StaleAfter    time.Duration
-	JobTimeout    time.Duration
-}
-
-func (c AsyncConfig) withDefaults() AsyncConfig {
-	if c.Workers <= 0 {
-		c.Workers = defaultAsyncReportWorkers
-	}
-	if c.QueueSize <= 0 {
-		c.QueueSize = defaultAsyncReportQueueSize
-	}
-	if c.RecoveryBatch <= 0 {
-		c.RecoveryBatch = defaultAsyncReportRecoveryBatch
-	}
-	if c.RecoveryEvery <= 0 {
-		c.RecoveryEvery = defaultAsyncReportRecoveryEvery
-	}
-	if c.StaleAfter <= 0 {
-		c.StaleAfter = defaultAsyncReportStaleAfter
-	}
-	if c.JobTimeout <= 0 {
-		c.JobTimeout = defaultAsyncReportJobTimeout
-	}
-	return c
-}
 
 type reportGenerationInput struct {
 	summaries           []AreaSummary
@@ -89,6 +52,7 @@ type Service struct {
 	sessions    SessionProvider
 	aiClient    ReportAIClient
 	areaConfigs []config.AreaConfig
+	dbTimeout   time.Duration
 	nowFn       func() time.Time
 
 	asyncWorkers          int
@@ -101,43 +65,40 @@ type Service struct {
 	asyncReportRequestIDs sync.Map
 }
 
-// NewService creates a new report service.
-func NewService(store Store, interviews InterviewDataProvider, sessions SessionProvider, aiClient ReportAIClient, areaConfigs []config.AreaConfig) *Service {
-	asyncConfig := AsyncConfig{}.withDefaults()
-	return &Service{
-		store:              store,
-		interviews:         interviews,
-		sessions:           sessions,
-		aiClient:           aiClient,
-		areaConfigs:        areaConfigs,
-		nowFn:              time.Now,
-		asyncWorkers:       asyncConfig.Workers,
-		asyncRecoveryBatch: asyncConfig.RecoveryBatch,
-		asyncRecoveryEvery: asyncConfig.RecoveryEvery,
-		asyncStaleAfter:    asyncConfig.StaleAfter,
-		asyncJobTimeout:    asyncConfig.JobTimeout,
-		asyncQueue:         make(chan string, asyncConfig.QueueSize),
-	}
+type Deps struct {
+	Store      Store
+	Interviews InterviewDataProvider
+	Sessions   SessionProvider
+	AIClient   ReportAIClient
 }
 
-func (s *Service) SetAsyncConfig(cfg AsyncConfig) {
-	cfg = cfg.withDefaults()
-	s.asyncWorkers = cfg.Workers
-	s.asyncRecoveryBatch = cfg.RecoveryBatch
-	s.asyncRecoveryEvery = cfg.RecoveryEvery
-	s.asyncStaleAfter = cfg.StaleAfter
-	s.asyncJobTimeout = cfg.JobTimeout
-	if s.asyncQueue == nil || cap(s.asyncQueue) != cfg.QueueSize {
-		s.asyncQueue = make(chan string, cfg.QueueSize)
+type Settings struct {
+	AreaConfigs  []config.AreaConfig
+	DBTimeout    time.Duration
+	AsyncRuntime config.AsyncRuntimeConfig
+}
+
+// NewService creates a new report service.
+func NewService(deps Deps, settings Settings) *Service {
+	return &Service{
+		store:              deps.Store,
+		interviews:         deps.Interviews,
+		sessions:           deps.Sessions,
+		aiClient:           deps.AIClient,
+		areaConfigs:        settings.AreaConfigs,
+		dbTimeout:          settings.DBTimeout,
+		nowFn:              time.Now,
+		asyncWorkers:       settings.AsyncRuntime.Workers,
+		asyncRecoveryBatch: settings.AsyncRuntime.RecoveryBatch,
+		asyncRecoveryEvery: settings.AsyncRuntime.RecoveryEvery,
+		asyncStaleAfter:    settings.AsyncRuntime.StaleAfter,
+		asyncJobTimeout:    settings.AsyncRuntime.JobTimeout,
+		asyncQueue:         make(chan string, settings.AsyncRuntime.QueueSize),
 	}
 }
 
 func (s *Service) StartAsyncRuntime(ctx context.Context) {
 	s.asyncRuntimeOnce.Do(func() {
-		if s.asyncQueue == nil {
-			s.asyncQueue = make(chan string, defaultAsyncReportQueueSize)
-		}
-
 		slog.Info("starting async report runtime",
 			"workers", s.asyncWorkers,
 			"queue_size", cap(s.asyncQueue),
@@ -189,7 +150,7 @@ func (s *Service) runAsyncRecoveryLoop(ctx context.Context) {
 
 func (s *Service) recoverAsyncReports(ctx context.Context) {
 	staleBefore := s.nowFn().UTC().Add(-s.asyncStaleAfter)
-	requeueCtx, requeueCancel := context.WithTimeout(ctx, 5*time.Second)
+	requeueCtx, requeueCancel := context.WithTimeout(ctx, s.dbTimeout)
 	requeued, err := s.store.RequeueStaleRunningReports(requeueCtx, staleBefore)
 	requeueCancel()
 	if err != nil {
@@ -197,7 +158,7 @@ func (s *Service) recoverAsyncReports(ctx context.Context) {
 		return
 	}
 
-	listCtx, listCancel := context.WithTimeout(ctx, 5*time.Second)
+	listCtx, listCancel := context.WithTimeout(ctx, s.dbTimeout)
 	queuedSessionCodes, err := s.store.ListQueuedReportSessionCodes(listCtx, s.asyncRecoveryBatch)
 	listCancel()
 	if err != nil {
@@ -318,7 +279,7 @@ func (s *Service) GenerateReportAsync(ctx context.Context, sessionCode string) (
 }
 
 func (s *Service) processQueuedReport(ctx context.Context, sessionCode string) {
-	claimCtx, claimCancel := context.WithTimeout(ctx, 5*time.Second)
+	claimCtx, claimCancel := context.WithTimeout(ctx, s.dbTimeout)
 	reportRecord, err := s.store.ClaimQueuedReport(claimCtx, sessionCode)
 	claimCancel()
 	requestID := s.asyncReportRequestID(sessionCode)
@@ -355,7 +316,7 @@ func (s *Service) processQueuedReport(ctx context.Context, sessionCode string) {
 		return
 	}
 
-	successCtx, successCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	successCtx, successCancel := context.WithTimeout(context.Background(), s.dbTimeout)
 	if err := s.store.MarkReportReady(successCtx, reportResult); err != nil {
 		slog.Error("failed to mark report ready", "session_code", reportRecord.SessionCode, "request_id", requestID, "error", err)
 	} else {
@@ -374,7 +335,7 @@ func (s *Service) markReportFailed(ctx context.Context, sessionCode string, err 
 	}
 
 	errorCode, errorMessage := reportFailureDetails(err)
-	failCtx, failCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	failCtx, failCancel := context.WithTimeout(context.Background(), s.dbTimeout)
 	markErr := s.store.MarkReportFailed(failCtx, sessionCode, errorCode, errorMessage)
 	failCancel()
 	if markErr != nil {

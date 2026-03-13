@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 )
 
 // AreaConfig holds the rubric and fallback for a single interview criterion.
@@ -22,102 +23,146 @@ type AreaConfig struct {
 	FallbackQuestion        string `json:"fallback_question"`
 }
 
+type BilingualText struct {
+	En string
+	Es string
+}
+
+type AsyncRuntimeConfig struct {
+	Workers       int
+	QueueSize     int
+	RecoveryBatch int
+	RecoveryEvery time.Duration
+	StaleAfter    time.Duration
+	JobTimeout    time.Duration
+}
+
+type ServerConfig struct {
+	Port                    string
+	FrontendURL             string
+	DatabaseURL             string
+	LogLevel                string
+	AllowSensitiveDebugLogs bool
+	HTTPReadTimeout         time.Duration
+	HTTPWriteTimeout        time.Duration
+	HTTPIdleTimeout         time.Duration
+}
+
+type AuthConfig struct {
+	JWTSecret             string
+	SessionExpiryHours    int
+	SessionAuthIssuer     string
+	SessionAuthAudience   string
+	SessionAuthCookieName string
+	SessionAuthMaxTTL     time.Duration
+}
+
+type InterviewConfig struct {
+	BudgetSeconds          int
+	AnswerTimeLimitSeconds int
+	DBTimeout              time.Duration
+	AsyncRuntime           AsyncRuntimeConfig
+	AreaConfigs            []AreaConfig
+	OpeningDisclaimer      BilingualText
+	ReadinessQuestion      BilingualText
+}
+
+type ReportConfig struct {
+	DBTimeout    time.Duration
+	AsyncRuntime AsyncRuntimeConfig
+}
+
+type AIConfig struct {
+	Provider                                string
+	MockAPIURL                              string
+	OllamaBaseURL                           string
+	OllamaTemperature                       float64
+	InterviewSystemPrompt                   string
+	UnstructuredInterviewOutputFormatPrompt string
+	InterviewPromptLastQuestion             string
+	InterviewPromptClosing                  string
+	InterviewPromptOpeningTurn              string
+	InterviewLastQuestionSeconds            int
+	InterviewClosingSeconds                 int
+	InterviewMidpointAreaIndex              int
+	InterviewPromptCachingEnabled           bool
+	Model                                   string
+	MaxTokens                               int
+	APIKey                                  string
+	Timeout                                 time.Duration
+	ReportPrompt                            string
+	UnstructuredReportOutputFormatPrompt    string
+	ReportMaxTokens                         int
+	VertexAuthMode                          string
+	VertexAPIKey                            string
+	VertexProjectID                         string
+	VertexLocation                          string
+	VertexExplicitCacheEnabled              bool
+	VertexContextCacheTTL                   time.Duration
+}
+
+type VoiceConfig struct {
+	BaseURL             string
+	APIKey              string
+	Model               string
+	TokenTimeoutSeconds int
+	Timeout             time.Duration
+}
+
+type VerifyRateLimitConfig struct {
+	IPRatePerMinute int
+	IPBurst         int
+	FailMaxAttempts int
+	FailWindow      time.Duration
+	FailLockout     time.Duration
+}
+
+type VoiceRateLimitConfig struct {
+	IPRatePerMinute      int
+	IPBurst              int
+	SessionRatePerMinute int
+	SessionBurst         int
+}
+
+type RateLimitConfig struct {
+	Verify VerifyRateLimitConfig
+	Voice  VoiceRateLimitConfig
+}
+
+type AdminConfig struct {
+	CleanupEnabled bool
+}
+
 // Config holds all application configuration loaded from environment variables.
 // In local dev, values come from .env via godotenv.
 // In containers, values come from the runtime environment (e.g., Secret Manager).
 type Config struct {
-	Port                            string
-	FrontendURL                     string
-	DatabaseURL                     string
-	SessionExpiryHours              int
-	InterviewBudgetSeconds          int
-	JWTSecret                       string
-	SessionAuthIssuer               string
-	SessionAuthAudience             string
-	SessionAuthCookieName           string
-	SessionAuthMaxTTLMinutes        int
-	MockAPIURL                      string // If non-empty, use this mock server instead of real AI APIs
-	LogLevel                        string // "debug", "info", "warn", "error" — defaults to "info"
-	AllowSensitiveDebugLogs         bool   // Allows sensitive fields in DEBUG payload logs when true
-	HTTPReadTimeoutSeconds          int    // HTTP server read timeout in seconds
-	HTTPWriteTimeoutSeconds         int    // HTTP server write timeout in seconds
-	HTTPIdleTimeoutSeconds          int    // HTTP server idle timeout in seconds
-	AsyncAnswerWorkers              int    // Number of async answer worker goroutines
-	AsyncAnswerQueueSize            int    // In-memory queue size for async answer dispatch
-	AsyncAnswerRecoveryBatch        int    // Max queued jobs fetched per recovery cycle
-	AsyncAnswerRecoveryEverySeconds int    // Recovery loop interval in seconds
-	AsyncAnswerStaleAfterSeconds    int    // Running job stale threshold in seconds
-	AsyncAnswerJobTimeoutSeconds    int    // Per-job processing timeout in seconds
-	AsyncReportWorkers              int    // Number of async report worker goroutines
-	AsyncReportQueueSize            int    // In-memory queue size for async report dispatch
-	AsyncReportRecoveryBatch        int    // Max queued reports fetched per recovery cycle
-	AsyncReportRecoveryEverySeconds int    // Report recovery loop interval in seconds
-	AsyncReportStaleAfterSeconds    int    // Running report stale threshold in seconds
-	AsyncReportJobTimeoutSeconds    int    // Per-report processing timeout in seconds
-	VerifyIPRatePerMinute           int    // Max average /api/session/verify requests per minute per IP
-	VerifyIPBurst                   int    // Burst size for /api/session/verify per-IP token bucket
-	VerifyFailMaxAttempts           int    // Max verify failures before lockout per session+IP
-	VerifyFailWindowSeconds         int    // Window in seconds for counting verify failures
-	VerifyFailLockoutSeconds        int    // Lockout duration in seconds after verify failures threshold
-	VoiceIPRatePerMinute            int    // Max average /api/voice/token requests per minute per IP
-	VoiceIPBurst                    int    // Burst size for /api/voice/token per-IP token bucket
-	VoiceSessionRatePerMinute       int    // Max average /api/voice/token requests per minute per session
-	VoiceSessionBurst               int    // Burst size for /api/voice/token per-session token bucket
-
-	// AI configuration — all AI instructions live here, not in Go code.
-	AIProvider                              string       // "claude" (default) or "ollama"
-	OllamaBaseURL                           string       // Base URL for Ollama OpenAI-compatible endpoint
-	OllamaTemperature                       float64      // Sampling temperature for Ollama chat completions
-	AIInterviewSystemPrompt                 string       // Base interview system prompt sent to Claude/Ollama on every turn
-	UnstructuredInterviewOutputFormatPrompt string       // Prompt instructions for unstructured providers to return interview JSON
-	AIInterviewPromptLastQuestion           string       // Turn-local priority snippet for last-question pacing
-	AIInterviewPromptClosing                string       // Turn-local priority snippet for whole-interview closing
-	AIInterviewPromptOpeningTurn            string       // Opening-turn instruction added to the current user turn payload
-	AIInterviewLastQuestionSeconds          int          // Time threshold (seconds) to trigger last-question prompt
-	AIInterviewClosingSeconds               int          // Time threshold (seconds) to trigger closing prompt
-	AIInterviewMidpointAreaIndex            int          // Area index defining the pacing midpoint (e.g. 3 = nexus)
-	AIInterviewPromptCachingEnabled         bool         // Enables Claude prompt caching when true
-	AIModel                                 string       // e.g. "claude-sonnet-4-20250514"
-	AIMaxTokens                             int          // e.g. 1024
-	AIAPIKey                                string       // Anthropic API key (not required for Ollama or when MOCK_API_URL is set)
-	AITimeoutSeconds                        int          // HTTP timeout for AI API calls (default 30)
-	AIReportPrompt                          string       // System prompt for report generation AI call
-	UnstructuredReportOutputFormatPrompt    string       // Prompt instructions for unstructured providers to return report JSON
-	AIReportMaxTokens                       int          // Max tokens for report AI call (default 2048)
-	VertexAIAuthMode                        string       // "api_key" (default) or "adc"
-	VertexAIAPIKey                          string       // Google Cloud API key for Vertex API-key auth
-	VertexAIProjectID                       string       // GCP project used for Vertex standard endpoints
-	VertexAILocation                        string       // Vertex location (default "global")
-	VertexAIExplicitCacheEnabled            bool         // Enables explicit cachedContents usage when true
-	VertexAIContextCacheTTLSeconds          int          // Explicit cachedContents TTL in seconds
-	AreaConfigs                             []AreaConfig // Per-area rubrics loaded from AI_AREA_CONFIG JSON
-	InterviewOpeningDisclaimerEn            string       // Opening disclaimer shown on interview/start in English
-	InterviewOpeningDisclaimerEs            string       // Opening disclaimer shown on interview/start in Spanish
-	InterviewReadinessQuestionEn            string       // Non-criteria readiness question shown after disclaimer in English
-	InterviewReadinessQuestionEs            string       // Non-criteria readiness question shown after disclaimer in Spanish
-
-	// Voice AI configuration.
-	VoiceAIBaseURL             string // Deepgram-compatible base URL (real or mock)
-	VoiceAIAPIKey              string // Voice provider master API key (server only)
-	VoiceAIModel               string // Model label returned to the frontend
-	VoiceAITokenTimeoutSeconds int    // Minted token TTL in seconds
-
-	// Interview timing.
-	AnswerTimeLimitSeconds int // Per-question answer time limit in seconds (default 300 = 5 min)
-
-	// Admin maintenance configuration.
-	AdminCleanupEnabled bool // Enables destructive admin cleanup endpoint when true
+	Server    ServerConfig
+	Auth      AuthConfig
+	Interview InterviewConfig
+	Report    ReportConfig
+	AI        AIConfig
+	Voice     VoiceConfig
+	RateLimit RateLimitConfig
+	Admin     AdminConfig
 }
 
 const (
 	defaultSessionAuthIssuer   = "afirmativo-backend"
 	defaultSessionAuthAudience = "afirmativo-frontend"
+	defaultInterviewDBTimeout  = 5 * time.Second
+	defaultReportDBTimeout     = 5 * time.Second
+
+	defaultOpeningDisclaimerEs = "Aviso importante: esta entrevista simulada es solo para preparacion y no constituye asesoramiento legal. Al continuar, usted confirma que leyo y acepta estos terminos."
+	defaultOpeningDisclaimerEn = "Important disclaimer: this mock interview is for preparation only and does not constitute legal advice. By continuing, you confirm that you read and accept these terms."
+	defaultReadinessQuestionEs = "¿Cómo se siente hoy? ¿Está física y mentalmente preparado/a para continuar con esta entrevista?"
+	defaultReadinessQuestionEn = "How are you feeling today? Are you physically and mentally ready to proceed with this interview?"
 )
 
 // Load reads required environment variables and returns a validated Config.
 // Returns an error if any required variable is missing.
 func Load() (Config, error) {
-	expiry, err := envInt("SESSION_EXPIRY_HOURS", 24)
+	sessionExpiryHours, err := envInt("SESSION_EXPIRY_HOURS", 24)
 	if err != nil {
 		return Config{}, err
 	}
@@ -125,23 +170,15 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	answerTimeLimitSeconds, err := envIntMin("ANSWER_TIME_LIMIT_SECONDS", 300, 30)
+	if err != nil {
+		return Config{}, err
+	}
+	sessionAuthMaxTTLMinutes, err := envIntMin("SESSION_AUTH_MAX_TTL_MINUTES", 60, 1)
+	if err != nil {
+		return Config{}, err
+	}
 	maxTokens, err := envInt("AI_MAX_TOKENS", 1024)
-	if err != nil {
-		return Config{}, err
-	}
-	lastQSec, err := envInt("AI_INTERVIEW_LAST_QUESTION_SECONDS", 30)
-	if err != nil {
-		return Config{}, err
-	}
-	closingSec, err := envInt("AI_INTERVIEW_CLOSING_SECONDS", 15)
-	if err != nil {
-		return Config{}, err
-	}
-	midpointIdx, err := envInt("AI_INTERVIEW_MIDPOINT_AREA_INDEX", 3)
-	if err != nil {
-		return Config{}, err
-	}
-	aiTimeout, err := envInt("AI_TIMEOUT_SECONDS", 30)
 	if err != nil {
 		return Config{}, err
 	}
@@ -149,15 +186,35 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	vertexCacheTTLSeconds, err := envIntMin("VERTEX_AI_CONTEXT_CACHE_TTL_SECONDS", 300, 1)
+	lastQuestionSeconds, err := envInt("AI_INTERVIEW_LAST_QUESTION_SECONDS", 30)
 	if err != nil {
 		return Config{}, err
 	}
-	httpReadTimeout, err := envInt("HTTP_READ_TIMEOUT_SECONDS", 10)
+	closingSeconds, err := envInt("AI_INTERVIEW_CLOSING_SECONDS", 15)
 	if err != nil {
 		return Config{}, err
 	}
-	httpWriteTimeout, err := envInt("HTTP_WRITE_TIMEOUT_SECONDS", 30)
+	midpointAreaIndex, err := envInt("AI_INTERVIEW_MIDPOINT_AREA_INDEX", 3)
+	if err != nil {
+		return Config{}, err
+	}
+	aiTimeoutSeconds, err := envInt("AI_TIMEOUT_SECONDS", 30)
+	if err != nil {
+		return Config{}, err
+	}
+	httpReadTimeoutSeconds, err := envInt("HTTP_READ_TIMEOUT_SECONDS", 10)
+	if err != nil {
+		return Config{}, err
+	}
+	httpWriteTimeoutSeconds, err := envInt("HTTP_WRITE_TIMEOUT_SECONDS", 30)
+	if err != nil {
+		return Config{}, err
+	}
+	httpIdleTimeoutSeconds, err := envInt("HTTP_IDLE_TIMEOUT_SECONDS", 60)
+	if err != nil {
+		return Config{}, err
+	}
+	vertexContextCacheTTLSeconds, err := envIntMin("VERTEX_AI_CONTEXT_CACHE_TTL_SECONDS", 300, 1)
 	if err != nil {
 		return Config{}, err
 	}
@@ -165,26 +222,18 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	httpIdleTimeout, err := envInt("HTTP_IDLE_TIMEOUT_SECONDS", 60)
+	ollamaTemperature, err := envFloat("OLLAMA_TEMPERATURE", 0.3, 0, 2)
 	if err != nil {
 		return Config{}, err
 	}
-	sessionAuthMaxTTL, err := envIntMin("SESSION_AUTH_MAX_TTL_MINUTES", 60, 1)
+	voiceTokenTimeoutSeconds, err := envInt("VOICE_AI_TOKEN_TIMEOUT_SECONDS", 30)
 	if err != nil {
 		return Config{}, err
 	}
-	ollamaTemp, err := envFloat("OLLAMA_TEMPERATURE", 0.3, 0, 2)
-	if err != nil {
-		return Config{}, err
-	}
-	voiceTokenTimeout, err := envInt("VOICE_AI_TOKEN_TIMEOUT_SECONDS", 30)
-	if err != nil {
-		return Config{}, err
-	}
-	if voiceTokenTimeout <= 0 || voiceTokenTimeout > 3600 {
+	if voiceTokenTimeoutSeconds <= 0 || voiceTokenTimeoutSeconds > 3600 {
 		return Config{}, fmt.Errorf("VOICE_AI_TOKEN_TIMEOUT_SECONDS must be between 1 and 3600")
 	}
-	answerTimeLimitS, err := envIntMin("ANSWER_TIME_LIMIT_SECONDS", 300, 30)
+	allowSensitiveDebugLogs, err := envBool("ALLOW_SENSITIVE_DEBUG_LOGS", false)
 	if err != nil {
 		return Config{}, err
 	}
@@ -192,62 +241,61 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	allowSensitiveDebugLogs, err := envBool("ALLOW_SENSITIVE_DEBUG_LOGS", false)
-	if err != nil {
-		return Config{}, err
-	}
 	interviewPromptCachingEnabled, err := envBool("AI_INTERVIEW_PROMPT_CACHING_ENABLED", true)
 	if err != nil {
 		return Config{}, err
 	}
-	asyncWorkers, err := envIntMin("ASYNC_ANSWER_WORKERS", 4, 1)
+
+	answerAsyncWorkers, err := envIntMin("ASYNC_ANSWER_WORKERS", 4, 1)
 	if err != nil {
 		return Config{}, err
 	}
-	asyncQueueSize, err := envIntMin("ASYNC_ANSWER_QUEUE_SIZE", 256, 1)
+	answerAsyncQueueSize, err := envIntMin("ASYNC_ANSWER_QUEUE_SIZE", 256, 1)
 	if err != nil {
 		return Config{}, err
 	}
-	asyncRecoveryBatch, err := envIntMin("ASYNC_ANSWER_RECOVERY_BATCH", 100, 1)
+	answerAsyncRecoveryBatch, err := envIntMin("ASYNC_ANSWER_RECOVERY_BATCH", 100, 1)
 	if err != nil {
 		return Config{}, err
 	}
-	asyncRecoveryEveryS, err := envIntMin("ASYNC_ANSWER_RECOVERY_EVERY_SECONDS", 10, 1)
+	answerAsyncRecoveryEverySeconds, err := envIntMin("ASYNC_ANSWER_RECOVERY_EVERY_SECONDS", 10, 1)
 	if err != nil {
 		return Config{}, err
 	}
-	asyncStaleAfterS, err := envIntMin("ASYNC_ANSWER_STALE_AFTER_SECONDS", 180, 1)
+	answerAsyncStaleAfterSeconds, err := envIntMin("ASYNC_ANSWER_STALE_AFTER_SECONDS", 180, 1)
 	if err != nil {
 		return Config{}, err
 	}
-	asyncJobTimeoutS, err := envIntMin("ASYNC_ANSWER_JOB_TIMEOUT_SECONDS", 180, 1)
+	answerAsyncJobTimeoutSeconds, err := envIntMin("ASYNC_ANSWER_JOB_TIMEOUT_SECONDS", 180, 1)
 	if err != nil {
 		return Config{}, err
 	}
-	asyncReportWorkers, err := envIntMin("ASYNC_REPORT_WORKERS", 2, 1)
+
+	reportAsyncWorkers, err := envIntMin("ASYNC_REPORT_WORKERS", 2, 1)
 	if err != nil {
 		return Config{}, err
 	}
-	asyncReportQueueSize, err := envIntMin("ASYNC_REPORT_QUEUE_SIZE", 64, 1)
+	reportAsyncQueueSize, err := envIntMin("ASYNC_REPORT_QUEUE_SIZE", 64, 1)
 	if err != nil {
 		return Config{}, err
 	}
-	asyncReportRecoveryBatch, err := envIntMin("ASYNC_REPORT_RECOVERY_BATCH", 50, 1)
+	reportAsyncRecoveryBatch, err := envIntMin("ASYNC_REPORT_RECOVERY_BATCH", 50, 1)
 	if err != nil {
 		return Config{}, err
 	}
-	asyncReportRecoveryEveryS, err := envIntMin("ASYNC_REPORT_RECOVERY_EVERY_SECONDS", 10, 1)
+	reportAsyncRecoveryEverySeconds, err := envIntMin("ASYNC_REPORT_RECOVERY_EVERY_SECONDS", 10, 1)
 	if err != nil {
 		return Config{}, err
 	}
-	asyncReportStaleAfterS, err := envIntMin("ASYNC_REPORT_STALE_AFTER_SECONDS", 180, 1)
+	reportAsyncStaleAfterSeconds, err := envIntMin("ASYNC_REPORT_STALE_AFTER_SECONDS", 180, 1)
 	if err != nil {
 		return Config{}, err
 	}
-	asyncReportJobTimeoutS, err := envIntMin("ASYNC_REPORT_JOB_TIMEOUT_SECONDS", 180, 1)
+	reportAsyncJobTimeoutSeconds, err := envIntMin("ASYNC_REPORT_JOB_TIMEOUT_SECONDS", 180, 1)
 	if err != nil {
 		return Config{}, err
 	}
+
 	verifyIPRatePerMinute, err := envIntMin("VERIFY_IP_RATE_LIMIT_PER_MINUTE", 60, 1)
 	if err != nil {
 		return Config{}, err
@@ -260,11 +308,11 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	verifyFailWindowS, err := envIntMin("VERIFY_FAIL_WINDOW_SECONDS", 600, 1)
+	verifyFailWindowSeconds, err := envIntMin("VERIFY_FAIL_WINDOW_SECONDS", 600, 1)
 	if err != nil {
 		return Config{}, err
 	}
-	verifyFailLockoutS, err := envIntMin("VERIFY_FAIL_LOCKOUT_SECONDS", 900, 1)
+	verifyFailLockoutSeconds, err := envIntMin("VERIFY_FAIL_LOCKOUT_SECONDS", 900, 1)
 	if err != nil {
 		return Config{}, err
 	}
@@ -276,7 +324,7 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	voiceSessionRatePerMin, err := envIntMin("VOICE_TOKEN_SESSION_RATE_LIMIT_PER_MINUTE", 6, 1)
+	voiceSessionRatePerMinute, err := envIntMin("VOICE_TOKEN_SESSION_RATE_LIMIT_PER_MINUTE", 6, 1)
 	if err != nil {
 		return Config{}, err
 	}
@@ -285,131 +333,120 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	areaConfigs, err := parseAreaConfigs(os.Getenv("AI_AREA_CONFIG"))
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
-		Port:                                    envOr("PORT", "8080"),
-		FrontendURL:                             envOr("FRONTEND_URL", "http://localhost:3000"),
-		DatabaseURL:                             os.Getenv("DATABASE_URL"),
-		SessionExpiryHours:                      expiry,
-		InterviewBudgetSeconds:                  interviewBudgetSeconds,
-		JWTSecret:                               os.Getenv("JWT_SECRET"),
-		SessionAuthIssuer:                       defaultSessionAuthIssuer,
-		SessionAuthAudience:                     defaultSessionAuthAudience,
-		SessionAuthCookieName:                   envOr("SESSION_AUTH_COOKIE_NAME", "afirmativo_auth"),
-		SessionAuthMaxTTLMinutes:                sessionAuthMaxTTL,
-		MockAPIURL:                              os.Getenv("MOCK_API_URL"),
-		LogLevel:                                envOr("LOG_LEVEL", "info"),
-		AllowSensitiveDebugLogs:                 allowSensitiveDebugLogs,
-		HTTPReadTimeoutSeconds:                  httpReadTimeout,
-		HTTPWriteTimeoutSeconds:                 httpWriteTimeout,
-		HTTPIdleTimeoutSeconds:                  httpIdleTimeout,
-		AsyncAnswerWorkers:                      asyncWorkers,
-		AsyncAnswerQueueSize:                    asyncQueueSize,
-		AsyncAnswerRecoveryBatch:                asyncRecoveryBatch,
-		AsyncAnswerRecoveryEverySeconds:         asyncRecoveryEveryS,
-		AsyncAnswerStaleAfterSeconds:            asyncStaleAfterS,
-		AsyncAnswerJobTimeoutSeconds:            asyncJobTimeoutS,
-		AsyncReportWorkers:                      asyncReportWorkers,
-		AsyncReportQueueSize:                    asyncReportQueueSize,
-		AsyncReportRecoveryBatch:                asyncReportRecoveryBatch,
-		AsyncReportRecoveryEverySeconds:         asyncReportRecoveryEveryS,
-		AsyncReportStaleAfterSeconds:            asyncReportStaleAfterS,
-		AsyncReportJobTimeoutSeconds:            asyncReportJobTimeoutS,
-		VerifyIPRatePerMinute:                   verifyIPRatePerMinute,
-		VerifyIPBurst:                           verifyIPBurst,
-		VerifyFailMaxAttempts:                   verifyFailMaxAttempts,
-		VerifyFailWindowSeconds:                 verifyFailWindowS,
-		VerifyFailLockoutSeconds:                verifyFailLockoutS,
-		VoiceIPRatePerMinute:                    voiceIPRatePerMinute,
-		VoiceIPBurst:                            voiceIPBurst,
-		VoiceSessionRatePerMinute:               voiceSessionRatePerMin,
-		VoiceSessionBurst:                       voiceSessionBurst,
-		AIProvider:                              envOr("AI_PROVIDER", "claude"),
-		OllamaBaseURL:                           envOr("OLLAMA_BASE_URL", "http://localhost:11434"),
-		OllamaTemperature:                       ollamaTemp,
-		AIInterviewSystemPrompt:                 os.Getenv("AI_INTERVIEW_SYSTEM_PROMPT"),
-		UnstructuredInterviewOutputFormatPrompt: os.Getenv("UNSTRUCTURED_INTERVIEW_OUTPUT_FORMAT_PROMPT"),
-		AIInterviewPromptLastQuestion:           os.Getenv("AI_INTERVIEW_PROMPT_LAST_QUESTION"),
-		AIInterviewPromptClosing:                os.Getenv("AI_INTERVIEW_PROMPT_CLOSING"),
-		AIInterviewPromptOpeningTurn:            os.Getenv("AI_INTERVIEW_PROMPT_OPENING_TURN"),
-		AIInterviewLastQuestionSeconds:          lastQSec,
-		AIInterviewClosingSeconds:               closingSec,
-		AIInterviewMidpointAreaIndex:            midpointIdx,
-		AIInterviewPromptCachingEnabled:         interviewPromptCachingEnabled,
-		AIModel:                                 envOr("AI_MODEL", "claude-sonnet-4-20250514"),
-		AIMaxTokens:                             maxTokens,
-		AIAPIKey:                                os.Getenv("AI_API_KEY"),
-		AITimeoutSeconds:                        aiTimeout,
-		AIReportPrompt:                          os.Getenv("AI_REPORT_PROMPT"),
-		UnstructuredReportOutputFormatPrompt:    os.Getenv("UNSTRUCTURED_REPORT_OUTPUT_FORMAT_PROMPT"),
-		AIReportMaxTokens:                       reportMaxTokens,
-		VertexAIAuthMode:                        envOr("VERTEX_AI_AUTH_MODE", "api_key"),
-		VertexAIAPIKey:                          os.Getenv("VERTEX_AI_API_KEY"),
-		VertexAIProjectID:                       os.Getenv("VERTEX_AI_PROJECT_ID"),
-		VertexAILocation:                        envOr("VERTEX_AI_LOCATION", "global"),
-		VertexAIExplicitCacheEnabled:            vertexExplicitCacheEnabled,
-		VertexAIContextCacheTTLSeconds:          vertexCacheTTLSeconds,
-		InterviewOpeningDisclaimerEn:            os.Getenv("INTERVIEW_OPENING_DISCLAIMER_EN"),
-		InterviewOpeningDisclaimerEs:            os.Getenv("INTERVIEW_OPENING_DISCLAIMER_ES"),
-		InterviewReadinessQuestionEn:            os.Getenv("INTERVIEW_READINESS_QUESTION_EN"),
-		InterviewReadinessQuestionEs:            os.Getenv("INTERVIEW_READINESS_QUESTION_ES"),
-		VoiceAIBaseURL:                          envOr("VOICE_AI_BASE_URL", envOr("MOCK_API_URL", "https://api.deepgram.com")),
-		VoiceAIAPIKey:                           os.Getenv("VOICE_AI_API_KEY"),
-		VoiceAIModel:                            envOr("VOICE_AI_MODEL", "nova-3"),
-		VoiceAITokenTimeoutSeconds:              voiceTokenTimeout,
-		AnswerTimeLimitSeconds:                  answerTimeLimitS,
-		AdminCleanupEnabled:                     adminCleanupEnabled,
+		Server: ServerConfig{
+			Port:                    envOr("PORT", "8080"),
+			FrontendURL:             envOr("FRONTEND_URL", "http://localhost:3000"),
+			DatabaseURL:             os.Getenv("DATABASE_URL"),
+			LogLevel:                envOr("LOG_LEVEL", "info"),
+			AllowSensitiveDebugLogs: allowSensitiveDebugLogs,
+			HTTPReadTimeout:         time.Duration(httpReadTimeoutSeconds) * time.Second,
+			HTTPWriteTimeout:        time.Duration(httpWriteTimeoutSeconds) * time.Second,
+			HTTPIdleTimeout:         time.Duration(httpIdleTimeoutSeconds) * time.Second,
+		},
+		Auth: AuthConfig{
+			JWTSecret:             os.Getenv("JWT_SECRET"),
+			SessionExpiryHours:    sessionExpiryHours,
+			SessionAuthIssuer:     defaultSessionAuthIssuer,
+			SessionAuthAudience:   defaultSessionAuthAudience,
+			SessionAuthCookieName: envOr("SESSION_AUTH_COOKIE_NAME", "afirmativo_auth"),
+			SessionAuthMaxTTL:     time.Duration(sessionAuthMaxTTLMinutes) * time.Minute,
+		},
+		Interview: InterviewConfig{
+			BudgetSeconds:          interviewBudgetSeconds,
+			AnswerTimeLimitSeconds: answerTimeLimitSeconds,
+			DBTimeout:              defaultInterviewDBTimeout,
+			AsyncRuntime: AsyncRuntimeConfig{
+				Workers:       answerAsyncWorkers,
+				QueueSize:     answerAsyncQueueSize,
+				RecoveryBatch: answerAsyncRecoveryBatch,
+				RecoveryEvery: time.Duration(answerAsyncRecoveryEverySeconds) * time.Second,
+				StaleAfter:    time.Duration(answerAsyncStaleAfterSeconds) * time.Second,
+				JobTimeout:    time.Duration(answerAsyncJobTimeoutSeconds) * time.Second,
+			},
+			AreaConfigs: areaConfigs,
+			OpeningDisclaimer: BilingualText{
+				En: firstNonEmpty(strings.TrimSpace(os.Getenv("INTERVIEW_OPENING_DISCLAIMER_EN")), defaultOpeningDisclaimerEn),
+				Es: firstNonEmpty(strings.TrimSpace(os.Getenv("INTERVIEW_OPENING_DISCLAIMER_ES")), defaultOpeningDisclaimerEs),
+			},
+			ReadinessQuestion: BilingualText{
+				En: firstNonEmpty(strings.TrimSpace(os.Getenv("INTERVIEW_READINESS_QUESTION_EN")), defaultReadinessQuestionEn),
+				Es: firstNonEmpty(strings.TrimSpace(os.Getenv("INTERVIEW_READINESS_QUESTION_ES")), defaultReadinessQuestionEs),
+			},
+		},
+		Report: ReportConfig{
+			DBTimeout: defaultReportDBTimeout,
+			AsyncRuntime: AsyncRuntimeConfig{
+				Workers:       reportAsyncWorkers,
+				QueueSize:     reportAsyncQueueSize,
+				RecoveryBatch: reportAsyncRecoveryBatch,
+				RecoveryEvery: time.Duration(reportAsyncRecoveryEverySeconds) * time.Second,
+				StaleAfter:    time.Duration(reportAsyncStaleAfterSeconds) * time.Second,
+				JobTimeout:    time.Duration(reportAsyncJobTimeoutSeconds) * time.Second,
+			},
+		},
+		AI: AIConfig{
+			Provider:                                envOr("AI_PROVIDER", "claude"),
+			MockAPIURL:                              os.Getenv("MOCK_API_URL"),
+			OllamaBaseURL:                           envOr("OLLAMA_BASE_URL", "http://localhost:11434"),
+			OllamaTemperature:                       ollamaTemperature,
+			InterviewSystemPrompt:                   os.Getenv("AI_INTERVIEW_SYSTEM_PROMPT"),
+			UnstructuredInterviewOutputFormatPrompt: os.Getenv("UNSTRUCTURED_INTERVIEW_OUTPUT_FORMAT_PROMPT"),
+			InterviewPromptLastQuestion:             os.Getenv("AI_INTERVIEW_PROMPT_LAST_QUESTION"),
+			InterviewPromptClosing:                  os.Getenv("AI_INTERVIEW_PROMPT_CLOSING"),
+			InterviewPromptOpeningTurn:              os.Getenv("AI_INTERVIEW_PROMPT_OPENING_TURN"),
+			InterviewLastQuestionSeconds:            lastQuestionSeconds,
+			InterviewClosingSeconds:                 closingSeconds,
+			InterviewMidpointAreaIndex:              midpointAreaIndex,
+			InterviewPromptCachingEnabled:           interviewPromptCachingEnabled,
+			Model:                                   envOr("AI_MODEL", "claude-sonnet-4-20250514"),
+			MaxTokens:                               maxTokens,
+			APIKey:                                  os.Getenv("AI_API_KEY"),
+			Timeout:                                 time.Duration(aiTimeoutSeconds) * time.Second,
+			ReportPrompt:                            os.Getenv("AI_REPORT_PROMPT"),
+			UnstructuredReportOutputFormatPrompt:    os.Getenv("UNSTRUCTURED_REPORT_OUTPUT_FORMAT_PROMPT"),
+			ReportMaxTokens:                         reportMaxTokens,
+			VertexAuthMode:                          envOr("VERTEX_AI_AUTH_MODE", "api_key"),
+			VertexAPIKey:                            os.Getenv("VERTEX_AI_API_KEY"),
+			VertexProjectID:                         os.Getenv("VERTEX_AI_PROJECT_ID"),
+			VertexLocation:                          envOr("VERTEX_AI_LOCATION", "global"),
+			VertexExplicitCacheEnabled:              vertexExplicitCacheEnabled,
+			VertexContextCacheTTL:                   time.Duration(vertexContextCacheTTLSeconds) * time.Second,
+		},
+		Voice: VoiceConfig{
+			BaseURL:             envOr("VOICE_AI_BASE_URL", envOr("MOCK_API_URL", "https://api.deepgram.com")),
+			APIKey:              os.Getenv("VOICE_AI_API_KEY"),
+			Model:               envOr("VOICE_AI_MODEL", "nova-3"),
+			TokenTimeoutSeconds: voiceTokenTimeoutSeconds,
+			Timeout:             time.Duration(aiTimeoutSeconds) * time.Second,
+		},
+		RateLimit: RateLimitConfig{
+			Verify: VerifyRateLimitConfig{
+				IPRatePerMinute: verifyIPRatePerMinute,
+				IPBurst:         verifyIPBurst,
+				FailMaxAttempts: verifyFailMaxAttempts,
+				FailWindow:      time.Duration(verifyFailWindowSeconds) * time.Second,
+				FailLockout:     time.Duration(verifyFailLockoutSeconds) * time.Second,
+			},
+			Voice: VoiceRateLimitConfig{
+				IPRatePerMinute:      voiceIPRatePerMinute,
+				IPBurst:              voiceIPBurst,
+				SessionRatePerMinute: voiceSessionRatePerMinute,
+				SessionBurst:         voiceSessionBurst,
+			},
+		},
+		Admin: AdminConfig{
+			CleanupEnabled: adminCleanupEnabled,
+		},
 	}
 
-	if cfg.DatabaseURL == "" {
-		return Config{}, fmt.Errorf("DATABASE_URL is required")
-	}
-	if cfg.JWTSecret == "" {
-		return Config{}, fmt.Errorf("JWT_SECRET is required")
-	}
-
-	if cfg.AIProvider != "claude" && cfg.AIProvider != "ollama" && cfg.AIProvider != "vertex" {
-		return Config{}, fmt.Errorf("invalid AI_PROVIDER %q (expected \"claude\", \"ollama\", or \"vertex\")", cfg.AIProvider)
-	}
-
-	// AI_API_KEY is required for Claude unless using mock server.
-	if cfg.AIProvider == "claude" && cfg.AIAPIKey == "" && cfg.MockAPIURL == "" {
-		return Config{}, fmt.Errorf("AI_API_KEY is required (or set MOCK_API_URL for dev)")
-	}
-	if cfg.AIProvider == "ollama" {
-		if cfg.MockAPIURL != "" {
-			slog.Warn("MOCK_API_URL is ignored when AI_PROVIDER=ollama")
-		}
-		if cfg.UnstructuredInterviewOutputFormatPrompt == "" {
-			slog.Warn("UNSTRUCTURED_INTERVIEW_OUTPUT_FORMAT_PROMPT is empty; Ollama interview JSON reliability may be reduced")
-		}
-		if cfg.UnstructuredReportOutputFormatPrompt == "" {
-			slog.Warn("UNSTRUCTURED_REPORT_OUTPUT_FORMAT_PROMPT is empty; Ollama report JSON reliability may be reduced")
-		}
-	}
-	if cfg.AIProvider == "vertex" {
-		cfg.VertexAIAuthMode = strings.TrimSpace(cfg.VertexAIAuthMode)
-		if cfg.VertexAIAuthMode != "api_key" && cfg.VertexAIAuthMode != "adc" {
-			return Config{}, fmt.Errorf("invalid VERTEX_AI_AUTH_MODE %q (expected \"api_key\" or \"adc\")", cfg.VertexAIAuthMode)
-		}
-		if strings.TrimSpace(cfg.MockAPIURL) != "" {
-			return Config{}, fmt.Errorf("MOCK_API_URL is not supported when AI_PROVIDER=vertex")
-		}
-		if strings.TrimSpace(cfg.VertexAIProjectID) == "" {
-			return Config{}, fmt.Errorf("VERTEX_AI_PROJECT_ID is required when AI_PROVIDER=vertex")
-		}
-		if cfg.VertexAIAuthMode == "api_key" && strings.TrimSpace(cfg.VertexAIAPIKey) == "" {
-			return Config{}, fmt.Errorf("VERTEX_AI_API_KEY is required when AI_PROVIDER=vertex and VERTEX_AI_AUTH_MODE=api_key")
-		}
-	}
-
-	// Parse AI_AREA_CONFIG JSON array.
-	areaJSON := os.Getenv("AI_AREA_CONFIG")
-	if areaJSON != "" {
-		var areas []AreaConfig
-		if err := json.Unmarshal([]byte(areaJSON), &areas); err != nil {
-			return Config{}, fmt.Errorf("invalid AI_AREA_CONFIG JSON: %w", err)
-		}
-		cfg.AreaConfigs = areas
+	if err := validateConfig(cfg); err != nil {
+		return Config{}, err
 	}
 
 	return cfg, nil
@@ -419,86 +456,55 @@ func Load() (Config, error) {
 // Call this AFTER the slog default handler has been configured.
 func (c Config) LogLoaded() {
 	slog.Debug("config loaded",
-		"port", c.Port,
-		"frontend_url", c.FrontendURL,
-		"database_url_set", c.DatabaseURL != "",
-		"session_expiry_hours", c.SessionExpiryHours,
-		"interview_budget_seconds", c.InterviewBudgetSeconds,
-		"jwt_secret_set", c.JWTSecret != "",
-		"session_auth_issuer", c.SessionAuthIssuer,
-		"session_auth_audience", c.SessionAuthAudience,
-		"session_auth_cookie_name", c.SessionAuthCookieName,
-		"session_auth_max_ttl_minutes", c.SessionAuthMaxTTLMinutes,
-		"mock_api_url", c.MockAPIURL,
-		"log_level", c.LogLevel,
-		"allow_sensitive_debug_logs", c.AllowSensitiveDebugLogs,
-		"http_read_timeout_seconds", c.HTTPReadTimeoutSeconds,
-		"http_write_timeout_seconds", c.HTTPWriteTimeoutSeconds,
-		"http_idle_timeout_seconds", c.HTTPIdleTimeoutSeconds,
-		"async_answer_workers", c.AsyncAnswerWorkers,
-		"async_answer_queue_size", c.AsyncAnswerQueueSize,
-		"async_answer_recovery_batch", c.AsyncAnswerRecoveryBatch,
-		"async_answer_recovery_every_seconds", c.AsyncAnswerRecoveryEverySeconds,
-		"async_answer_stale_after_seconds", c.AsyncAnswerStaleAfterSeconds,
-		"async_answer_job_timeout_seconds", c.AsyncAnswerJobTimeoutSeconds,
-		"async_report_workers", c.AsyncReportWorkers,
-		"async_report_queue_size", c.AsyncReportQueueSize,
-		"async_report_recovery_batch", c.AsyncReportRecoveryBatch,
-		"async_report_recovery_every_seconds", c.AsyncReportRecoveryEverySeconds,
-		"async_report_stale_after_seconds", c.AsyncReportStaleAfterSeconds,
-		"async_report_job_timeout_seconds", c.AsyncReportJobTimeoutSeconds,
-		"verify_ip_rate_limit_per_minute", c.VerifyIPRatePerMinute,
-		"verify_ip_rate_limit_burst", c.VerifyIPBurst,
-		"verify_fail_max_attempts", c.VerifyFailMaxAttempts,
-		"verify_fail_window_seconds", c.VerifyFailWindowSeconds,
-		"verify_fail_lockout_seconds", c.VerifyFailLockoutSeconds,
-		"voice_token_ip_rate_limit_per_minute", c.VoiceIPRatePerMinute,
-		"voice_token_ip_rate_limit_burst", c.VoiceIPBurst,
-		"voice_token_session_rate_limit_per_minute", c.VoiceSessionRatePerMinute,
-		"voice_token_session_rate_limit_burst", c.VoiceSessionBurst,
-		"admin_cleanup_enabled", c.AdminCleanupEnabled,
-		"answer_time_limit_seconds", c.AnswerTimeLimitSeconds,
+		"port", c.Server.Port,
+		"frontend_url", c.Server.FrontendURL,
+		"database_url_set", c.Server.DatabaseURL != "",
+		"log_level", c.Server.LogLevel,
+		"allow_sensitive_debug_logs", c.Server.AllowSensitiveDebugLogs,
+		"session_expiry_hours", c.Auth.SessionExpiryHours,
+		"interview_budget_seconds", c.Interview.BudgetSeconds,
+		"answer_time_limit_seconds", c.Interview.AnswerTimeLimitSeconds,
+		"session_auth_cookie_name", c.Auth.SessionAuthCookieName,
+		"session_auth_max_ttl_minutes", int(c.Auth.SessionAuthMaxTTL/time.Minute),
+		"admin_cleanup_enabled", c.Admin.CleanupEnabled,
+	)
+	slog.Debug("async runtime config loaded",
+		"interview_async_workers", c.Interview.AsyncRuntime.Workers,
+		"interview_async_queue_size", c.Interview.AsyncRuntime.QueueSize,
+		"interview_async_recovery_batch", c.Interview.AsyncRuntime.RecoveryBatch,
+		"interview_async_recovery_every_seconds", int(c.Interview.AsyncRuntime.RecoveryEvery/time.Second),
+		"interview_async_stale_after_seconds", int(c.Interview.AsyncRuntime.StaleAfter/time.Second),
+		"interview_async_job_timeout_seconds", int(c.Interview.AsyncRuntime.JobTimeout/time.Second),
+		"report_async_workers", c.Report.AsyncRuntime.Workers,
+		"report_async_queue_size", c.Report.AsyncRuntime.QueueSize,
+		"report_async_recovery_batch", c.Report.AsyncRuntime.RecoveryBatch,
+		"report_async_recovery_every_seconds", int(c.Report.AsyncRuntime.RecoveryEvery/time.Second),
+		"report_async_stale_after_seconds", int(c.Report.AsyncRuntime.StaleAfter/time.Second),
+		"report_async_job_timeout_seconds", int(c.Report.AsyncRuntime.JobTimeout/time.Second),
 	)
 	slog.Debug("AI config loaded",
-		"provider", c.AIProvider,
-		"ollama_base_url", c.OllamaBaseURL,
-		"ollama_temperature", c.OllamaTemperature,
-		"model", c.AIModel,
-		"max_tokens", c.AIMaxTokens,
-		"api_key_set", c.AIAPIKey != "",
-		"unstructured_interview_output_format_prompt_len", len(c.UnstructuredInterviewOutputFormatPrompt),
-		"interview_system_prompt_len", len(c.AIInterviewSystemPrompt),
-		"interview_prompt_last_question_len", len(c.AIInterviewPromptLastQuestion),
-		"interview_prompt_closing_len", len(c.AIInterviewPromptClosing),
-		"interview_prompt_opening_turn_len", len(c.AIInterviewPromptOpeningTurn),
-		"interview_last_question_seconds", c.AIInterviewLastQuestionSeconds,
-		"interview_closing_seconds", c.AIInterviewClosingSeconds,
-		"interview_midpoint_area_index", c.AIInterviewMidpointAreaIndex,
-		"interview_prompt_caching_enabled", c.AIInterviewPromptCachingEnabled,
-		"ai_timeout_seconds", c.AITimeoutSeconds,
-		"area_configs_count", len(c.AreaConfigs),
-		"report_prompt_len", len(c.AIReportPrompt),
-		"unstructured_report_output_format_prompt_len", len(c.UnstructuredReportOutputFormatPrompt),
-		"report_max_tokens", c.AIReportMaxTokens,
-		"vertex_ai_auth_mode", c.VertexAIAuthMode,
-		"vertex_ai_project_id", c.VertexAIProjectID,
-		"vertex_ai_location", c.VertexAILocation,
-		"vertex_ai_explicit_cache_enabled", c.VertexAIExplicitCacheEnabled,
-		"vertex_ai_context_cache_ttl_seconds", c.VertexAIContextCacheTTLSeconds,
-		"vertex_ai_api_key_set", c.VertexAIAPIKey != "",
-		"interview_opening_disclaimer_en_len", len(c.InterviewOpeningDisclaimerEn),
-		"interview_opening_disclaimer_es_len", len(c.InterviewOpeningDisclaimerEs),
-		"interview_readiness_question_en_len", len(c.InterviewReadinessQuestionEn),
-		"interview_readiness_question_es_len", len(c.InterviewReadinessQuestionEs),
+		"provider", c.AI.Provider,
+		"model", c.AI.Model,
+		"ollama_base_url", c.AI.OllamaBaseURL,
+		"ollama_temperature", c.AI.OllamaTemperature,
+		"ai_timeout_seconds", int(c.AI.Timeout/time.Second),
+		"max_tokens", c.AI.MaxTokens,
+		"report_max_tokens", c.AI.ReportMaxTokens,
+		"api_key_set", c.AI.APIKey != "",
+		"vertex_ai_auth_mode", c.AI.VertexAuthMode,
+		"vertex_ai_project_id", c.AI.VertexProjectID,
+		"vertex_ai_location", c.AI.VertexLocation,
+		"vertex_ai_context_cache_ttl_seconds", int(c.AI.VertexContextCacheTTL/time.Second),
+		"vertex_ai_api_key_set", c.AI.VertexAPIKey != "",
+		"area_configs_count", len(c.Interview.AreaConfigs),
 	)
-	slog.Debug("voice AI config loaded",
-		"voice_ai_base_url", c.VoiceAIBaseURL,
-		"voice_ai_model", c.VoiceAIModel,
-		"voice_ai_api_key_set", c.VoiceAIAPIKey != "",
-		"voice_ai_token_timeout_seconds", c.VoiceAITokenTimeoutSeconds,
-		"ai_provider", c.AIProvider,
+	slog.Debug("voice config loaded",
+		"voice_ai_base_url", c.Voice.BaseURL,
+		"voice_ai_model", c.Voice.Model,
+		"voice_ai_api_key_set", c.Voice.APIKey != "",
+		"voice_ai_token_timeout_seconds", c.Voice.TokenTimeoutSeconds,
 	)
-	for _, ac := range c.AreaConfigs {
+	for _, ac := range c.Interview.AreaConfigs {
 		slog.Debug("area config",
 			"id", ac.ID,
 			"slug", ac.Slug,
@@ -507,6 +513,125 @@ func (c Config) LogLoaded() {
 			"fallback_question_len", len(ac.FallbackQuestion),
 		)
 	}
+}
+
+func validateConfig(cfg Config) error {
+	if cfg.Server.DatabaseURL == "" {
+		return fmt.Errorf("DATABASE_URL is required")
+	}
+	if cfg.Auth.JWTSecret == "" {
+		return fmt.Errorf("JWT_SECRET is required")
+	}
+	if cfg.Interview.BudgetSeconds < cfg.Interview.AnswerTimeLimitSeconds {
+		return fmt.Errorf("INTERVIEW_BUDGET_SECONDS must be >= ANSWER_TIME_LIMIT_SECONDS")
+	}
+	if err := validateAsyncRuntime("ASYNC_ANSWER", cfg.Interview.AsyncRuntime); err != nil {
+		return err
+	}
+	if err := validateAsyncRuntime("ASYNC_REPORT", cfg.Report.AsyncRuntime); err != nil {
+		return err
+	}
+	if err := validateAreaConfigs(cfg.Interview.AreaConfigs, cfg.AI.InterviewMidpointAreaIndex); err != nil {
+		return err
+	}
+	if cfg.AI.InterviewClosingSeconds > cfg.AI.InterviewLastQuestionSeconds {
+		return fmt.Errorf("AI_INTERVIEW_CLOSING_SECONDS must be <= AI_INTERVIEW_LAST_QUESTION_SECONDS")
+	}
+
+	switch cfg.AI.Provider {
+	case "claude", "ollama", "vertex":
+	default:
+		return fmt.Errorf("invalid AI_PROVIDER %q (expected \"claude\", \"ollama\", or \"vertex\")", cfg.AI.Provider)
+	}
+
+	if cfg.AI.Provider == "claude" && cfg.AI.APIKey == "" && cfg.AI.MockAPIURL == "" {
+		return fmt.Errorf("AI_API_KEY is required (or set MOCK_API_URL for dev)")
+	}
+	if cfg.AI.Provider == "ollama" {
+		if cfg.AI.MockAPIURL != "" {
+			slog.Warn("MOCK_API_URL is ignored when AI_PROVIDER=ollama")
+		}
+		if cfg.AI.UnstructuredInterviewOutputFormatPrompt == "" {
+			slog.Warn("UNSTRUCTURED_INTERVIEW_OUTPUT_FORMAT_PROMPT is empty; Ollama interview JSON reliability may be reduced")
+		}
+		if cfg.AI.UnstructuredReportOutputFormatPrompt == "" {
+			slog.Warn("UNSTRUCTURED_REPORT_OUTPUT_FORMAT_PROMPT is empty; Ollama report JSON reliability may be reduced")
+		}
+	}
+	if cfg.AI.Provider == "vertex" {
+		cfg.AI.VertexAuthMode = strings.TrimSpace(cfg.AI.VertexAuthMode)
+		if cfg.AI.VertexAuthMode != "api_key" && cfg.AI.VertexAuthMode != "adc" {
+			return fmt.Errorf("invalid VERTEX_AI_AUTH_MODE %q (expected \"api_key\" or \"adc\")", cfg.AI.VertexAuthMode)
+		}
+		if strings.TrimSpace(cfg.AI.MockAPIURL) != "" {
+			return fmt.Errorf("MOCK_API_URL is not supported when AI_PROVIDER=vertex")
+		}
+		if strings.TrimSpace(cfg.AI.VertexProjectID) == "" {
+			return fmt.Errorf("VERTEX_AI_PROJECT_ID is required when AI_PROVIDER=vertex")
+		}
+		if cfg.AI.VertexAuthMode == "api_key" && strings.TrimSpace(cfg.AI.VertexAPIKey) == "" {
+			return fmt.Errorf("VERTEX_AI_API_KEY is required when AI_PROVIDER=vertex and VERTEX_AI_AUTH_MODE=api_key")
+		}
+	}
+
+	return nil
+}
+
+func validateAsyncRuntime(prefix string, cfg AsyncRuntimeConfig) error {
+	if cfg.StaleAfter < cfg.JobTimeout {
+		return fmt.Errorf("%s_STALE_AFTER_SECONDS must be >= %s_JOB_TIMEOUT_SECONDS", prefix, prefix)
+	}
+	return nil
+}
+
+func validateAreaConfigs(areas []AreaConfig, midpoint int) error {
+	if len(areas) == 0 {
+		return fmt.Errorf("AI_AREA_CONFIG must contain at least one area")
+	}
+	if midpoint < 0 || midpoint >= len(areas) {
+		return fmt.Errorf("AI_INTERVIEW_MIDPOINT_AREA_INDEX must be between 0 and %d", len(areas)-1)
+	}
+
+	seenIDs := make(map[int]struct{}, len(areas))
+	seenSlugs := make(map[string]struct{}, len(areas))
+	for i, area := range areas {
+		if area.ID <= 0 {
+			return fmt.Errorf("AI_AREA_CONFIG[%d].id must be > 0", i)
+		}
+		slug := strings.TrimSpace(area.Slug)
+		if slug == "" {
+			return fmt.Errorf("AI_AREA_CONFIG[%d].slug is required", i)
+		}
+		if _, exists := seenIDs[area.ID]; exists {
+			return fmt.Errorf("AI_AREA_CONFIG contains duplicate id %d", area.ID)
+		}
+		if _, exists := seenSlugs[strings.ToLower(slug)]; exists {
+			return fmt.Errorf("AI_AREA_CONFIG contains duplicate slug %q", slug)
+		}
+		seenIDs[area.ID] = struct{}{}
+		seenSlugs[strings.ToLower(slug)] = struct{}{}
+	}
+	return nil
+}
+
+func parseAreaConfigs(areaJSON string) ([]AreaConfig, error) {
+	trimmed := strings.TrimSpace(areaJSON)
+	if trimmed == "" {
+		return nil, fmt.Errorf("AI_AREA_CONFIG must contain at least one area")
+	}
+
+	var areas []AreaConfig
+	if err := json.Unmarshal([]byte(trimmed), &areas); err != nil {
+		return nil, fmt.Errorf("invalid AI_AREA_CONFIG JSON: %w", err)
+	}
+	return areas, nil
+}
+
+func firstNonEmpty(value, fallback string) string {
+	if value != "" {
+		return value
+	}
+	return fallback
 }
 
 func envOr(key, fallback string) string {

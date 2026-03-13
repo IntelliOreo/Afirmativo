@@ -10,18 +10,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/afirmativo/backend/internal/config"
 	"github.com/afirmativo/backend/internal/shared"
 )
 
 type fakeReportStore struct {
-	getReportBySessionFn          func(ctx context.Context, sessionCode string) (*Report, error)
-	createReportFn                func(ctx context.Context, r *Report) error
-	setReportQueuedFn             func(ctx context.Context, sessionCode string, resetAttempts bool) error
-	claimQueuedReportFn           func(ctx context.Context, sessionCode string) (*Report, error)
+	getReportBySessionFn           func(ctx context.Context, sessionCode string) (*Report, error)
+	createReportFn                 func(ctx context.Context, r *Report) error
+	setReportQueuedFn              func(ctx context.Context, sessionCode string, resetAttempts bool) error
+	claimQueuedReportFn            func(ctx context.Context, sessionCode string) (*Report, error)
 	listQueuedReportSessionCodesFn func(ctx context.Context, limit int) ([]string, error)
-	requeueStaleRunningReportsFn  func(ctx context.Context, staleBefore time.Time) (int64, error)
-	markReportReadyFn             func(ctx context.Context, r *Report) error
-	markReportFailedFn            func(ctx context.Context, sessionCode, errorCode, errorMessage string) error
+	requeueStaleRunningReportsFn   func(ctx context.Context, staleBefore time.Time) (int64, error)
+	markReportReadyFn              func(ctx context.Context, r *Report) error
+	markReportFailedFn             func(ctx context.Context, sessionCode, errorCode, errorMessage string) error
 }
 
 func (f *fakeReportStore) GetReportBySession(ctx context.Context, sessionCode string) (*Report, error) {
@@ -128,8 +129,28 @@ func decodeReportBody(t *testing.T, rr *httptest.ResponseRecorder, dst any) {
 	}
 }
 
+func defaultReportSettings(areaConfigs []config.AreaConfig) Settings {
+	return Settings{
+		AreaConfigs: areaConfigs,
+		DBTimeout:   5 * time.Second,
+		AsyncRuntime: config.AsyncRuntimeConfig{
+			Workers:       2,
+			QueueSize:     64,
+			RecoveryBatch: 50,
+			RecoveryEvery: 10 * time.Second,
+			StaleAfter:    3 * time.Minute,
+			JobTimeout:    3 * time.Minute,
+		},
+	}
+}
+
 func newReportHandlerForTest(store Store, sessions SessionProvider) *Handler {
-	svc := NewService(store, &fakeReportInterviewProvider{}, sessions, &fakeReportAIClient{}, nil)
+	svc := NewService(Deps{
+		Store:      store,
+		Interviews: &fakeReportInterviewProvider{},
+		Sessions:   sessions,
+		AIClient:   &fakeReportAIClient{},
+	}, defaultReportSettings(nil))
 	return NewHandler(svc)
 }
 
@@ -142,7 +163,12 @@ func TestServiceGetReport_MapsSessionErrorsToTypedSentinels(t *testing.T) {
 			return nil, fmt.Errorf("db lookup failed: %w", shared.ErrNotFound)
 		},
 	}
-	svc := NewService(store, &fakeReportInterviewProvider{}, sessions, &fakeReportAIClient{}, nil)
+	svc := NewService(Deps{
+		Store:      store,
+		Interviews: &fakeReportInterviewProvider{},
+		Sessions:   sessions,
+		AIClient:   &fakeReportAIClient{},
+	}, defaultReportSettings(nil))
 
 	_, err := svc.GetReport(context.Background(), "AP-AAAA-BBBB")
 	if !errors.Is(err, ErrSessionNotFound) {
@@ -168,7 +194,12 @@ func TestServiceGenerateReportAsync_QueuesFailedReport(t *testing.T) {
 			return &SessionInfo{SessionCode: "AP-AAAA-BBBB", Status: "completed"}, nil
 		},
 	}
-	svc := NewService(store, &fakeReportInterviewProvider{}, sessions, &fakeReportAIClient{}, nil)
+	svc := NewService(Deps{
+		Store:      store,
+		Interviews: &fakeReportInterviewProvider{},
+		Sessions:   sessions,
+		AIClient:   &fakeReportAIClient{},
+	}, defaultReportSettings(nil))
 
 	report, err := svc.GenerateReportAsync(context.Background(), "AP-AAAA-BBBB")
 	if err != nil {
@@ -327,7 +358,7 @@ func TestHandleGenerateReport_TypedResponseContracts(t *testing.T) {
 
 	t.Run("queues_generation", func(t *testing.T) {
 		store := &fakeReportStore{
-			createReportFn: func(context.Context, *Report) error { return nil },
+			createReportFn:       func(context.Context, *Report) error { return nil },
 			getReportBySessionFn: func(context.Context, string) (*Report, error) { return nil, nil },
 		}
 		sessions := &fakeReportSessionProvider{

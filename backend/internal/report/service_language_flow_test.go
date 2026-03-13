@@ -138,7 +138,12 @@ func TestProcessQueuedReport_LanguageTranscriptFlowAndBilingualReport(t *testing
 				{Slug: "open_floor", Label: "Open floor"},
 			}
 
-			svc := NewService(store, interviews, sessions, ai, areaConfigs)
+			svc := NewService(Deps{
+				Store:      store,
+				Interviews: interviews,
+				Sessions:   sessions,
+				AIClient:   ai,
+			}, defaultReportSettings(areaConfigs))
 			svc.processQueuedReport(context.Background(), sessionCode)
 
 			if capturedTranscript != tc.wantTranscript {

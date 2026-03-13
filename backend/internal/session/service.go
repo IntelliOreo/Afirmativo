@@ -14,19 +14,26 @@ import (
 
 // Service contains session business logic.
 type Service struct {
-	store       Store
-	expiryHours int
-	interviewBudgetSeconds int
-	nowFn       func() time.Time
+	store    Store
+	settings Settings
+	nowFn    func() time.Time
 }
 
-// NewService creates a Service with the given store and session expiry duration.
-func NewService(store Store, expiryHours int, interviewBudgetSeconds int) *Service {
+type Deps struct {
+	Store Store
+}
+
+type Settings struct {
+	ExpiryHours            int
+	InterviewBudgetSeconds int
+}
+
+// NewService creates a Service with the given dependencies and runtime settings.
+func NewService(deps Deps, settings Settings) *Service {
 	return &Service{
-		store:       store,
-		expiryHours: expiryHours,
-		interviewBudgetSeconds: interviewBudgetSeconds,
-		nowFn:       time.Now,
+		store:    deps.Store,
+		settings: settings,
+		nowFn:    time.Now,
 	}
 }
 
@@ -54,7 +61,7 @@ func (s *Service) ValidateCoupon(ctx context.Context, couponCode string) (*Valid
 		return nil, fmt.Errorf("hash PIN: %w", err)
 	}
 
-	expiresAt := s.nowFn().Add(time.Duration(s.expiryHours) * time.Hour)
+	expiresAt := s.nowFn().Add(time.Duration(s.settings.ExpiryHours) * time.Hour)
 
 	_, err = s.store.ClaimCouponAndCreateSession(
 		ctx,
@@ -62,7 +69,7 @@ func (s *Service) ValidateCoupon(ctx context.Context, couponCode string) (*Valid
 		sessionCode,
 		string(pinHash),
 		expiresAt,
-		s.interviewBudgetSeconds,
+		s.settings.InterviewBudgetSeconds,
 	)
 	if err != nil {
 		return nil, err // ErrCouponInvalid or internal error — caller maps to HTTP status

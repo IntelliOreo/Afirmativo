@@ -40,7 +40,7 @@ func main() {
 
 	// Set log level from config.
 	var logLevel slog.Level
-	switch strings.ToLower(cfg.LogLevel) {
+	switch strings.ToLower(cfg.Server.LogLevel) {
 	case "debug":
 		logLevel = slog.LevelDebug
 	case "warn":
@@ -58,7 +58,7 @@ func main() {
 
 	// Connect to Postgres.
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	pool, err := pgxpool.New(ctx, cfg.Server.DatabaseURL)
 	if err != nil {
 		slog.Error("failed to connect to database", "error", err)
 		os.Exit(1)
@@ -73,14 +73,17 @@ func main() {
 
 	// Wire dependencies.
 	sessionStore := session.NewPostgresStore(pool)
-	sessionSvc := session.NewService(sessionStore, cfg.SessionExpiryHours, cfg.InterviewBudgetSeconds)
+	sessionSvc := session.NewService(session.Deps{Store: sessionStore}, session.Settings{
+		ExpiryHours:            cfg.Auth.SessionExpiryHours,
+		InterviewBudgetSeconds: cfg.Interview.BudgetSeconds,
+	})
 
-	useSecureAuthCookie := strings.HasPrefix(strings.ToLower(cfg.FrontendURL), "https://")
+	useSecureAuthCookie := strings.HasPrefix(strings.ToLower(cfg.Server.FrontendURL), "https://")
 	sessionAuth, err := shared.NewSessionAuthManager(shared.SessionAuthConfig{
-		Secret:       cfg.JWTSecret,
-		CookieName:   cfg.SessionAuthCookieName,
-		Issuer:       cfg.SessionAuthIssuer,
-		Audience:     cfg.SessionAuthAudience,
+		Secret:       cfg.Auth.JWTSecret,
+		CookieName:   cfg.Auth.SessionAuthCookieName,
+		Issuer:       cfg.Auth.SessionAuthIssuer,
+		Audience:     cfg.Auth.SessionAuthAudience,
 		CookieSecure: useSecureAuthCookie,
 	})
 	if err != nil {
@@ -90,14 +93,14 @@ func main() {
 	slog.Debug("session auth configured",
 		"cookie_name", sessionAuth.CookieName(),
 		"cookie_secure", useSecureAuthCookie,
-		"max_ttl_minutes", cfg.SessionAuthMaxTTLMinutes,
+		"max_ttl_minutes", int(cfg.Auth.SessionAuthMaxTTL/time.Minute),
 	)
-	sessionHandler := session.NewHandler(sessionSvc, sessionAuth, time.Duration(cfg.SessionAuthMaxTTLMinutes)*time.Minute)
+	sessionHandler := session.NewHandler(sessionSvc, sessionAuth, cfg.Auth.SessionAuthMaxTTL)
 	sessionHandler.SetVerifyAttemptLimiter(shared.NewFailedAttemptLockoutLimiter(shared.FailedAttemptLockoutConfig{
 		Name:        "session_verify_fail_lockout",
-		MaxFailures: cfg.VerifyFailMaxAttempts,
-		Window:      time.Duration(cfg.VerifyFailWindowSeconds) * time.Second,
-		Lockout:     time.Duration(cfg.VerifyFailLockoutSeconds) * time.Second,
+		MaxFailures: cfg.RateLimit.Verify.FailMaxAttempts,
+		Window:      cfg.RateLimit.Verify.FailWindow,
+		Lockout:     cfg.RateLimit.Verify.FailLockout,
 	}))
 
 	interviewStore := interview.NewPostgresStore(pool)
@@ -110,49 +113,37 @@ func main() {
 		os.Exit(1)
 	}
 
-	interviewSvc := interview.NewService(
-		sessionStore,
-		sessionStore,
-		sessionStore,
-		interviewStore,
-		aiClient,
-		cfg.AreaConfigs,
-		cfg.InterviewOpeningDisclaimerEn,
-		cfg.InterviewOpeningDisclaimerEs,
-		cfg.InterviewReadinessQuestionEn,
-		cfg.InterviewReadinessQuestionEs,
-		cfg.AnswerTimeLimitSeconds,
-		interview.AsyncConfig{
-			Workers:       cfg.AsyncAnswerWorkers,
-			QueueSize:     cfg.AsyncAnswerQueueSize,
-			RecoveryBatch: cfg.AsyncAnswerRecoveryBatch,
-			RecoveryEvery: time.Duration(cfg.AsyncAnswerRecoveryEverySeconds) * time.Second,
-			StaleAfter:    time.Duration(cfg.AsyncAnswerStaleAfterSeconds) * time.Second,
-			JobTimeout:    time.Duration(cfg.AsyncAnswerJobTimeoutSeconds) * time.Second,
-		},
-	)
+	interviewSvc := interview.NewService(interview.Deps{
+		SessionStarter:   sessionStore,
+		SessionGetter:    sessionStore,
+		SessionCompleter: sessionStore,
+		Store:            interviewStore,
+		AIClient:         aiClient,
+	}, interview.Settings{
+		AreaConfigs:            cfg.Interview.AreaConfigs,
+		OpeningDisclaimer:      cfg.Interview.OpeningDisclaimer,
+		ReadinessQuestion:      cfg.Interview.ReadinessQuestion,
+		AnswerTimeLimitSeconds: cfg.Interview.AnswerTimeLimitSeconds,
+		DBTimeout:              cfg.Interview.DBTimeout,
+		AsyncRuntime:           cfg.Interview.AsyncRuntime,
+	})
 	asyncRuntimeCtx, asyncRuntimeCancel := context.WithCancel(context.Background())
 	defer asyncRuntimeCancel()
 	interviewSvc.StartAsyncAnswerRuntime(asyncRuntimeCtx)
 
 	interviewHandler := interview.NewHandler(interviewSvc)
-	interviewHandler.SetAllowSensitiveDebugLogs(cfg.AllowSensitiveDebugLogs)
+	interviewHandler.SetAllowSensitiveDebugLogs(cfg.Server.AllowSensitiveDebugLogs)
 
 	// Report dependencies.
-	reportSvc := report.NewService(
-		reportStore,
-		&interviewDataAdapter{store: interviewStore},
-		&sessionDataAdapter{store: sessionStore},
-		reportAIClient,
-		cfg.AreaConfigs,
-	)
-	reportSvc.SetAsyncConfig(report.AsyncConfig{
-		Workers:       cfg.AsyncReportWorkers,
-		QueueSize:     cfg.AsyncReportQueueSize,
-		RecoveryBatch: cfg.AsyncReportRecoveryBatch,
-		RecoveryEvery: time.Duration(cfg.AsyncReportRecoveryEverySeconds) * time.Second,
-		StaleAfter:    time.Duration(cfg.AsyncReportStaleAfterSeconds) * time.Second,
-		JobTimeout:    time.Duration(cfg.AsyncReportJobTimeoutSeconds) * time.Second,
+	reportSvc := report.NewService(report.Deps{
+		Store:      reportStore,
+		Interviews: &interviewDataAdapter{store: interviewStore},
+		Sessions:   &sessionDataAdapter{store: sessionStore},
+		AIClient:   reportAIClient,
+	}, report.Settings{
+		AreaConfigs:  cfg.Interview.AreaConfigs,
+		DBTimeout:    cfg.Report.DBTimeout,
+		AsyncRuntime: cfg.Report.AsyncRuntime,
 	})
 	reportSvc.StartAsyncRuntime(asyncRuntimeCtx)
 	reportHandler := report.NewHandler(reportSvc)
@@ -164,33 +155,33 @@ func main() {
 	adminHandler := admin.NewHandler(adminSvc)
 
 	voiceClient, err := voice.NewClient(voice.ClientConfig{
-		BaseURL:        cfg.VoiceAIBaseURL,
-		APIKey:         cfg.VoiceAIAPIKey,
-		Model:          cfg.VoiceAIModel,
+		BaseURL:        cfg.Voice.BaseURL,
+		APIKey:         cfg.Voice.APIKey,
+		Model:          cfg.Voice.Model,
 		Provider:       voiceProviderDeepgram,
-		TimeoutSeconds: cfg.AITimeoutSeconds,
+		TimeoutSeconds: int(cfg.Voice.Timeout / time.Second),
 	})
 	if err != nil {
 		slog.Error("failed to initialize voice client", "error", err)
 		os.Exit(1)
 	}
-	voiceHandler := voice.NewHandler(voiceClient, cfg.VoiceAITokenTimeoutSeconds)
+	voiceHandler := voice.NewHandler(voiceClient, cfg.Voice.TokenTimeoutSeconds)
 	sessionVerifyIPLimiter := shared.NewTokenBucketRateLimiter(shared.TokenBucketRateLimiterConfig{
 		Name:              "session_verify_ip",
-		RequestsPerMinute: cfg.VerifyIPRatePerMinute,
-		Burst:             cfg.VerifyIPBurst,
+		RequestsPerMinute: cfg.RateLimit.Verify.IPRatePerMinute,
+		Burst:             cfg.RateLimit.Verify.IPBurst,
 		KeyFunc:           shared.ClientIPRateLimitKey,
 	})
 	voiceTokenIPLimiter := shared.NewTokenBucketRateLimiter(shared.TokenBucketRateLimiterConfig{
 		Name:              "voice_token_ip",
-		RequestsPerMinute: cfg.VoiceIPRatePerMinute,
-		Burst:             cfg.VoiceIPBurst,
+		RequestsPerMinute: cfg.RateLimit.Voice.IPRatePerMinute,
+		Burst:             cfg.RateLimit.Voice.IPBurst,
 		KeyFunc:           shared.ClientIPRateLimitKey,
 	})
 	voiceTokenSessionLimiter := shared.NewTokenBucketRateLimiter(shared.TokenBucketRateLimiterConfig{
 		Name:              "voice_token_session",
-		RequestsPerMinute: cfg.VoiceSessionRatePerMinute,
-		Burst:             cfg.VoiceSessionBurst,
+		RequestsPerMinute: cfg.RateLimit.Voice.SessionRatePerMinute,
+		Burst:             cfg.RateLimit.Voice.SessionBurst,
 		KeyFunc:           shared.SessionCodeRateLimitKey,
 	})
 
@@ -214,7 +205,7 @@ func main() {
 	mux.HandleFunc("POST /api/payment/checkout", paymentHandler.HandleCheckout)
 	mux.HandleFunc("POST /api/payment/webhook", paymentHandler.HandleWebhook)
 
-	if cfg.AdminCleanupEnabled {
+	if cfg.Admin.CleanupEnabled {
 		mux.HandleFunc("POST /api/admin/cleanup-db", adminHandler.HandleCleanupDB)
 		slog.Warn("admin cleanup endpoint enabled")
 	} else {
@@ -223,7 +214,7 @@ func main() {
 
 	// Apply middleware.
 	handler := shared.Chain(mux,
-		shared.CORS(cfg.FrontendURL),
+		shared.CORS(cfg.Server.FrontendURL),
 		shared.RequestID,
 		shared.SecurityHeaders,
 		shared.Logger,
@@ -231,15 +222,15 @@ func main() {
 
 	// Start server with graceful shutdown.
 	srv := &http.Server{
-		Addr:         fmt.Sprintf(":%s", cfg.Port),
+		Addr:         fmt.Sprintf(":%s", cfg.Server.Port),
 		Handler:      handler,
-		ReadTimeout:  time.Duration(cfg.HTTPReadTimeoutSeconds) * time.Second,
-		WriteTimeout: time.Duration(cfg.HTTPWriteTimeoutSeconds) * time.Second,
-		IdleTimeout:  time.Duration(cfg.HTTPIdleTimeoutSeconds) * time.Second,
+		ReadTimeout:  cfg.Server.HTTPReadTimeout,
+		WriteTimeout: cfg.Server.HTTPWriteTimeout,
+		IdleTimeout:  cfg.Server.HTTPIdleTimeout,
 	}
 
 	go func() {
-		slog.Info("server starting", "port", cfg.Port)
+		slog.Info("server starting", "port", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("server error", "error", err)
 			os.Exit(1)

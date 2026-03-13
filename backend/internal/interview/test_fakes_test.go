@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/afirmativo/backend/internal/config"
 	"github.com/afirmativo/backend/internal/session"
 )
 
@@ -139,13 +140,45 @@ func (f *fakeInterviewStore) IncrementAnswerJobAttempts(context.Context, string)
 	return nil
 }
 
-func newInterviewServiceForAsyncTests(store Store, asyncConfig ...AsyncConfig) *Service {
-	fakeSessions := &fakeInterviewSessionStore{}
-	cfg := AsyncConfig{}
-	if len(asyncConfig) > 0 {
-		cfg = asyncConfig[0]
+func defaultInterviewSettings(asyncRuntime ...config.AsyncRuntimeConfig) Settings {
+	runtime := config.AsyncRuntimeConfig{
+		Workers:       4,
+		QueueSize:     256,
+		RecoveryBatch: 100,
+		RecoveryEvery: 10 * time.Second,
+		StaleAfter:    3 * time.Minute,
+		JobTimeout:    3 * time.Minute,
 	}
-	return NewService(fakeSessions, fakeSessions, fakeSessions, store, nil, nil, "", "", "", "", 300, cfg)
+	if len(asyncRuntime) > 0 {
+		runtime = asyncRuntime[0]
+	}
+	return Settings{
+		AreaConfigs: []config.AreaConfig{
+			{
+				ID:                      1,
+				Slug:                    "protected_ground",
+				Label:                   "Protected ground",
+				Description:             "Protected ground description",
+				SufficiencyRequirements: "Protected ground sufficiency requirements",
+				FallbackQuestion:        "Fallback protected ground question",
+			},
+		},
+		OpeningDisclaimer:      config.BilingualText{En: "Opening disclaimer EN", Es: "Opening disclaimer ES"},
+		ReadinessQuestion:      config.BilingualText{En: "Default readiness EN", Es: "Default readiness ES"},
+		AnswerTimeLimitSeconds: 300,
+		DBTimeout:              5 * time.Second,
+		AsyncRuntime:           runtime,
+	}
+}
+
+func newInterviewServiceForAsyncTests(store Store, asyncRuntime ...config.AsyncRuntimeConfig) *Service {
+	fakeSessions := &fakeInterviewSessionStore{}
+	return NewService(Deps{
+		SessionStarter:   fakeSessions,
+		SessionGetter:    fakeSessions,
+		SessionCompleter: fakeSessions,
+		Store:            store,
+	}, defaultInterviewSettings(asyncRuntime...))
 }
 
 func (f *fakeInterviewSessionStore) StartSession(ctx context.Context, sessionCode, preferredLanguage string) (*session.Session, error) {

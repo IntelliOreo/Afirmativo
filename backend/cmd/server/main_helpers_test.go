@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/afirmativo/backend/internal/config"
 	"github.com/afirmativo/backend/internal/interview"
@@ -10,17 +11,25 @@ import (
 
 func TestCreateAIClients_ReturnsVertexClients(t *testing.T) {
 	interviewClient, reportClient, err := createAIClients(config.Config{
-		AIProvider:                     "vertex",
-		AIModel:                        "gemini-3.1-flash-lite-preview",
-		AIMaxTokens:                    1024,
-		AIReportMaxTokens:              2048,
-		AITimeoutSeconds:               5,
-		VertexAIAuthMode:               "api_key",
-		VertexAIAPIKey:                 "vertex-test-key",
-		VertexAIProjectID:              "afirmativo-dev",
-		VertexAILocation:               "global",
-		VertexAIExplicitCacheEnabled:   true,
-		VertexAIContextCacheTTLSeconds: 300,
+		Server: config.ServerConfig{
+			AllowSensitiveDebugLogs: false,
+		},
+		Interview: config.InterviewConfig{
+			AreaConfigs: []config.AreaConfig{{ID: 1, Slug: "history", Label: "History"}},
+		},
+		AI: config.AIConfig{
+			Provider:                   "vertex",
+			Model:                      "gemini-3.1-flash-lite-preview",
+			MaxTokens:                  1024,
+			ReportMaxTokens:            2048,
+			Timeout:                    5 * time.Second,
+			VertexAuthMode:             "api_key",
+			VertexAPIKey:               "vertex-test-key",
+			VertexProjectID:            "afirmativo-dev",
+			VertexLocation:             "global",
+			VertexExplicitCacheEnabled: true,
+			VertexContextCacheTTL:      300 * time.Second,
+		},
 	})
 	if err != nil {
 		t.Fatalf("createAIClients() error = %v", err)

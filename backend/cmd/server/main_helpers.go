@@ -11,98 +11,98 @@ import (
 )
 
 func createAIClients(cfg config.Config) (interview.InterviewAIClient, report.ReportAIClient, error) {
-	if cfg.AIProvider == "ollama" {
+	if cfg.AI.Provider == "ollama" {
 		return interview.NewOllamaInterviewAIClient(interview.OllamaInterviewAIClientConfig{
-				BaseURL:                 cfg.OllamaBaseURL,
-				Model:                   cfg.AIModel,
-				MaxTokens:               cfg.AIMaxTokens,
-				Temperature:             cfg.OllamaTemperature,
-				AllowSensitiveDebugLogs: cfg.AllowSensitiveDebugLogs,
-				SystemPrompt:            cfg.AIInterviewSystemPrompt,
-				OutputFormatPrompt:      cfg.UnstructuredInterviewOutputFormatPrompt,
-				PromptLastQuestion:      cfg.AIInterviewPromptLastQuestion,
-				PromptClosing:           cfg.AIInterviewPromptClosing,
-				PromptOpeningTurn:       cfg.AIInterviewPromptOpeningTurn,
-				LastQuestionSeconds:     cfg.AIInterviewLastQuestionSeconds,
-				ClosingSeconds:          cfg.AIInterviewClosingSeconds,
-				MidpointAreaIndex:       cfg.AIInterviewMidpointAreaIndex,
-				TimeoutSeconds:          cfg.AITimeoutSeconds,
-				AreaConfigs:             cfg.AreaConfigs,
+				BaseURL:                 cfg.AI.OllamaBaseURL,
+				Model:                   cfg.AI.Model,
+				MaxTokens:               cfg.AI.MaxTokens,
+				Temperature:             cfg.AI.OllamaTemperature,
+				AllowSensitiveDebugLogs: cfg.Server.AllowSensitiveDebugLogs,
+				SystemPrompt:            cfg.AI.InterviewSystemPrompt,
+				OutputFormatPrompt:      cfg.AI.UnstructuredInterviewOutputFormatPrompt,
+				PromptLastQuestion:      cfg.AI.InterviewPromptLastQuestion,
+				PromptClosing:           cfg.AI.InterviewPromptClosing,
+				PromptOpeningTurn:       cfg.AI.InterviewPromptOpeningTurn,
+				LastQuestionSeconds:     cfg.AI.InterviewLastQuestionSeconds,
+				ClosingSeconds:          cfg.AI.InterviewClosingSeconds,
+				MidpointAreaIndex:       cfg.AI.InterviewMidpointAreaIndex,
+				TimeoutSeconds:          int(cfg.AI.Timeout / time.Second),
+				AreaConfigs:             cfg.Interview.AreaConfigs,
 			}), report.NewOllamaReportAIClient(report.OllamaReportAIClientConfig{
-				BaseURL:                 cfg.OllamaBaseURL,
-				Model:                   cfg.AIModel,
-				MaxTokens:               cfg.AIReportMaxTokens,
-				Temperature:             cfg.OllamaTemperature,
-				TimeoutSeconds:          cfg.AITimeoutSeconds,
-				ReportPrompt:            cfg.AIReportPrompt,
-				OutputFormatPrompt:      cfg.UnstructuredReportOutputFormatPrompt,
-				AllowSensitiveDebugLogs: cfg.AllowSensitiveDebugLogs,
+				BaseURL:                 cfg.AI.OllamaBaseURL,
+				Model:                   cfg.AI.Model,
+				MaxTokens:               cfg.AI.ReportMaxTokens,
+				Temperature:             cfg.AI.OllamaTemperature,
+				TimeoutSeconds:          int(cfg.AI.Timeout / time.Second),
+				ReportPrompt:            cfg.AI.ReportPrompt,
+				OutputFormatPrompt:      cfg.AI.UnstructuredReportOutputFormatPrompt,
+				AllowSensitiveDebugLogs: cfg.Server.AllowSensitiveDebugLogs,
 			}), nil
 	}
 
-	if cfg.AIProvider == "vertex" {
+	if cfg.AI.Provider == "vertex" {
 		vertexClient, err := vertexai.NewClient(vertexai.ClientConfig{
-			ProjectID:            cfg.VertexAIProjectID,
-			Location:             cfg.VertexAILocation,
-			APIKey:               cfg.VertexAIAPIKey,
-			AuthMode:             cfg.VertexAIAuthMode,
-			TimeoutSeconds:       cfg.AITimeoutSeconds,
-			ExplicitCacheEnabled: cfg.VertexAIExplicitCacheEnabled,
-			ContextCacheTTL:      time.Duration(cfg.VertexAIContextCacheTTLSeconds) * time.Second,
+			ProjectID:            cfg.AI.VertexProjectID,
+			Location:             cfg.AI.VertexLocation,
+			APIKey:               cfg.AI.VertexAPIKey,
+			AuthMode:             cfg.AI.VertexAuthMode,
+			TimeoutSeconds:       int(cfg.AI.Timeout / time.Second),
+			ExplicitCacheEnabled: cfg.AI.VertexExplicitCacheEnabled,
+			ContextCacheTTL:      cfg.AI.VertexContextCacheTTL,
 		})
 		if err != nil {
 			return nil, nil, fmt.Errorf("create Vertex AI client: %w", err)
 		}
 		return interview.NewVertexInterviewAIClient(interview.VertexInterviewAIClientConfig{
-				Model:                   cfg.AIModel,
-				MaxTokens:               cfg.AIMaxTokens,
-				AllowSensitiveDebugLogs: cfg.AllowSensitiveDebugLogs,
-				SystemPrompt:            cfg.AIInterviewSystemPrompt,
-				PromptLastQuestion:      cfg.AIInterviewPromptLastQuestion,
-				PromptClosing:           cfg.AIInterviewPromptClosing,
-				PromptOpeningTurn:       cfg.AIInterviewPromptOpeningTurn,
-				LastQuestionSeconds:     cfg.AIInterviewLastQuestionSeconds,
-				ClosingSeconds:          cfg.AIInterviewClosingSeconds,
-				MidpointAreaIndex:       cfg.AIInterviewMidpointAreaIndex,
-				AreaConfigs:             cfg.AreaConfigs,
+				Model:                   cfg.AI.Model,
+				MaxTokens:               cfg.AI.MaxTokens,
+				AllowSensitiveDebugLogs: cfg.Server.AllowSensitiveDebugLogs,
+				SystemPrompt:            cfg.AI.InterviewSystemPrompt,
+				PromptLastQuestion:      cfg.AI.InterviewPromptLastQuestion,
+				PromptClosing:           cfg.AI.InterviewPromptClosing,
+				PromptOpeningTurn:       cfg.AI.InterviewPromptOpeningTurn,
+				LastQuestionSeconds:     cfg.AI.InterviewLastQuestionSeconds,
+				ClosingSeconds:          cfg.AI.InterviewClosingSeconds,
+				MidpointAreaIndex:       cfg.AI.InterviewMidpointAreaIndex,
+				AreaConfigs:             cfg.Interview.AreaConfigs,
 				VertexClient:            vertexClient,
 			}), report.NewVertexReportAIClient(report.VertexReportAIClientConfig{
-				Model:                   cfg.AIModel,
-				MaxTokens:               cfg.AIReportMaxTokens,
-				ReportPrompt:            cfg.AIReportPrompt,
-				AllowSensitiveDebugLogs: cfg.AllowSensitiveDebugLogs,
+				Model:                   cfg.AI.Model,
+				MaxTokens:               cfg.AI.ReportMaxTokens,
+				ReportPrompt:            cfg.AI.ReportPrompt,
+				AllowSensitiveDebugLogs: cfg.Server.AllowSensitiveDebugLogs,
 				VertexClient:            vertexClient,
 			}), nil
 	}
 
 	aiBaseURL := "https://api.anthropic.com"
-	if cfg.MockAPIURL != "" {
-		aiBaseURL = cfg.MockAPIURL
+	if cfg.AI.MockAPIURL != "" {
+		aiBaseURL = cfg.AI.MockAPIURL
 	}
 
 	return interview.NewHTTPInterviewAIClient(interview.InterviewAIClientConfig{
 			BaseURL:                 aiBaseURL,
-			APIKey:                  cfg.AIAPIKey,
-			Model:                   cfg.AIModel,
-			MaxTokens:               cfg.AIMaxTokens,
-			AllowSensitiveDebugLogs: cfg.AllowSensitiveDebugLogs,
-			SystemPrompt:            cfg.AIInterviewSystemPrompt,
-			PromptLastQuestion:      cfg.AIInterviewPromptLastQuestion,
-			PromptClosing:           cfg.AIInterviewPromptClosing,
-			PromptOpeningTurn:       cfg.AIInterviewPromptOpeningTurn,
-			LastQuestionSeconds:     cfg.AIInterviewLastQuestionSeconds,
-			ClosingSeconds:          cfg.AIInterviewClosingSeconds,
-			MidpointAreaIndex:       cfg.AIInterviewMidpointAreaIndex,
-			EnablePromptCaching:     cfg.AIInterviewPromptCachingEnabled,
-			TimeoutSeconds:          cfg.AITimeoutSeconds,
-			AreaConfigs:             cfg.AreaConfigs,
+			APIKey:                  cfg.AI.APIKey,
+			Model:                   cfg.AI.Model,
+			MaxTokens:               cfg.AI.MaxTokens,
+			AllowSensitiveDebugLogs: cfg.Server.AllowSensitiveDebugLogs,
+			SystemPrompt:            cfg.AI.InterviewSystemPrompt,
+			PromptLastQuestion:      cfg.AI.InterviewPromptLastQuestion,
+			PromptClosing:           cfg.AI.InterviewPromptClosing,
+			PromptOpeningTurn:       cfg.AI.InterviewPromptOpeningTurn,
+			LastQuestionSeconds:     cfg.AI.InterviewLastQuestionSeconds,
+			ClosingSeconds:          cfg.AI.InterviewClosingSeconds,
+			MidpointAreaIndex:       cfg.AI.InterviewMidpointAreaIndex,
+			EnablePromptCaching:     cfg.AI.InterviewPromptCachingEnabled,
+			TimeoutSeconds:          int(cfg.AI.Timeout / time.Second),
+			AreaConfigs:             cfg.Interview.AreaConfigs,
 		}), report.NewHTTPReportAIClient(report.ReportAIClientConfig{
 			BaseURL:                 aiBaseURL,
-			APIKey:                  cfg.AIAPIKey,
-			Model:                   cfg.AIModel,
-			MaxTokens:               cfg.AIReportMaxTokens,
-			TimeoutSeconds:          cfg.AITimeoutSeconds,
-			ReportPrompt:            cfg.AIReportPrompt,
-			AllowSensitiveDebugLogs: cfg.AllowSensitiveDebugLogs,
+			APIKey:                  cfg.AI.APIKey,
+			Model:                   cfg.AI.Model,
+			MaxTokens:               cfg.AI.ReportMaxTokens,
+			TimeoutSeconds:          int(cfg.AI.Timeout / time.Second),
+			ReportPrompt:            cfg.AI.ReportPrompt,
+			AllowSensitiveDebugLogs: cfg.Server.AllowSensitiveDebugLogs,
 		}), nil
 }

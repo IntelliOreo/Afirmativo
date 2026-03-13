@@ -57,7 +57,10 @@ func newHandlerForTest(t *testing.T, store Store) *Handler {
 	if err != nil {
 		t.Fatalf("NewSessionAuthManager() error = %v", err)
 	}
-	return NewHandler(NewService(store, 24, 2400), auth, time.Hour)
+	return NewHandler(NewService(Deps{Store: store}, Settings{
+		ExpiryHours:            24,
+		InterviewBudgetSeconds: 2400,
+	}), auth, time.Hour)
 }
 
 func withAuthCookieForTest(t *testing.T, h *Handler, req *http.Request, sessionCode string) *http.Request {

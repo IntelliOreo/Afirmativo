@@ -179,7 +179,12 @@ func TestSubmitAnswerAsync_RejectsExpiredSession(t *testing.T) {
 			}, nil
 		},
 	}
-	svc := NewService(sessions, sessions, sessions, &fakeInterviewStore{}, nil, nil, "", "", "", "", 300, AsyncConfig{})
+	svc := NewService(Deps{
+		SessionStarter:   sessions,
+		SessionGetter:    sessions,
+		SessionCompleter: sessions,
+		Store:            &fakeInterviewStore{},
+	}, defaultInterviewSettings())
 
 	_, err := svc.SubmitAnswerAsync(
 		context.Background(),
@@ -300,7 +305,7 @@ func TestProcessTurnForAsyncJob_UsesSubmissionTimeInsteadOfWorkerDelay(t *testin
 	}
 }
 
-func TestStartAsyncAnswerRuntime_ZeroAsyncConfigStillDispatchesRecoveredJobs(t *testing.T) {
+func TestStartAsyncAnswerRuntime_DispatchesRecoveredJobs(t *testing.T) {
 	t.Parallel()
 
 	claimed := make(chan string, 1)
@@ -324,7 +329,7 @@ func TestStartAsyncAnswerRuntime_ZeroAsyncConfigStillDispatchesRecoveredJobs(t *
 		},
 	}
 
-	svc := newInterviewServiceForAsyncTests(store, AsyncConfig{})
+	svc := newInterviewServiceForAsyncTests(store)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -337,53 +342,5 @@ func TestStartAsyncAnswerRuntime_ZeroAsyncConfigStillDispatchesRecoveredJobs(t *
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatalf("timed out waiting for recovered job dispatch")
-	}
-}
-
-func TestAsyncConfigWithDefaults(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		cfg  AsyncConfig
-		want AsyncConfig
-	}{
-		{
-			name: "all_zero_values_use_defaults",
-			cfg:  AsyncConfig{},
-			want: AsyncConfig{
-				Workers:       defaultAsyncAnswerWorkers,
-				QueueSize:     defaultAsyncAnswerQueueSize,
-				RecoveryBatch: defaultAsyncAnswerRecoveryBatch,
-				RecoveryEvery: defaultAsyncAnswerRecoveryEvery,
-				StaleAfter:    defaultAsyncAnswerStaleRunningAge,
-				JobTimeout:    defaultAsyncAnswerJobTimeout,
-			},
-		},
-		{
-			name: "partial_config_preserves_supplied_values",
-			cfg: AsyncConfig{
-				Workers:       9,
-				QueueSize:     32,
-				RecoveryEvery: 45 * time.Second,
-			},
-			want: AsyncConfig{
-				Workers:       9,
-				QueueSize:     32,
-				RecoveryBatch: defaultAsyncAnswerRecoveryBatch,
-				RecoveryEvery: 45 * time.Second,
-				StaleAfter:    defaultAsyncAnswerStaleRunningAge,
-				JobTimeout:    defaultAsyncAnswerJobTimeout,
-			},
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := tc.cfg.withDefaults()
-			if got != tc.want {
-				t.Fatalf("withDefaults() = %+v, want %+v", got, tc.want)
-			}
-		})
 	}
 }
