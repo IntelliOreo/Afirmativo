@@ -199,6 +199,80 @@ func TestSubmitAnswerAsync_RejectsExpiredSession(t *testing.T) {
 	}
 }
 
+func TestClassifyAsyncAnswerCompletionOutcome(t *testing.T) {
+	t.Parallel()
+
+	outcome, terminal := classifyAsyncAnswerCompletionOutcome(&AnswerResult{Substituted: true})
+	if !terminal {
+		t.Fatalf("terminal = %v, want true", terminal)
+	}
+	if outcome.status != AsyncAnswerJobCanceled {
+		t.Fatalf("status = %q, want %q", outcome.status, AsyncAnswerJobCanceled)
+	}
+	if outcome.errorCode != "AI_RETRY_EXHAUSTED" {
+		t.Fatalf("errorCode = %q, want AI_RETRY_EXHAUSTED", outcome.errorCode)
+	}
+
+	outcome, terminal = classifyAsyncAnswerCompletionOutcome(&AnswerResult{Substituted: false})
+	if terminal {
+		t.Fatalf("terminal = %v, want false", terminal)
+	}
+	if outcome != (asyncAnswerTerminalOutcome{}) {
+		t.Fatalf("outcome = %#v, want zero value when result is non-terminal", outcome)
+	}
+}
+
+func TestBuildTurnAnswerResult_PrefersIssuedQuestionAndCarriesFlags(t *testing.T) {
+	t.Parallel()
+
+	svc := newInterviewServiceForAsyncTests(&fakeInterviewStore{})
+	now := time.Date(2026, time.March, 13, 14, 0, 0, 0, time.UTC)
+	svc.nowFn = func() time.Time { return now }
+
+	fallbackQuestion := &Question{
+		TextEs:         "Fallback",
+		TextEn:         "Fallback",
+		Area:           "protected_ground",
+		Kind:           QuestionKindCriterion,
+		TurnID:         "fallback-turn",
+		QuestionNumber: 3,
+		TotalQuestions: EstimatedTotalQuestions,
+	}
+	issuedQuestion := &IssuedQuestion{
+		Question: Question{
+			TextEs:         "Persisted",
+			TextEn:         "Persisted",
+			Area:           "protected_ground",
+			Kind:           QuestionKindCriterion,
+			TurnID:         "persisted-turn",
+			QuestionNumber: 4,
+			TotalQuestions: EstimatedTotalQuestions,
+		},
+		IssuedAt:         now,
+		AnswerDeadlineAt: now.Add(4 * time.Minute),
+	}
+
+	got := svc.buildTurnAnswerResult(issuedQuestion, fallbackQuestion, 1234, true)
+	if got.Done {
+		t.Fatalf("done = %v, want false", got.Done)
+	}
+	if got.NextQuestion == nil {
+		t.Fatalf("nextQuestion = nil, want non-nil")
+	}
+	if got.NextQuestion.TurnID != "persisted-turn" {
+		t.Fatalf("nextQuestion.turnID = %q, want persisted-turn", got.NextQuestion.TurnID)
+	}
+	if got.AnswerSubmitWindowRemainingS != 240 {
+		t.Fatalf("answerSubmitWindowRemainingS = %d, want 240", got.AnswerSubmitWindowRemainingS)
+	}
+	if got.TimerRemainingS != 1234 {
+		t.Fatalf("timerRemainingS = %d, want 1234", got.TimerRemainingS)
+	}
+	if !got.Substituted {
+		t.Fatalf("substituted = %v, want true", got.Substituted)
+	}
+}
+
 func TestProcessTurnForAsyncJob_UsesSubmissionTimeInsteadOfWorkerDelay(t *testing.T) {
 	t.Parallel()
 

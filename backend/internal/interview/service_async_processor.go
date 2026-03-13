@@ -27,12 +27,13 @@ func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
 
 	answerResult, err := s.processTurnForAsyncJob(ctx, claimed.job)
 	if err != nil {
-		s.finalizeAsyncAnswerJobFailure(ctx, claimed, classifyAsyncAnswerTerminalOutcome(err), err)
+		outcome := classifyAsyncAnswerTerminalOutcome(err)
+		s.finalizeAsyncAnswerJobTerminal(ctx, claimed, outcome, err)
 		return
 	}
 
-	if answerResult.Substituted {
-		s.finalizeAsyncAnswerJobCanceled(ctx, claimed, substitutedAsyncAnswerOutcome())
+	if outcome, terminal := classifyAsyncAnswerCompletionOutcome(answerResult); terminal {
+		s.finalizeAsyncAnswerJobTerminal(ctx, claimed, outcome, nil)
 		return
 	}
 
@@ -95,6 +96,13 @@ func substitutedAsyncAnswerOutcome() asyncAnswerTerminalOutcome {
 	}
 }
 
+func classifyAsyncAnswerCompletionOutcome(answerResult *AnswerResult) (asyncAnswerTerminalOutcome, bool) {
+	if answerResult == nil || !answerResult.Substituted {
+		return asyncAnswerTerminalOutcome{}, false
+	}
+	return substitutedAsyncAnswerOutcome(), true
+}
+
 func serializationAsyncAnswerOutcome() asyncAnswerTerminalOutcome {
 	return asyncAnswerTerminalOutcome{
 		status:       AsyncAnswerJobFailed,
@@ -103,27 +111,34 @@ func serializationAsyncAnswerOutcome() asyncAnswerTerminalOutcome {
 	}
 }
 
-func (s *Service) finalizeAsyncAnswerJobFailure(ctx context.Context, claimed *claimedAsyncAnswerJob, outcome asyncAnswerTerminalOutcome, cause error) {
-	slog.Warn("async answer job processing failed",
-		"request_id", claimed.requestID,
-		"session_code", claimed.job.SessionCode,
-		"client_request_id", claimed.job.ClientRequestID,
-		"job_id", claimed.job.ID,
-		"status", outcome.status,
-		"error_code", outcome.errorCode,
-		"error", cause,
-	)
+func (s *Service) finalizeAsyncAnswerJobTerminal(
+	ctx context.Context,
+	claimed *claimedAsyncAnswerJob,
+	outcome asyncAnswerTerminalOutcome,
+	cause error,
+) {
+	if cause != nil {
+		slog.Warn("async answer job terminalized without success",
+			"request_id", claimed.requestID,
+			"session_code", claimed.job.SessionCode,
+			"client_request_id", claimed.job.ClientRequestID,
+			"job_id", claimed.job.ID,
+			"status", outcome.status,
+			"error_code", outcome.errorCode,
+			"error", cause,
+		)
+	}
 
-	failCtx, failCancel := context.WithTimeout(ctx, s.dbTimeout)
-	markErr := s.jobStore.MarkAnswerJobFailed(failCtx, MarkAnswerJobFailedParams{
+	terminalCtx, terminalCancel := context.WithTimeout(ctx, s.dbTimeout)
+	markErr := s.jobStore.MarkAnswerJobFailed(terminalCtx, MarkAnswerJobFailedParams{
 		JobID:        claimed.job.ID,
 		Status:       outcome.status,
 		ErrorCode:    outcome.errorCode,
 		ErrorMessage: outcome.errorMessage,
 	})
-	failCancel()
+	terminalCancel()
 	if markErr != nil {
-		slog.Error("failed to mark async answer job as failed",
+		slog.Error("failed to mark async answer job as terminal",
 			"request_id", claimed.requestID,
 			"session_code", claimed.job.SessionCode,
 			"client_request_id", claimed.job.ClientRequestID,
@@ -145,40 +160,10 @@ func (s *Service) finalizeAsyncAnswerJobFailure(ctx context.Context, claimed *cl
 	)
 }
 
-func (s *Service) finalizeAsyncAnswerJobCanceled(ctx context.Context, claimed *claimedAsyncAnswerJob, outcome asyncAnswerTerminalOutcome) {
-	cancelCtx, cancelCancel := context.WithTimeout(ctx, s.dbTimeout)
-	markErr := s.jobStore.MarkAnswerJobFailed(cancelCtx, MarkAnswerJobFailedParams{
-		JobID:        claimed.job.ID,
-		Status:       outcome.status,
-		ErrorCode:    outcome.errorCode,
-		ErrorMessage: outcome.errorMessage,
-	})
-	cancelCancel()
-	if markErr != nil {
-		slog.Error("failed to mark async answer job as canceled",
-			"request_id", claimed.requestID,
-			"session_code", claimed.job.SessionCode,
-			"client_request_id", claimed.job.ClientRequestID,
-			"job_id", claimed.job.ID,
-			"error", markErr,
-		)
-		return
-	}
-
-	slog.Info("async answer job marked terminal",
-		"request_id", claimed.requestID,
-		"session_code", claimed.job.SessionCode,
-		"client_request_id", claimed.job.ClientRequestID,
-		"job_id", claimed.job.ID,
-		"status", outcome.status,
-		"error_code", outcome.errorCode,
-	)
-}
-
 func (s *Service) finalizeAsyncAnswerJobSuccess(ctx context.Context, claimed *claimedAsyncAnswerJob, answerResult *AnswerResult) {
 	payload, err := encodeAnswerJobPayload(answerResult)
 	if err != nil {
-		s.finalizeAsyncAnswerJobSerializationFailure(ctx, claimed, err)
+		s.finalizeAsyncAnswerJobTerminal(ctx, claimed, serializationAsyncAnswerOutcome(), err)
 		return
 	}
 
@@ -202,38 +187,6 @@ func (s *Service) finalizeAsyncAnswerJobSuccess(ctx context.Context, claimed *cl
 		"client_request_id", claimed.job.ClientRequestID,
 		"job_id", claimed.job.ID,
 		"status", AsyncAnswerJobSucceeded,
-	)
-}
-
-func (s *Service) finalizeAsyncAnswerJobSerializationFailure(ctx context.Context, claimed *claimedAsyncAnswerJob, cause error) {
-	outcome := serializationAsyncAnswerOutcome()
-
-	failCtx, failCancel := context.WithTimeout(ctx, s.dbTimeout)
-	markErr := s.jobStore.MarkAnswerJobFailed(failCtx, MarkAnswerJobFailedParams{
-		JobID:        claimed.job.ID,
-		Status:       outcome.status,
-		ErrorCode:    outcome.errorCode,
-		ErrorMessage: outcome.errorMessage,
-	})
-	failCancel()
-	if markErr != nil {
-		slog.Error("failed to mark async answer job serialization failure",
-			"request_id", claimed.requestID,
-			"session_code", claimed.job.SessionCode,
-			"client_request_id", claimed.job.ClientRequestID,
-			"job_id", claimed.job.ID,
-			"error", markErr,
-		)
-		return
-	}
-
-	slog.Warn("async answer job serialization failure",
-		"request_id", claimed.requestID,
-		"session_code", claimed.job.SessionCode,
-		"client_request_id", claimed.job.ClientRequestID,
-		"job_id", claimed.job.ID,
-		"error_code", outcome.errorCode,
-		"error", cause,
 	)
 }
 

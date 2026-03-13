@@ -9,10 +9,23 @@ import (
 )
 
 func (s *Service) handleReadinessTurn(ctx context.Context, sessionCode string, snapshot *turnSnapshot) (*AnswerResult, error) {
-	if s.finishIfNoCurrentArea(ctx, sessionCode, snapshot.currentArea, false) {
-		return &AnswerResult{Done: true, TimerRemainingS: 0, AnswerSubmitWindowRemainingS: 0}, nil
+	if result, done := s.finishIfNoCurrentAreaResult(ctx, sessionCode, snapshot.currentArea, false); done {
+		return result, nil
 	}
 
+	plan, err := s.buildReadinessAdvancePlan(ctx, sessionCode, snapshot)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.advanceNonCriterionTurn(ctx, sessionCode, snapshot, plan)
+}
+
+func (s *Service) buildReadinessAdvancePlan(
+	ctx context.Context,
+	sessionCode string,
+	snapshot *turnSnapshot,
+) (*nonCriterionAdvancePlan, error) {
 	answersCtx, answersCancel := context.WithTimeout(ctx, s.dbTimeout)
 	answers, err := s.stateStore.GetAnswersBySession(answersCtx, sessionCode)
 	answersCancel()
@@ -57,42 +70,20 @@ func (s *Service) handleReadinessTurn(ctx context.Context, sessionCode string, s
 		return nil, fmt.Errorf("new turn id: %w", err)
 	}
 
-	nextQuestion := &Question{
-		TextEs:         nextQuestionText,
-		TextEn:         nextQuestionText,
-		Area:           snapshot.currentArea.Area,
-		Kind:           QuestionKindCriterion,
-		TurnID:         nextTurnID,
-		QuestionNumber: snapshot.flowState.QuestionNumber + 1,
-		TotalQuestions: EstimatedTotalQuestions,
-	}
-	issuedQuestion := NewIssuedQuestion(nextQuestion, s.nowFn(), s.settings.AnswerTimeLimitSeconds)
-
-	advanceCtx, advanceCancel := context.WithTimeout(ctx, s.dbTimeout)
-	nextFlow, err := s.stateStore.AdvanceNonCriterionStep(advanceCtx, AdvanceNonCriterionStepParams{
-		SessionCode:        sessionCode,
-		ExpectedTurnID:     snapshot.turnID,
-		CurrentStep:        FlowStepReadiness,
-		NextStep:           FlowStepCriterion,
-		EventType:          "readiness_ack",
-		AnswerText:         snapshot.answerText,
-		NextIssuedQuestion: issuedQuestion,
-	})
-	advanceCancel()
-	if err != nil {
-		return nil, fmt.Errorf("advance readiness step: %w", err)
-	}
-
-	return &AnswerResult{
-		Done: false,
-		NextQuestion: func() *Question {
-			if nextFlow.ActiveQuestion != nil {
-				return &nextFlow.ActiveQuestion.Question
-			}
-			return nextQuestion
-		}(),
-		TimerRemainingS:              snapshot.timeRemainingS,
-		AnswerSubmitWindowRemainingS: issuedQuestion.SubmitWindowRemaining(s.nowFn()),
-		Substituted:                  substituted,
+	return &nonCriterionAdvancePlan{
+		opName:      "advance readiness step",
+		currentStep: FlowStepReadiness,
+		nextStep:    FlowStepCriterion,
+		eventType:   "readiness_ack",
+		substituted: substituted,
+		question: &Question{
+			TextEs:         nextQuestionText,
+			TextEn:         nextQuestionText,
+			Area:           snapshot.currentArea.Area,
+			Kind:           QuestionKindCriterion,
+			TurnID:         nextTurnID,
+			QuestionNumber: snapshot.flowState.QuestionNumber + 1,
+			TotalQuestions: EstimatedTotalQuestions,
+		},
 	}, nil
 }

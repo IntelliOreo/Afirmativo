@@ -7,8 +7,8 @@ import (
 )
 
 func (s *Service) handleCriterionTurn(ctx context.Context, sessionCode string, snapshot *turnSnapshot) (*AnswerResult, error) {
-	if s.finishIfNoCurrentArea(ctx, sessionCode, snapshot.currentArea, true) {
-		return &AnswerResult{Done: true, TimerRemainingS: 0, AnswerSubmitWindowRemainingS: 0}, nil
+	if result, done := s.finishIfNoCurrentAreaResult(ctx, sessionCode, snapshot.currentArea, true); done {
+		return result, nil
 	}
 
 	inputs, err := s.loadCriterionTurnAnswers(ctx, sessionCode, snapshot)
@@ -36,19 +36,13 @@ func (s *Service) handleCriterionTurn(ctx context.Context, sessionCode string, s
 
 	if strings.TrimSpace(plan.nextArea) == "" {
 		s.finishSession(ctx, sessionCode)
-		return &AnswerResult{Done: true, TimerRemainingS: 0, AnswerSubmitWindowRemainingS: 0}, nil
+		return doneAnswerResult(false), nil
 	}
 
-	return &AnswerResult{
-		Done: false,
-		NextQuestion: func() *Question {
-			if nextQuestion.issuedQuestion != nil {
-				return &nextQuestion.issuedQuestion.Question
-			}
-			return nextQuestion.question
-		}(),
-		TimerRemainingS:              snapshot.timeRemainingS,
-		AnswerSubmitWindowRemainingS: nextQuestion.issuedQuestion.SubmitWindowRemaining(s.nowFn()),
-		Substituted:                  nextQuestion.substituted,
-	}, nil
+	return s.buildTurnAnswerResult(
+		nextQuestion.issuedQuestion,
+		nextQuestion.question,
+		snapshot.timeRemainingS,
+		nextQuestion.substituted,
+	), nil
 }
