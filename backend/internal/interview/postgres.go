@@ -575,6 +575,9 @@ func (s *PostgresStore) ProcessCriterionTurn(ctx context.Context, params Process
 	if params.Evaluation == nil {
 		return nil, ErrInvalidFlow
 	}
+	if params.SubmissionTime.IsZero() {
+		return nil, ErrInvalidFlow
+	}
 	if strings.TrimSpace(params.NextArea) != "" && params.NextIssuedQuestion == nil {
 		return nil, ErrInvalidFlow
 	}
@@ -623,16 +626,17 @@ func (s *PostgresStore) ProcessCriterionTurn(ctx context.Context, params Process
 		return nil, fmt.Errorf("insert answer: %w", err)
 	}
 
-	// Accumulate lapsed seconds: min(now - question issued, answer time limit).
+	// Accumulate lapsed seconds from the durable submit time, not worker/commit time.
 	if _, err := tx.Exec(ctx,
 		`UPDATE sessions
 		 SET interview_lapsed_seconds = interview_lapsed_seconds + LEAST(
-		     EXTRACT(EPOCH FROM (now() - active_question_issued_at))::int,
-		     $2
+		     GREATEST(EXTRACT(EPOCH FROM ($2::timestamptz - active_question_issued_at))::int, 0),
+		     $3
 		 ),
-		 interview_lapsed_updated_at = now()
+		 interview_lapsed_updated_at = $2
 		 WHERE session_code = $1 AND active_question_issued_at IS NOT NULL`,
 		params.SessionCode,
+		params.SubmissionTime.UTC(),
 		params.AnswerTimeLimitSeconds,
 	); err != nil {
 		return nil, fmt.Errorf("update lapsed seconds: %w", err)

@@ -28,7 +28,7 @@ func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
 // ClaimCouponAndCreateSession runs ClaimCoupon + CreateSession in a single
 // database transaction. If the coupon is invalid or exhausted, the TX is
 // rolled back and ErrCouponInvalid is returned.
-func (s *PostgresStore) ClaimCouponAndCreateSession(ctx context.Context, couponCode, sessionCode, pinHash string, expiresAt time.Time) (*Session, error) {
+func (s *PostgresStore) ClaimCouponAndCreateSession(ctx context.Context, couponCode, sessionCode, pinHash string, expiresAt time.Time, interviewBudgetSeconds int) (*Session, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
@@ -48,10 +48,11 @@ func (s *PostgresStore) ClaimCouponAndCreateSession(ctx context.Context, couponC
 
 	// Create the session in the same transaction.
 	row, err := q.CreateSession(ctx, sqlgen.CreateSessionParams{
-		SessionCode: sessionCode,
-		PinHash:     pinHash,
-		CouponCode:  pgtype.Text{String: couponCode, Valid: true},
-		ExpiresAt:   pgtype.Timestamptz{Time: expiresAt, Valid: true},
+		SessionCode:            sessionCode,
+		PinHash:                pinHash,
+		CouponCode:             pgtype.Text{String: couponCode, Valid: true},
+		ExpiresAt:              pgtype.Timestamptz{Time: expiresAt, Valid: true},
+		InterviewBudgetSeconds: int32(interviewBudgetSeconds),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)

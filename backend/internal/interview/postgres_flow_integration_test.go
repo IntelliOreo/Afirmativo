@@ -175,6 +175,7 @@ func TestPostgresStoreProcessCriterionTurnMovesToNextArea(t *testing.T) {
 		CurrentArea:       "history",
 		QuestionText:      "What happened to you?",
 		AnswerText:        "I was targeted because of my opinion.",
+		SubmissionTime:    time.Now().UTC(),
 		PreferredLanguage: "en",
 		Evaluation:        evaluation,
 		PreAddressed: []PreAddressedArea{
@@ -309,6 +310,7 @@ func TestPostgresStoreProcessCriterionTurnMarksDoneWhenNoAreasRemain(t *testing.
 		CurrentArea:       "history",
 		QuestionText:      "Why are you seeking protection?",
 		AnswerText:        "Porque tengo miedo de regresar.",
+		SubmissionTime:    time.Now().UTC(),
 		PreferredLanguage: "es",
 		Evaluation:        evaluation,
 		Decision: CriterionTurnDecision{
@@ -404,6 +406,7 @@ func TestPostgresStoreProcessCriterionTurnConflictRollsBack(t *testing.T) {
 		CurrentArea:       "history",
 		QuestionText:      "What happened?",
 		AnswerText:        "Nothing should save.",
+		SubmissionTime:    time.Now().UTC(),
 		PreferredLanguage: "en",
 		Evaluation:        &Evaluation{CurrentCriterion: CurrentCriterion{Status: "sufficient"}},
 		Decision: CriterionTurnDecision{
@@ -460,5 +463,100 @@ func TestPostgresStoreProcessCriterionTurnConflictRollsBack(t *testing.T) {
 	}
 	if flowState.QuestionNumber != 2 {
 		t.Fatalf("flowState.QuestionNumber = %d, want 2", flowState.QuestionNumber)
+	}
+}
+
+func TestPostgresStoreProcessCriterionTurnUsesSubmissionTimeForLapsedSeconds(t *testing.T) {
+	store, cleanup := newPostgresIntegrationStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	sessionCode := "AP-CRITERION-SUBMIT-TIME"
+	submissionTime := time.Now().UTC()
+	issuedAt := submissionTime.Add(-2 * time.Minute)
+
+	insertPostgresIntegrationSession(t, store.pool, postgresIntegrationSessionParams{
+		SessionCode:            sessionCode,
+		Status:                 "interviewing",
+		FlowStep:               FlowStepCriterion,
+		ExpectedTurnID:         "turn-current",
+		DisplayQuestionNumber:  3,
+		InterviewBudgetSeconds: 2400,
+	})
+	insertPostgresIntegrationArea(t, store.pool, postgresIntegrationAreaParams{
+		SessionCode:    sessionCode,
+		Area:           "history",
+		Status:         AreaStatusInProgress,
+		QuestionsCount: 0,
+	})
+
+	if _, err := store.pool.Exec(ctx,
+		`UPDATE sessions
+		 SET active_question_text_en = $2,
+		     active_question_text_es = $2,
+		     active_question_area = $3,
+		     active_question_kind = $4,
+		     active_question_issued_at = $5,
+		     active_answer_deadline_at = $6
+		 WHERE session_code = $1`,
+		sessionCode,
+		"What happened to you?",
+		"history",
+		string(QuestionKindCriterion),
+		issuedAt,
+		issuedAt.Add(5*time.Minute),
+	); err != nil {
+		t.Fatalf("seed active criterion turn error = %v", err)
+	}
+
+	got, err := store.ProcessCriterionTurn(ctx, ProcessCriterionTurnParams{
+		SessionCode:       sessionCode,
+		ExpectedTurnID:    "turn-current",
+		CurrentArea:       "history",
+		QuestionText:      "What happened to you?",
+		AnswerText:        "I was targeted because of my opinion.",
+		SubmissionTime:    submissionTime,
+		PreferredLanguage: "en",
+		Evaluation: &Evaluation{
+			CurrentCriterion: CurrentCriterion{
+				ID:              1,
+				Status:          "partially_sufficient",
+				Recommendation:  "follow_up",
+				EvidenceSummary: "More detail is needed.",
+			},
+		},
+		Decision: CriterionTurnDecision{
+			Action: CriterionTurnActionStay,
+		},
+		NextArea: "history",
+		NextIssuedQuestion: NewIssuedQuestion(&Question{
+			TextEs:         "What happened next?",
+			TextEn:         "What happened next?",
+			Area:           "history",
+			Kind:           QuestionKindCriterion,
+			TurnID:         "turn-next",
+			QuestionNumber: 4,
+			TotalQuestions: EstimatedTotalQuestions,
+		}, submissionTime.Add(2*time.Hour), 300),
+		AnswerTimeLimitSeconds: 300,
+	})
+	if err != nil {
+		t.Fatalf("ProcessCriterionTurn() error = %v", err)
+	}
+	if got.NewCount != 1 {
+		t.Fatalf("got.NewCount = %d, want 1", got.NewCount)
+	}
+
+	var lapsedSeconds int
+	if err := store.pool.QueryRow(ctx,
+		`SELECT interview_lapsed_seconds
+		   FROM sessions
+		  WHERE session_code = $1`,
+		sessionCode,
+	).Scan(&lapsedSeconds); err != nil {
+		t.Fatalf("query interview_lapsed_seconds error = %v", err)
+	}
+	if lapsedSeconds != 120 {
+		t.Fatalf("interview_lapsed_seconds = %d, want 120 based on submission time", lapsedSeconds)
 	}
 }

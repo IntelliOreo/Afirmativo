@@ -194,6 +194,112 @@ func TestSubmitAnswerAsync_RejectsExpiredSession(t *testing.T) {
 	}
 }
 
+func TestProcessTurnForAsyncJob_UsesSubmissionTimeInsteadOfWorkerDelay(t *testing.T) {
+	t.Parallel()
+
+	const sessionCode = "AP-7K9X-M2NF"
+	submissionTime := time.Date(2026, time.March, 13, 14, 2, 0, 0, time.UTC)
+	workerTime := submissionTime.Add(2 * time.Hour)
+	issuedAt := submissionTime.Add(-2 * time.Minute)
+
+	store := newQAServiceStore()
+	store.getFlowStateFn = func(context.Context, string) (*FlowState, error) {
+		return &FlowState{
+			Step:           FlowStepCriterion,
+			ExpectedTurnID: "turn-criterion",
+			QuestionNumber: 3,
+			ActiveQuestion: &IssuedQuestion{
+				Question: Question{
+					TextEs:         "Pregunta actual",
+					TextEn:         "Current question",
+					Area:           "protected_ground",
+					Kind:           QuestionKindCriterion,
+					TurnID:         "turn-criterion",
+					QuestionNumber: 3,
+					TotalQuestions: EstimatedTotalQuestions,
+				},
+				IssuedAt:         issuedAt,
+				AnswerDeadlineAt: issuedAt.Add(5 * time.Minute),
+			},
+		}, nil
+	}
+	store.getAreasBySessionFn = func(context.Context, string) ([]QuestionArea, error) {
+		return []QuestionArea{{Area: "protected_ground", Status: AreaStatusInProgress, QuestionsCount: 0}}, nil
+	}
+	store.getInProgressAreaFn = func(context.Context, string) (*QuestionArea, error) {
+		return &QuestionArea{Area: "protected_ground", Status: AreaStatusInProgress, QuestionsCount: 0}, nil
+	}
+	store.getAnswersBySessionFn = func(context.Context, string) ([]Answer, error) {
+		return []Answer{}, nil
+	}
+
+	var gotAITimeRemaining int
+	ai := &qaAIClient{
+		generateTurnFn: func(_ context.Context, turnCtx *AITurnContext) (*AIResponse, error) {
+			gotAITimeRemaining = turnCtx.TimeRemainingS
+			return &AIResponse{
+				Evaluation: &Evaluation{
+					CurrentCriterion: CurrentCriterion{
+						ID:              1,
+						Status:          "partially_sufficient",
+						Recommendation:  "follow_up",
+						EvidenceSummary: "Need more detail",
+					},
+				},
+				NextQuestion: "What happened next?",
+			}, nil
+		},
+	}
+
+	var gotSubmissionTime time.Time
+	store.processCriterionTurnFn = func(_ context.Context, params ProcessCriterionTurnParams) (*ProcessCriterionTurnResult, error) {
+		gotSubmissionTime = params.SubmissionTime
+		return &ProcessCriterionTurnResult{NewCount: 1}, nil
+	}
+
+	sessions := &fakeInterviewSessionStore{
+		getSessionByCodeFn: func(context.Context, string) (*session.Session, error) {
+			return &session.Session{
+				SessionCode:            sessionCode,
+				PreferredLanguage:      "en",
+				Status:                 "interviewing",
+				InterviewBudgetSeconds: 2400,
+				InterviewLapsedSeconds: 600,
+				ExpiresAt:              workerTime.Add(24 * time.Hour),
+			}, nil
+		},
+	}
+
+	svc := newServiceForRecoveryTests(store, sessions, ai)
+	svc.nowFn = func() time.Time { return workerTime }
+
+	job := &AnswerJob{
+		ID:           "job-1",
+		SessionCode:  sessionCode,
+		TurnID:       "turn-criterion",
+		QuestionText: "Current question",
+		AnswerText:   "My answer",
+		CreatedAt:    submissionTime,
+	}
+
+	result, err := svc.processTurnForAsyncJob(context.Background(), job)
+	if err != nil {
+		t.Fatalf("processTurnForAsyncJob() error = %v", err)
+	}
+	if result.Done {
+		t.Fatalf("done = %v, want false", result.Done)
+	}
+	if gotAITimeRemaining != 1680 {
+		t.Fatalf("AI timeRemainingS = %d, want 1680 based on submit time instead of worker delay", gotAITimeRemaining)
+	}
+	if !gotSubmissionTime.Equal(submissionTime) {
+		t.Fatalf("ProcessCriterionTurn submissionTime = %v, want %v", gotSubmissionTime, submissionTime)
+	}
+	if result.TimerRemainingS != 1680 {
+		t.Fatalf("timerRemainingS = %d, want 1680 based on submit time instead of worker delay", result.TimerRemainingS)
+	}
+}
+
 func TestStartAsyncAnswerRuntime_ZeroAsyncConfigStillDispatchesRecoveredJobs(t *testing.T) {
 	t.Parallel()
 

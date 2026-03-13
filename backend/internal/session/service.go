@@ -16,14 +16,16 @@ import (
 type Service struct {
 	store       Store
 	expiryHours int
+	interviewBudgetSeconds int
 	nowFn       func() time.Time
 }
 
 // NewService creates a Service with the given store and session expiry duration.
-func NewService(store Store, expiryHours int) *Service {
+func NewService(store Store, expiryHours int, interviewBudgetSeconds int) *Service {
 	return &Service{
 		store:       store,
 		expiryHours: expiryHours,
+		interviewBudgetSeconds: interviewBudgetSeconds,
 		nowFn:       time.Now,
 	}
 }
@@ -54,7 +56,14 @@ func (s *Service) ValidateCoupon(ctx context.Context, couponCode string) (*Valid
 
 	expiresAt := s.nowFn().Add(time.Duration(s.expiryHours) * time.Hour)
 
-	_, err = s.store.ClaimCouponAndCreateSession(ctx, couponCode, sessionCode, string(pinHash), expiresAt)
+	_, err = s.store.ClaimCouponAndCreateSession(
+		ctx,
+		couponCode,
+		sessionCode,
+		string(pinHash),
+		expiresAt,
+		s.interviewBudgetSeconds,
+	)
 	if err != nil {
 		return nil, err // ErrCouponInvalid or internal error — caller maps to HTTP status
 	}

@@ -144,7 +144,7 @@ export function interviewReducer(state: InterviewState, action: InterviewAction)
       if (state.phase !== "active") return state;
       return { ...state, inputMode: action.payload.mode };
     case "TICK":
-      if (state.phase === "active" || state.phase === "submitting") {
+      if (state.phase === "active") {
         return {
           ...state,
           secondsLeft: Math.max(0, state.secondsLeft - 1),
@@ -374,8 +374,7 @@ export function useInterviewMachine({
   }, [bootAttempt, code, lang, langInitialized, setLang, submitPendingAnswerJob]);
 
   useEffect(() => {
-    const isTickingPhase = state.phase === "active" || state.phase === "submitting";
-    if (!isTickingPhase) return;
+    if (state.phase !== "active") return;
     if (state.secondsLeft <= 0) return;
 
     const intervalId = window.setInterval(() => {
@@ -388,9 +387,7 @@ export function useInterviewMachine({
   }, [
     dispatch,
     state.phase,
-    state.phase === "active" || state.phase === "submitting"
-      ? state.secondsLeft
-      : 0,
+    state.phase === "active" ? state.secondsLeft : 0,
   ]);
 
   useEffect(() => {

@@ -50,16 +50,17 @@ func (q *Queries) CompleteSession(ctx context.Context, sessionCode string) error
 }
 
 const createSession = `-- name: CreateSession :one
-INSERT INTO sessions (session_code, pin_hash, coupon_code, status, expires_at)
-VALUES ($1, $2, $3, 'created', $4)
+INSERT INTO sessions (session_code, pin_hash, coupon_code, status, expires_at, interview_budget_seconds)
+VALUES ($1, $2, $3, 'created', $4, $5)
 RETURNING session_code, pin_hash, track, preferred_language, status, role, ended_at, payment_id, coupon_code, expires_at, created_at, interview_budget_seconds, interview_lapsed_seconds, interview_lapsed_updated_at, interview_started_at, current_interview_started_at, last_api_call_at, conversation_history
 `
 
 type CreateSessionParams struct {
-	SessionCode string             `json:"session_code"`
-	PinHash     string             `json:"pin_hash"`
-	CouponCode  pgtype.Text        `json:"coupon_code"`
-	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	SessionCode            string             `json:"session_code"`
+	PinHash                string             `json:"pin_hash"`
+	CouponCode             pgtype.Text        `json:"coupon_code"`
+	ExpiresAt              pgtype.Timestamptz `json:"expires_at"`
+	InterviewBudgetSeconds int32              `json:"interview_budget_seconds"`
 }
 
 func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error) {
@@ -68,6 +69,7 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		arg.PinHash,
 		arg.CouponCode,
 		arg.ExpiresAt,
+		arg.InterviewBudgetSeconds,
 	)
 	var i Session
 	err := row.Scan(

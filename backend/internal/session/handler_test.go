@@ -15,13 +15,13 @@ import (
 )
 
 type fakeStore struct {
-	claimCouponAndCreateSessionFn func(ctx context.Context, couponCode, sessionCode, pinHash string, expiresAt time.Time) (*Session, error)
+	claimCouponAndCreateSessionFn func(ctx context.Context, couponCode, sessionCode, pinHash string, expiresAt time.Time, interviewBudgetSeconds int) (*Session, error)
 	getSessionByCodeFn            func(ctx context.Context, sessionCode string) (*Session, error)
 }
 
-func (f *fakeStore) ClaimCouponAndCreateSession(ctx context.Context, couponCode, sessionCode, pinHash string, expiresAt time.Time) (*Session, error) {
+func (f *fakeStore) ClaimCouponAndCreateSession(ctx context.Context, couponCode, sessionCode, pinHash string, expiresAt time.Time, interviewBudgetSeconds int) (*Session, error) {
 	if f.claimCouponAndCreateSessionFn != nil {
-		return f.claimCouponAndCreateSessionFn(ctx, couponCode, sessionCode, pinHash, expiresAt)
+		return f.claimCouponAndCreateSessionFn(ctx, couponCode, sessionCode, pinHash, expiresAt, interviewBudgetSeconds)
 	}
 	return nil, nil
 }
@@ -57,7 +57,7 @@ func newHandlerForTest(t *testing.T, store Store) *Handler {
 	if err != nil {
 		t.Fatalf("NewSessionAuthManager() error = %v", err)
 	}
-	return NewHandler(NewService(store, 24), auth, time.Hour)
+	return NewHandler(NewService(store, 24, 2400), auth, time.Hour)
 }
 
 func withAuthCookieForTest(t *testing.T, h *Handler, req *http.Request, sessionCode string) *http.Request {
@@ -85,7 +85,7 @@ func TestHandleValidateCoupon_MapsCouponInvalid(t *testing.T) {
 	t.Parallel()
 
 	h := newHandlerForTest(t, &fakeStore{
-		claimCouponAndCreateSessionFn: func(context.Context, string, string, string, time.Time) (*Session, error) {
+		claimCouponAndCreateSessionFn: func(context.Context, string, string, string, time.Time, int) (*Session, error) {
 			return nil, shared.ErrCouponInvalid
 		},
 	})
@@ -118,15 +118,17 @@ func TestHandleValidateCoupon_SuccessContract(t *testing.T) {
 	t.Parallel()
 
 	var capturedExpiry time.Time
+	var capturedInterviewBudgetSeconds int
 	var capturedSessionCode string
 	var capturedPinHash string
 	start := time.Now()
 
 	h := newHandlerForTest(t, &fakeStore{
-		claimCouponAndCreateSessionFn: func(_ context.Context, _ string, sessionCode, pinHash string, expiresAt time.Time) (*Session, error) {
+		claimCouponAndCreateSessionFn: func(_ context.Context, _ string, sessionCode, pinHash string, expiresAt time.Time, interviewBudgetSeconds int) (*Session, error) {
 			capturedSessionCode = sessionCode
 			capturedPinHash = pinHash
 			capturedExpiry = expiresAt
+			capturedInterviewBudgetSeconds = interviewBudgetSeconds
 			return &Session{SessionCode: sessionCode}, nil
 		},
 	})
@@ -162,6 +164,9 @@ func TestHandleValidateCoupon_SuccessContract(t *testing.T) {
 	}
 	if capturedPinHash == got.PIN {
 		t.Fatalf("store pin hash should not equal plaintext pin")
+	}
+	if capturedInterviewBudgetSeconds != 2400 {
+		t.Fatalf("interviewBudgetSeconds = %d, want 2400", capturedInterviewBudgetSeconds)
 	}
 
 	after := time.Now()

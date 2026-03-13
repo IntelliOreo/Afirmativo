@@ -23,11 +23,12 @@ import (
 const postgresStoreTestDatabaseURLEnv = "AFIRMATIVO_TEST_DATABASE_URL"
 
 type postgresIntegrationSessionParams struct {
-	SessionCode           string
-	Status                string
-	FlowStep              FlowStep
-	ExpectedTurnID        string
-	DisplayQuestionNumber int
+	SessionCode            string
+	Status                 string
+	FlowStep               FlowStep
+	ExpectedTurnID         string
+	DisplayQuestionNumber  int
+	InterviewBudgetSeconds int
 }
 
 type postgresIntegrationAreaParams struct {
@@ -214,6 +215,10 @@ func insertPostgresIntegrationSession(t *testing.T, pool *pgxpool.Pool, params p
 	if displayQuestionNumber <= 0 {
 		displayQuestionNumber = 1
 	}
+	interviewBudgetSeconds := params.InterviewBudgetSeconds
+	if interviewBudgetSeconds <= 0 {
+		interviewBudgetSeconds = 2400
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -224,15 +229,17 @@ func insertPostgresIntegrationSession(t *testing.T, pool *pgxpool.Pool, params p
 		     pin_hash,
 		     expires_at,
 		     status,
+		     interview_budget_seconds,
 		     flow_step,
 		     expected_turn_id,
 		     display_question_number
 		 )
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		params.SessionCode,
 		"pin-hash",
 		time.Now().UTC().Add(24*time.Hour),
 		status,
+		interviewBudgetSeconds,
 		string(flowStep),
 		nullIfEmpty(params.ExpectedTurnID),
 		displayQuestionNumber,

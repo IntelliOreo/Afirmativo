@@ -13,7 +13,7 @@ type Store interface {
 	// ClaimCouponAndCreateSession atomically claims a coupon and creates a session
 	// within a single database transaction. Returns the created session or an error
 	// if the coupon is invalid/exhausted.
-	ClaimCouponAndCreateSession(ctx context.Context, couponCode, sessionCode, pinHash string, expiresAt time.Time) (*Session, error)
+	ClaimCouponAndCreateSession(ctx context.Context, couponCode, sessionCode, pinHash string, expiresAt time.Time, interviewBudgetSeconds int) (*Session, error)
 
 	// GetSessionByCode retrieves a session by its code.
 	GetSessionByCode(ctx context.Context, sessionCode string) (*Session, error)

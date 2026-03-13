@@ -30,6 +30,7 @@ type Config struct {
 	FrontendURL                     string
 	DatabaseURL                     string
 	SessionExpiryHours              int
+	InterviewBudgetSeconds          int
 	JWTSecret                       string
 	SessionAuthIssuer               string
 	SessionAuthAudience             string
@@ -117,6 +118,10 @@ const (
 // Returns an error if any required variable is missing.
 func Load() (Config, error) {
 	expiry, err := envInt("SESSION_EXPIRY_HOURS", 24)
+	if err != nil {
+		return Config{}, err
+	}
+	interviewBudgetSeconds, err := envIntMin("INTERVIEW_BUDGET_SECONDS", 2400, 1)
 	if err != nil {
 		return Config{}, err
 	}
@@ -285,6 +290,7 @@ func Load() (Config, error) {
 		FrontendURL:                             envOr("FRONTEND_URL", "http://localhost:3000"),
 		DatabaseURL:                             os.Getenv("DATABASE_URL"),
 		SessionExpiryHours:                      expiry,
+		InterviewBudgetSeconds:                  interviewBudgetSeconds,
 		JWTSecret:                               os.Getenv("JWT_SECRET"),
 		SessionAuthIssuer:                       defaultSessionAuthIssuer,
 		SessionAuthAudience:                     defaultSessionAuthAudience,
@@ -417,6 +423,7 @@ func (c Config) LogLoaded() {
 		"frontend_url", c.FrontendURL,
 		"database_url_set", c.DatabaseURL != "",
 		"session_expiry_hours", c.SessionExpiryHours,
+		"interview_budget_seconds", c.InterviewBudgetSeconds,
 		"jwt_secret_set", c.JWTSecret != "",
 		"session_auth_issuer", c.SessionAuthIssuer,
 		"session_auth_audience", c.SessionAuthAudience,

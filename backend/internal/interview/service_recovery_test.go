@@ -270,6 +270,83 @@ func TestStartInterview_ResumingSessionReturnsReadinessReturningUserMessage(t *t
 	}
 }
 
+func TestStartInterview_ResumeCriterionAfterLongOfflineGapUsesCappedLiveElapsed(t *testing.T) {
+	sessionCode := "AP-7K9X-M2NF"
+	resumeTime := time.Date(2026, time.March, 13, 14, 0, 0, 0, time.UTC)
+	issuedAt := resumeTime.Add(-2 * time.Hour)
+
+	store := newQAServiceStore()
+	store.getAnswerCountFn = func(context.Context, string) (int, error) {
+		return 3, nil
+	}
+	store.getFlowStateFn = func(context.Context, string) (*FlowState, error) {
+		return &FlowState{
+			Step:           FlowStepCriterion,
+			ExpectedTurnID: "turn-criterion",
+			QuestionNumber: 4,
+			ActiveQuestion: &IssuedQuestion{
+				Question: Question{
+					TextEs:         "Que paso despues?",
+					TextEn:         "What happened next?",
+					Area:           "protected_ground",
+					Kind:           QuestionKindCriterion,
+					TurnID:         "turn-criterion",
+					QuestionNumber: 4,
+					TotalQuestions: EstimatedTotalQuestions,
+				},
+				IssuedAt:         issuedAt,
+				AnswerDeadlineAt: issuedAt.Add(5 * time.Minute),
+			},
+		}, nil
+	}
+
+	sessions := &fakeInterviewSessionStore{
+		getSessionByCodeFn: func(context.Context, string) (*session.Session, error) {
+			return &session.Session{
+				SessionCode:            sessionCode,
+				PreferredLanguage:      "en",
+				Status:                 "interviewing",
+				InterviewBudgetSeconds: 2400,
+				InterviewLapsedSeconds: 600,
+				ExpiresAt:              resumeTime.Add(24 * time.Hour),
+			}, nil
+		},
+		startSessionFn: func(_ context.Context, _, _ string) (*session.Session, error) {
+			return &session.Session{
+				SessionCode:            sessionCode,
+				PreferredLanguage:      "en",
+				Status:                 "interviewing",
+				InterviewBudgetSeconds: 2400,
+				InterviewLapsedSeconds: 600,
+				ExpiresAt:              resumeTime.Add(24 * time.Hour),
+			}, nil
+		},
+	}
+
+	svc := newServiceForRecoveryTests(store, sessions, &qaAIClient{})
+	svc.nowFn = func() time.Time { return resumeTime }
+
+	result, err := svc.StartInterview(context.Background(), sessionCode, "en")
+	if err != nil {
+		t.Fatalf("StartInterview() error = %v", err)
+	}
+	if !result.Resuming {
+		t.Fatalf("resuming = %v, want true", result.Resuming)
+	}
+	if result.Question == nil {
+		t.Fatalf("question = nil, want non-nil")
+	}
+	if result.Question.TurnID != "turn-criterion" {
+		t.Fatalf("question.turnID = %q, want turn-criterion", result.Question.TurnID)
+	}
+	if result.TimerRemainingS != 1500 {
+		t.Fatalf("timerRemainingS = %d, want 1500 after capping the 2-hour offline gap to one question limit", result.TimerRemainingS)
+	}
+	if result.AnswerSubmitWindowRemainingS != 0 {
+		t.Fatalf("answerSubmitWindowRemainingS = %d, want 0 after the per-question deadline passed", result.AnswerSubmitWindowRemainingS)
+	}
+}
+
 func TestProcessTurn_ReadinessStepTriggersNewAICallAndReturnsNewQuestion(t *testing.T) {
 	sessionCode := "AP-7K9X-M2NF"
 	store := newQAServiceStore()

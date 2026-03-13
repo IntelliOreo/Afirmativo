@@ -309,7 +309,7 @@ describe("useInterviewMachine", () => {
     });
   });
 
-  it("keeps the in-flight submit alive while the submitting timer ticks", async () => {
+  it("keeps the in-flight submit alive without decrementing the timer during submit", async () => {
     vi.useFakeTimers();
     apiMock.mockResolvedValue({
       ok: true,
@@ -363,10 +363,26 @@ describe("useInterviewMachine", () => {
       result.current.requestSubmit("My answer");
     });
 
-    expect(result.current.state.phase).toBe("submitting");
+    expect(result.current.state).toMatchObject({
+      phase: "submitting",
+      secondsLeft: 5,
+      answerSecondsLeft: 240,
+    });
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1100);
+      await vi.advanceTimersByTimeAsync(1000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.state).toMatchObject({
+      phase: "submitting",
+      secondsLeft: 5,
+      answerSecondsLeft: 240,
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
       await Promise.resolve();
       await Promise.resolve();
     });

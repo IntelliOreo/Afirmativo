@@ -73,7 +73,7 @@ func main() {
 
 	// Wire dependencies.
 	sessionStore := session.NewPostgresStore(pool)
-	sessionSvc := session.NewService(sessionStore, cfg.SessionExpiryHours)
+	sessionSvc := session.NewService(sessionStore, cfg.SessionExpiryHours, cfg.InterviewBudgetSeconds)
 
 	useSecureAuthCookie := strings.HasPrefix(strings.ToLower(cfg.FrontendURL), "https://")
 	sessionAuth, err := shared.NewSessionAuthManager(shared.SessionAuthConfig{

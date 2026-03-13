@@ -153,7 +153,7 @@ func (s *Service) StartInterview(ctx context.Context, sessionCode, preferredLang
 
 		resuming := answersCount > 0 || currentFlow.Step != FlowStepDisclaimer
 		if currentFlow.ActiveQuestion != nil {
-			overallRemaining := s.calcTimeRemaining(sess)
+			overallRemaining := s.calcEffectiveTimeRemaining(sess, currentFlow, s.nowFn())
 			if overallRemaining < 0 {
 				overallRemaining = 0
 			}
@@ -233,7 +233,7 @@ func (s *Service) StartInterview(ctx context.Context, sessionCode, preferredLang
 			}
 		}
 
-		overallRemaining := s.calcTimeRemaining(sess)
+		overallRemaining := s.calcEffectiveTimeRemaining(sess, nil, s.nowFn())
 		if overallRemaining < 0 {
 			overallRemaining = 0
 		}
@@ -259,7 +259,7 @@ type AnswerResult struct {
 
 // processTurn processes one answer according to the explicit flow step.
 func (s *Service) processTurn(ctx context.Context, sessionCode, answerText, questionText, turnID string) (*AnswerResult, error) {
-	return s.processTurnCore(ctx, sessionCode, answerText, questionText, turnID, nil)
+	return s.processTurnCore(ctx, sessionCode, answerText, questionText, turnID, s.nowFn(), nil)
 }
 
 func (s *Service) processTurnForAsyncJob(ctx context.Context, job *AnswerJob) (*AnswerResult, error) {
@@ -269,6 +269,7 @@ func (s *Service) processTurnForAsyncJob(ctx context.Context, job *AnswerJob) (*
 		job.AnswerText,
 		job.QuestionText,
 		job.TurnID,
+		job.CreatedAt,
 		s.newAsyncJobRetryFailureRecorder(job.ID),
 	)
 }
@@ -276,8 +277,14 @@ func (s *Service) processTurnForAsyncJob(ctx context.Context, job *AnswerJob) (*
 func (s *Service) processTurnCore(
 	ctx context.Context,
 	sessionCode, answerText, questionText, turnID string,
+	submissionTime time.Time,
 	failureRecorder aiRetryFailureRecorder,
 ) (*AnswerResult, error) {
+	if submissionTime.IsZero() {
+		submissionTime = s.nowFn()
+	}
+	submissionTime = submissionTime.UTC()
+
 	dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout)
 	sess, err := s.sessionGetter.GetSessionByCode(dbCtx, sessionCode)
 	dbCancel()
@@ -309,7 +316,7 @@ func (s *Service) processTurnCore(
 		return nil, ErrTurnConflict
 	}
 
-	timeRemainingS := s.calcTimeRemaining(sess)
+	timeRemainingS := s.calcEffectiveTimeRemaining(sess, flowState, submissionTime)
 	if timeRemainingS <= 0 {
 		return s.finishOnTimeout(ctx, sessionCode, areas)
 	}
@@ -557,11 +564,6 @@ func (s *Service) processTurnCore(
 			s.orderedAreaSlugs(),
 		)
 
-		timeRemainingS = s.calcTimeRemaining(sess)
-		if timeRemainingS <= 0 {
-			return s.finishOnTimeout(ctx, sessionCode, areas)
-		}
-
 		var nextQuestion *Question
 		var issuedQuestion *IssuedQuestion
 		if strings.TrimSpace(nextArea) != "" {
@@ -614,6 +616,7 @@ func (s *Service) processTurnCore(
 			CurrentArea:            currentArea.Area,
 			QuestionText:           questionText,
 			AnswerText:             answerText,
+			SubmissionTime:         submissionTime,
 			PreferredLanguage:      preferredLanguage,
 			Evaluation:             aiResult.Evaluation,
 			PreAddressed:           preAddressed,
@@ -633,11 +636,6 @@ func (s *Service) processTurnCore(
 		areas, _, err = s.refreshAreaState(ctx, sessionCode)
 		if err != nil {
 			return nil, fmt.Errorf("refresh areas after criterion: %w", err)
-		}
-
-		timeRemainingS = s.calcTimeRemaining(sess)
-		if timeRemainingS <= 0 {
-			return s.finishOnTimeout(ctx, sessionCode, areas)
 		}
 
 		if strings.TrimSpace(nextArea) == "" {
@@ -851,12 +849,31 @@ func (s *Service) extractPreAddressed(other []OtherCriterion) []PreAddressedArea
 
 // ── Helper methods ──────────────────────────────────────────────────
 
-func (s *Service) calcTimeRemaining(sess *session.Session) int {
-	remaining := sess.InterviewBudgetSeconds - sess.InterviewLapsedSeconds
+func (s *Service) calcEffectiveTimeRemaining(sess *session.Session, flowState *FlowState, referenceTime time.Time) int {
+	effectiveLapsed := sess.InterviewLapsedSeconds + s.liveCriterionElapsedSeconds(flowState, referenceTime)
+	remaining := sess.InterviewBudgetSeconds - effectiveLapsed
 	if remaining < 0 {
 		return 0
 	}
 	return remaining
+}
+
+func (s *Service) liveCriterionElapsedSeconds(flowState *FlowState, referenceTime time.Time) int {
+	if flowState == nil || flowState.Step != FlowStepCriterion || flowState.ActiveQuestion == nil {
+		return 0
+	}
+	if flowState.ActiveQuestion.Question.Kind != QuestionKindCriterion {
+		return 0
+	}
+
+	elapsed := int(referenceTime.UTC().Sub(flowState.ActiveQuestion.IssuedAt.UTC()).Seconds())
+	if elapsed < 0 {
+		return 0
+	}
+	if elapsed > s.answerTimeLimitSeconds {
+		return s.answerTimeLimitSeconds
+	}
+	return elapsed
 }
 
 func (s *Service) findAreaConfig(slug string) (config.AreaConfig, int) {

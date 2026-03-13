@@ -13,6 +13,7 @@ func setBaseValidEnv(t *testing.T) {
 		"JWT_SECRET":                                  "test-session-auth-secret-32-bytes-minimum",
 		"AI_PROVIDER":                                 "ollama",
 		"SESSION_EXPIRY_HOURS":                        "24",
+		"INTERVIEW_BUDGET_SECONDS":                    "2400",
 		"AI_MAX_TOKENS":                               "1024",
 		"AI_INTERVIEW_LAST_QUESTION_SECONDS":          "30",
 		"AI_INTERVIEW_CLOSING_SECONDS":                "15",
@@ -147,6 +148,19 @@ func TestLoad_ParsesInterviewPromptCachingFlag(t *testing.T) {
 	}
 }
 
+func TestLoad_ParsesInterviewBudgetSeconds(t *testing.T) {
+	setBaseValidEnv(t)
+	t.Setenv("INTERVIEW_BUDGET_SECONDS", "1800")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.InterviewBudgetSeconds != 1800 {
+		t.Fatalf("InterviewBudgetSeconds = %d, want 1800", cfg.InterviewBudgetSeconds)
+	}
+}
+
 func TestLoad_AcceptsVertexProviderWithAPIKeyAuth(t *testing.T) {
 	setBaseValidEnv(t)
 	t.Setenv("AI_PROVIDER", "vertex")
@@ -224,5 +238,18 @@ func TestLoad_RejectsInvalidVoiceSessionBurst(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "VOICE_TOKEN_SESSION_RATE_LIMIT_BURST must be > 0") {
 		t.Fatalf("error = %v, want VOICE_TOKEN_SESSION_RATE_LIMIT_BURST validation message", err)
+	}
+}
+
+func TestLoad_RejectsInvalidInterviewBudgetSeconds(t *testing.T) {
+	setBaseValidEnv(t)
+	t.Setenv("INTERVIEW_BUDGET_SECONDS", "0")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatalf("Load() expected error for INTERVIEW_BUDGET_SECONDS=0")
+	}
+	if !strings.Contains(err.Error(), "INTERVIEW_BUDGET_SECONDS must be > 0") {
+		t.Fatalf("error = %v, want INTERVIEW_BUDGET_SECONDS validation message", err)
 	}
 }

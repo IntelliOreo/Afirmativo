@@ -112,6 +112,7 @@ type ProcessCriterionTurnParams struct {
 	CurrentArea            string
 	QuestionText           string
 	AnswerText             string
+	SubmissionTime         time.Time
 	PreferredLanguage      string
 	Evaluation             *Evaluation
 	PreAddressed           []PreAddressedArea

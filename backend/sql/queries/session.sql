@@ -9,8 +9,8 @@ AND (expires_at IS NULL OR expires_at > now())
 RETURNING *;
 
 -- name: CreateSession :one
-INSERT INTO sessions (session_code, pin_hash, coupon_code, status, expires_at)
-VALUES ($1, $2, $3, 'created', $4)
+INSERT INTO sessions (session_code, pin_hash, coupon_code, status, expires_at, interview_budget_seconds)
+VALUES ($1, $2, $3, 'created', $4, $5)
 RETURNING *;
 
 -- name: GetSessionByCode :one
