@@ -852,11 +852,7 @@ func (s *Service) extractPreAddressed(other []OtherCriterion) []PreAddressedArea
 // ── Helper methods ──────────────────────────────────────────────────
 
 func (s *Service) calcTimeRemaining(sess *session.Session) int {
-	if sess.CurrentInterviewStartedAt == nil {
-		return sess.InterviewBudgetSeconds - sess.InterviewLapsedSeconds
-	}
-	elapsed := int(s.nowFn().Sub(*sess.CurrentInterviewStartedAt).Seconds())
-	remaining := sess.InterviewBudgetSeconds - sess.InterviewLapsedSeconds - elapsed
+	remaining := sess.InterviewBudgetSeconds - sess.InterviewLapsedSeconds
 	if remaining < 0 {
 		return 0
 	}

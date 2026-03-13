@@ -597,8 +597,30 @@ export function useVoiceRecorder({
       });
       return transcript;
     } catch (err) {
-      setVoiceRecorderState("audio_ready");
-      setVoiceInfo({ code: "audio_ready_retry_review" });
+      // Auto-discard: reset to idle so the user can immediately re-record.
+      // We inline the discard cleanup (instead of calling discardVoiceRecording)
+      // to preserve the error message — discardVoiceRecording clears it.
+      invalidateDeferredWork();
+      const recorder = mediaRecorderRef.current;
+      if (recorder) {
+        detachRecorder(recorder);
+        if (recorder.state !== "inactive") {
+          try {
+            recorder.stop();
+          } catch {
+            // Ignore recorder stop errors during cleanup.
+          }
+        }
+      }
+      voiceChunksRef.current = [];
+      resolvePendingStop(null);
+      resetVoiceTicker();
+      clearPreview();
+      setVoiceBlob(null);
+      setVoiceRecorderState("idle");
+      setVoiceInfo(null);
+      stopEphemeralStreamIfNeeded();
+
       log.error("voice review transcription failed", {
         phase: "review_error",
         error: err instanceof Error ? err.message : "unknown_error",
@@ -616,7 +638,7 @@ export function useVoiceRecorder({
       }
       return null;
     }
-  }, [isActive, stopPlayback, voiceRecorderState]);
+  }, [isActive, stopPlayback, voiceRecorderState, invalidateDeferredWork, detachRecorder, resolvePendingStop, resetVoiceTicker, clearPreview, stopEphemeralStreamIfNeeded]);
 
   useEffect(() => {
     if (isActive || voiceRecorderState === "idle") return;

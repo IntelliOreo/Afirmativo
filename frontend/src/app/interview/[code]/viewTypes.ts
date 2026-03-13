@@ -74,8 +74,7 @@ export type VoiceFeedbackCode =
   | "limit_reached"
   | "audio_ready"
   | "preparing_transcript"
-  | "transcript_ready"
-  | "audio_ready_retry_review";
+  | "transcript_ready";
 
 export interface VoiceFeedback {
   code: VoiceFeedbackCode;

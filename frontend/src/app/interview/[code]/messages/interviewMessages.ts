@@ -601,8 +601,8 @@ export function getVoiceFeedbackMessage(lang: Lang, feedback: VoiceFeedback | nu
         : "Unable to play the recorded audio.";
     case "transcription_failed":
       return lang === "es"
-        ? "La transcripcion de audio fallo. Intente de nuevo."
-        : "Audio transcription failed. Please try again.";
+        ? "La transcripcion de audio fallo. Por favor, vuelva a grabar su respuesta."
+        : "Audio transcription failed. Please re-record your answer.";
     case "session_unauthorized":
       return lang === "es"
         ? "La sesion no esta autorizada para usar voz."
@@ -627,10 +627,6 @@ export function getVoiceFeedbackMessage(lang: Lang, feedback: VoiceFeedback | nu
       return lang === "es"
         ? "Transcripcion lista. Revisela y envie su respuesta."
         : "Transcript ready. Review it and submit your answer.";
-    case "audio_ready_retry_review":
-      return lang === "es"
-        ? "Audio listo. Puede intentar revisar la transcripcion otra vez."
-        : "Audio ready. You can try reviewing the transcript again.";
     default:
       return "";
   }
