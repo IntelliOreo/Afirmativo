@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "@/lib/api";
+import { api, ApiTimeoutError } from "@/lib/api";
 import {
   ASYNC_POLL_BACKOFF_MS,
   ASYNC_POLL_CIRCUIT_BREAKER_COOLDOWN_MS,
@@ -203,7 +203,7 @@ export function useInterviewReport(code: string): UseInterviewReportResult {
           return;
         } catch (err) {
           if (canceled || pollGenerationRef.current !== generation) return;
-          if (err instanceof TypeError) {
+          if (err instanceof TypeError || err instanceof ApiTimeoutError) {
             consecutiveTransientFailures += 1;
             if (consecutiveTransientFailures >= ASYNC_POLL_CIRCUIT_BREAKER_FAILURES) {
               await wait(withJitter(ASYNC_POLL_CIRCUIT_BREAKER_COOLDOWN_MS));

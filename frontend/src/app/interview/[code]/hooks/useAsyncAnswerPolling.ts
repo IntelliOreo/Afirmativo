@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { api } from "@/lib/api";
+import { api, ApiTimeoutError } from "@/lib/api";
 import * as pendingAnswerStore from "@/lib/storage/pendingAnswerStore";
 import {
   ASYNC_POLL_BACKOFF_MS,
@@ -108,7 +108,7 @@ export function useAsyncAnswerPolling({ code }: UseAsyncAnswerPollingParams) {
           mapped.errorCode,
         );
       } catch (err) {
-        if (err instanceof TypeError) {
+        if (err instanceof TypeError || err instanceof ApiTimeoutError) {
           consecutiveTransientFailures += 1;
           if (consecutiveTransientFailures >= ASYNC_POLL_CIRCUIT_BREAKER_FAILURES) {
             await wait(withJitter(ASYNC_POLL_CIRCUIT_BREAKER_COOLDOWN_MS));

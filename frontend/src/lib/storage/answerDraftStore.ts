@@ -1,3 +1,6 @@
+import { log } from "@/lib/logger";
+import { clearAllInterviewStorage, isQuotaExceededError } from "./interviewStorage";
+
 export type AnswerDraftSource = "text" | "voice_review";
 
 export interface AnswerDraftSnapshot {
@@ -50,7 +53,32 @@ export function read(sessionCode: string, turnId: string): AnswerDraftSnapshot |
 
 export function write(sessionCode: string, draft: AnswerDraftSnapshot): void {
   if (typeof window === "undefined") return;
-  localStorage.setItem(answerDraftKey(sessionCode, draft.turnId), JSON.stringify(draft));
+
+  const key = answerDraftKey(sessionCode, draft.turnId);
+  const payload = JSON.stringify(draft);
+
+  try {
+    localStorage.setItem(key, payload);
+  } catch (error) {
+    if (!isQuotaExceededError(error)) {
+      throw error;
+    }
+
+    clearAllInterviewStorage();
+
+    try {
+      localStorage.setItem(key, payload);
+    } catch (retryError) {
+      if (!isQuotaExceededError(retryError)) {
+        throw retryError;
+      }
+
+      log.warn("localStorage quota exceeded while saving answer draft", {
+        session_code: sessionCode,
+        turn_id: draft.turnId,
+      });
+    }
+  }
 }
 
 export function clear(sessionCode: string, turnId: string): void {

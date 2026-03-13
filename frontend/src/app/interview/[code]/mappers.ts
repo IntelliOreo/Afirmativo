@@ -1,11 +1,4 @@
 import type {
-  AnswerAsyncAcceptedResponseDto,
-  AnswerJobStatusResponseDto,
-  InterviewReportDto,
-  QuestionDto,
-  StartResponseDto,
-} from "./dto";
-import type {
   AnswerJobStatus,
   AsyncAnswerAccepted,
   InterviewReport,
@@ -18,70 +11,90 @@ import {
   toSessionCode,
   toTurnId,
 } from "./models";
+import type {
+  AnswerAsyncAcceptedResponseDto,
+  AnswerJobStatusResponseDto,
+  InterviewReportDto,
+  QuestionDto,
+  StartResponseDto,
+} from "./dto";
+import {
+  AnswerAsyncAcceptedResponseSchema,
+  AnswerJobStatusResponseSchema,
+  InterviewReportSchema,
+  parseDto,
+  QuestionSchema,
+  StartResponseSchema,
+} from "./schemas";
 
 export function mapQuestion(raw: QuestionDto): Question {
+  const dto = parseDto(QuestionSchema, "QuestionDto", raw);
   return {
-    textEs: raw.text_es,
-    textEn: raw.text_en,
-    area: raw.area,
-    kind: raw.kind,
-    turnId: toTurnId(raw.turn_id),
-    questionNumber: raw.question_number,
-    totalQuestions: raw.total_questions,
+    textEs: dto.text_es,
+    textEn: dto.text_en,
+    area: dto.area,
+    kind: dto.kind,
+    turnId: toTurnId(dto.turn_id),
+    questionNumber: dto.question_number,
+    totalQuestions: dto.total_questions,
   };
 }
 
 export function mapStartResponse(raw: StartResponseDto): StartInterviewData {
+  const dto = parseDto(StartResponseSchema, "StartResponseDto", raw);
   return {
-    question: mapQuestion(raw.question),
-    timerRemainingS: raw.timer_remaining_s,
-    answerSubmitWindowRemainingS: raw.answer_submit_window_remaining_s,
-    language: raw.language,
-    resuming: raw.resuming,
-    error: raw.error,
-    code: raw.code,
+    question: mapQuestion(dto.question),
+    timerRemainingS: dto.timer_remaining_s,
+    answerSubmitWindowRemainingS: dto.answer_submit_window_remaining_s,
+    language: dto.language,
+    resuming: dto.resuming,
+    error: dto.error,
+    code: dto.code,
   };
 }
 
 export function mapAnswerJobResponse(raw: AnswerJobStatusResponseDto): AnswerJobStatus {
+  const dto = parseDto(AnswerJobStatusResponseSchema, "AnswerJobStatusResponseDto", raw);
   return {
-    jobId: toJobId(raw.job_id),
-    clientRequestId: toClientRequestId(raw.client_request_id),
-    status: raw.status,
-    done: raw.done,
-    nextQuestion: raw.next_question ? mapQuestion(raw.next_question) : undefined,
-    timerRemainingS: raw.timer_remaining_s,
-    answerSubmitWindowRemainingS: raw.answer_submit_window_remaining_s,
-    errorCode: raw.error_code,
-    errorMessage: raw.error_message,
-    error: raw.error,
-    code: raw.code,
+    jobId: toJobId(dto.job_id),
+    clientRequestId: toClientRequestId(dto.client_request_id),
+    status: dto.status,
+    done: dto.done,
+    nextQuestion: dto.next_question ? mapQuestion(dto.next_question) : undefined,
+    timerRemainingS: dto.timer_remaining_s,
+    answerSubmitWindowRemainingS: dto.answer_submit_window_remaining_s,
+    errorCode: dto.error_code,
+    errorMessage: dto.error_message,
+    error: dto.error,
+    code: dto.code,
   };
 }
 
 export function mapAsyncAcceptedResponse(raw: AnswerAsyncAcceptedResponseDto): AsyncAnswerAccepted {
+  const dto = parseDto(AnswerAsyncAcceptedResponseSchema, "AnswerAsyncAcceptedResponseDto", raw);
   return {
-    jobId: toJobId(raw.job_id),
-    clientRequestId: toClientRequestId(raw.client_request_id),
-    status: raw.status,
-    error: raw.error,
-    code: raw.code,
+    jobId: toJobId(dto.job_id),
+    clientRequestId: toClientRequestId(dto.client_request_id),
+    status: dto.status,
+    error: dto.error,
+    code: dto.code,
   };
 }
 
 export function mapReport(raw: InterviewReportDto): InterviewReport {
+  const dto = parseDto(InterviewReportSchema, "InterviewReportDto", raw);
   return {
-    sessionCode: toSessionCode(raw.session_code),
-    status: raw.status,
-    contentEn: raw.content_en,
-    contentEs: raw.content_es,
-    areasOfClarity: raw.areas_of_clarity ?? [],
-    areasOfClarityEs: raw.areas_of_clarity_es ?? [],
-    areasToDevelopFurther: raw.areas_to_develop_further ?? [],
-    areasToDevelopFurtherEs: raw.areas_to_develop_further_es ?? [],
-    recommendation: raw.recommendation,
-    recommendationEs: raw.recommendation_es ?? "",
-    questionCount: raw.question_count,
-    durationMinutes: raw.duration_minutes,
+    sessionCode: toSessionCode(dto.session_code),
+    status: dto.status,
+    contentEn: dto.content_en,
+    contentEs: dto.content_es,
+    areasOfClarity: dto.areas_of_clarity ?? [],
+    areasOfClarityEs: dto.areas_of_clarity_es ?? [],
+    areasToDevelopFurther: dto.areas_to_develop_further ?? [],
+    areasToDevelopFurtherEs: dto.areas_to_develop_further_es ?? [],
+    recommendation: dto.recommendation,
+    recommendationEs: dto.recommendation_es ?? "",
+    questionCount: dto.question_count,
+    durationMinutes: dto.duration_minutes,
   };
 }

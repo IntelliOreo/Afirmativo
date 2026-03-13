@@ -545,82 +545,10 @@ page.tsx
 
 ---
 
-## 13. Production Readiness Assessment
-
-**Deployment assumption**: The app targets low user volume and runs as a single frontend container + single backend container. The weaknesses below are scored with that constraint in mind -- items that would be critical at scale are noted but acceptable at current scope.
-
-### Strengths
-
-1. **Async job processing with recovery** -- the recovery loop catches orphaned jobs every 10s. This is production-grade resilience.
-2. **Idempotency on both sides** -- `clientRequestId` + server-side upsert means double-submits are safe, even after browser crashes.
-3. **Turn-based conflict detection** -- prevents stale answer corruption with optimistic concurrency. No two requests can advance the same turn.
-4. **Graceful AI degradation** -- fallback evaluations and fallback questions mean the interview never hard-fails on AI issues.
-5. **localStorage persistence** -- users survive browser crashes without losing their in-progress answer.
-6. **Circuit breakers on the frontend** -- prevent cascade failures when the backend is struggling.
-7. **Clean domain separation** -- each package owns its data, logic, and storage interface. No cross-package imports of concrete types.
-8. **Structured logging** -- consistent `slog` usage with correlation fields (session_code, job_id, client_request_id).
-9. **DB migration discipline** -- 28 incremental migrations, all with up/down scripts.
-10. **Context timeouts everywhere** -- every DB call gets a 5s timeout. Every async job gets a 3min timeout. No unbounded waits.
-
-### Weaknesses
-
-#### Medium Severity
-
-1. **In-memory channel as job queue** -- `asyncAnswerQueue chan string` lives in process memory. If the Go server restarts, all jobs in the channel are lost. The recovery loop re-picks from DB, but there is a **10s window** where jobs sit in limbo. Acceptable at single-container scale; would need an external queue (e.g., Cloud Tasks, Redis) before horizontal scaling.
-
-2. **Single-server assumption** -- Rate limiters (`ratelimit.go`), lockout state (`lockout.go`), and the async job channel are all in-memory. Fine for one backend container; scaling to multiple instances requires moving these to shared state.
-
-3. **No dead-letter queue or alerting** -- Failed jobs are marked terminal but there is no mechanism to re-process them or alert on failure rates. At low volume, manual log inspection is feasible. Would need automated alerting before scaling.
-
-4. **Timer drift on frontend** -- The `TICK` uses `setInterval(1000)`. JavaScript timers are imprecise: tab backgrounding, heavy rendering, or GC pauses cause drift. The server is the source of truth for expiry, but the user sees a misleading countdown. A `Date.now()` comparison approach would be more accurate.
-
-5. **Partial request correlation** -- `X-Request-Id` is now propagated across HTTP requests and async worker logs, and the frontend logs it on failed calls. Full distributed tracing (OpenTelemetry spans across frontend -> backend -> AI provider) is not yet in place.
-
-6. **Fallback substitution is invisible to users** -- When AI retries exhaust and a fallback question/evaluation is used, the user does not know quality degraded. The interview continues with generic questions, potentially producing a less useful report.
-
-#### Low Severity / Not-Yet-Wired
-
-8. **Payment is stubbed** -- Stripe checkout and webhook handlers return 501. The payment flow is not yet functional.
-
-9. **PDF generation is client-side only** -- `GET /api/report/{code}/pdf` returns 501. Server-generated PDFs (for email delivery or archival) are not available.
-
-10. **Voice transcription token lifecycle** -- Tokens are minted per-request with a TTL, but there is no client-side token caching. Rapid consecutive recordings each trigger a new token mint, which under rate limiting could fail.
-
-11. **No integration tests for the async pipeline** -- The codebase has unit test infrastructure (Vitest for frontend) but end-to-end tests that exercise submit -> process -> poll -> succeed are not visible. This is the riskiest code path.
-
----
-
-## 14. Patterns Cheat Sheet
-
-| Pattern | Where | Why |
-|---------|-------|-----|
-| `useReducer` state machine | `useInterviewMachine.ts` | Predictable state transitions, no impossible states |
-| Brand types | `models.ts` | Compile-time prevention of ID mixups |
-| Optimistic concurrency (turnID) | `service.go` | Prevent stale answer processing |
-| Idempotency key | `clientRequestId` | Safe retries after browser crashes |
-| Exponential backoff + jitter | `useAsyncAnswerPolling.ts` | Prevent thundering herd on retries |
-| Circuit breaker | Polling hooks | Stop hammering a failing server |
-| Bounded worker pool | `service_async.go` | Prevent unbounded goroutine growth |
-| Periodic recovery loop | `service_async.go` | At-least-once processing guarantee |
-| localStorage checkpointing | `pendingAnswerStore.ts` | Survive browser crashes |
-| Interface-based DI | All backend services | Testability, swappable implementations |
-| Fallback substitution | `service.go` | Graceful degradation when AI fails |
-| Generation-based cancellation | `useVoiceRecorder.ts` | Invalidate stale async callbacks |
-| `canceled` flag in effects | `useInterviewMachine.ts` | Prevent state updates after unmount |
-| `sync.Once` for runtime start | `service_async.go` | Ensure worker pool starts exactly once |
-| Context timeouts on every DB call | All service methods | Prevent unbounded database waits |
-
----
-
-## 15. If You Are Touching This Code
-
-- **Read the state machine reducer first** (useInterviewMachine.ts:122-187) -- it is 65 lines and tells you every possible state the interview can be in.
-- **The async pipeline is the critical path** -- submit -> enqueue -> claim -> process -> succeed. Trace it end to end before changing anything.
-- **Turn IDs are your concurrency safety** -- never skip the `expectedTurnID` check.
-- **localStorage is your crash safety** -- if you add new persistent state, follow the same read/write/clear pattern in `lib/storage/`.
-- **AI providers are interchangeable** -- the `InterviewAIClient` interface abstracts everything. Adding a new provider means implementing one method.
-- **The recovery loop is your safety net** -- if something goes wrong with the in-memory queue, the recovery loop will fix it within 10 seconds.
-- **Every DB call has a 5s timeout** -- follow the same pattern: `dbCtx, dbCancel := context.WithTimeout(ctx, dbTimeout); defer dbCancel()`.
+## Current state
+**design wwith single-server assumption** 
+**Payment is stubbed** 
+**PDF generation is client-side only** 
 
 ---
 
