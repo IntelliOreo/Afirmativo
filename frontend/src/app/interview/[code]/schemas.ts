@@ -64,7 +64,7 @@ export const AnswerJobStatusResponseSchema = z.object({
   client_request_id: z.string(),
   status: AsyncAnswerJobStatusSchema,
   done: z.boolean(),
-  next_question: QuestionSchema.optional(),
+  next_question: QuestionSchema.nullish(),
   timer_remaining_s: z.number(),
   answer_submit_window_remaining_s: z.number(),
   error_code: z.string().optional(),

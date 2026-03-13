@@ -80,4 +80,18 @@ describe("interview mappers", () => {
     expect(status.timerRemainingS).toBe(540);
     expect(status.answerSubmitWindowRemainingS).toBe(180);
   });
+
+  it("maps null next_question to undefined for terminal job responses", () => {
+    const status = mapAnswerJobResponse({
+      job_id: "job-1",
+      client_request_id: "client-1",
+      status: "running",
+      done: false,
+      next_question: null,
+      timer_remaining_s: 0,
+      answer_submit_window_remaining_s: 0,
+    });
+
+    expect(status.nextQuestion).toBeUndefined();
+  });
 });

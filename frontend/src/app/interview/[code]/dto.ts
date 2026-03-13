@@ -12,7 +12,7 @@ export interface QuestionDto {
 
 export interface AnswerResponseDto {
   done: boolean;
-  next_question?: QuestionDto;
+  next_question?: QuestionDto | null;
   timer_remaining_s: number;
   answer_submit_window_remaining_s: number;
   error?: string;
@@ -50,7 +50,7 @@ export interface AnswerJobStatusResponseDto {
   client_request_id: string;
   status: AsyncAnswerJobStatus;
   done: boolean;
-  next_question?: QuestionDto;
+  next_question?: QuestionDto | null;
   timer_remaining_s: number;
   answer_submit_window_remaining_s: number;
   error_code?: string;

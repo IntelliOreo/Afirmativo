@@ -99,6 +99,10 @@ describe("schemas", () => {
       expect(AnswerJobStatusResponseSchema.safeParse({ ...valid, next_question: validQuestion }).success).toBe(true);
     });
 
+    it("accepts null next_question", () => {
+      expect(AnswerJobStatusResponseSchema.safeParse({ ...valid, next_question: null }).success).toBe(true);
+    });
+
     it("rejects missing done field", () => {
       const { done: _, ...missing } = valid;
       expect(AnswerJobStatusResponseSchema.safeParse(missing).success).toBe(false);
