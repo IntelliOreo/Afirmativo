@@ -10,8 +10,7 @@ type nonCriterionAdvancePlan struct {
 	currentStep FlowStep
 	nextStep    FlowStep
 	eventType   string
-	question    *Question
-	substituted bool
+	issue       questionIssue
 }
 
 func (s *Service) advanceNonCriterionTurn(
@@ -20,7 +19,7 @@ func (s *Service) advanceNonCriterionTurn(
 	snapshot *turnSnapshot,
 	plan *nonCriterionAdvancePlan,
 ) (*AnswerResult, error) {
-	issuedQuestion := NewIssuedQuestion(plan.question, s.nowFn(), s.settings.AnswerTimeLimitSeconds)
+	issuedQuestion := s.issueQuestion(plan.issue)
 
 	advanceCtx, advanceCancel := context.WithTimeout(ctx, s.dbTimeout)
 	nextFlow, err := s.stateStore.AdvanceNonCriterionStep(advanceCtx, AdvanceNonCriterionStepParams{
@@ -38,9 +37,7 @@ func (s *Service) advanceNonCriterionTurn(
 	}
 
 	return s.buildTurnAnswerResult(
-		resolvedIssuedQuestion(nextFlow, issuedQuestion),
-		plan.question,
+		s.resolvedIssuedQuestionResultData(nextFlow, issuedQuestion, plan.issue),
 		snapshot.timeRemainingS,
-		plan.substituted,
 	), nil
 }

@@ -11,26 +11,14 @@ func doneAnswerResult(substituted bool) *AnswerResult {
 	}
 }
 
-func (s *Service) buildTurnAnswerResult(
-	issuedQuestion *IssuedQuestion,
-	fallbackQuestion *Question,
-	timeRemainingS int,
-	substituted bool,
-) *AnswerResult {
+func (s *Service) buildTurnAnswerResult(data issuedQuestionResultData, timeRemainingS int) *AnswerResult {
 	return &AnswerResult{
 		Done:                         false,
-		NextQuestion:                 resolveIssuedQuestion(issuedQuestion, fallbackQuestion),
+		NextQuestion:                 data.question,
 		TimerRemainingS:              timeRemainingS,
-		AnswerSubmitWindowRemainingS: submitWindowRemaining(issuedQuestion, s.nowFn),
-		Substituted:                  substituted,
+		AnswerSubmitWindowRemainingS: data.answerSubmitWindowRemainingS,
+		Substituted:                  data.substituted,
 	}
-}
-
-func resolveIssuedQuestion(issuedQuestion *IssuedQuestion, fallbackQuestion *Question) *Question {
-	if issuedQuestion != nil {
-		return &issuedQuestion.Question
-	}
-	return fallbackQuestion
 }
 
 func resolvedIssuedQuestion(flow *FlowState, fallback *IssuedQuestion) *IssuedQuestion {

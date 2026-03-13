@@ -10,25 +10,37 @@ func (s *Service) handleDisclaimerTurn(ctx context.Context, sessionCode string, 
 		return result, nil
 	}
 
+	plan, err := s.buildDisclaimerAdvancePlan(snapshot)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.advanceNonCriterionTurn(ctx, sessionCode, snapshot, plan)
+}
+
+func (s *Service) buildDisclaimerAdvancePlan(snapshot *turnSnapshot) (*nonCriterionAdvancePlan, error) {
 	nextTurnID, err := newTurnID()
 	if err != nil {
 		return nil, fmt.Errorf("new turn id: %w", err)
 	}
 
 	readinessTextEs, readinessTextEn := s.disclaimerReadinessText(snapshot)
-	return s.advanceNonCriterionTurn(ctx, sessionCode, snapshot, &nonCriterionAdvancePlan{
+	return &nonCriterionAdvancePlan{
 		opName:      "advance disclaimer step",
 		currentStep: FlowStepDisclaimer,
 		nextStep:    FlowStepReadiness,
 		eventType:   "disclaimer_ack",
-		question: ReadinessQuestion(
-			snapshot.currentArea.Area,
-			readinessTextEs,
-			readinessTextEn,
-			snapshot.flowState.QuestionNumber,
-			nextTurnID,
-		),
-	})
+		issue: questionIssue{
+			question: ReadinessQuestion(
+				snapshot.currentArea.Area,
+				readinessTextEs,
+				readinessTextEn,
+				snapshot.flowState.QuestionNumber,
+				nextTurnID,
+			),
+			area: snapshot.currentArea.Area,
+		},
+	}, nil
 }
 
 func (s *Service) disclaimerReadinessText(snapshot *turnSnapshot) (string, string) {

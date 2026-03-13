@@ -40,9 +40,11 @@ func (s *Service) handleCriterionTurn(ctx context.Context, sessionCode string, s
 	}
 
 	return s.buildTurnAnswerResult(
-		nextQuestion.issuedQuestion,
-		nextQuestion.question,
+		s.issuedQuestionResultData(nextQuestion.issuedQuestion, questionIssue{
+			question:    nextQuestion.question,
+			area:        nextQuestion.question.Area,
+			substituted: nextQuestion.substituted,
+		}),
 		snapshot.timeRemainingS,
-		nextQuestion.substituted,
 	), nil
 }

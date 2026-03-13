@@ -2,6 +2,7 @@ package interview
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -342,6 +343,135 @@ func TestStartInterview_ResumeCriterionAfterLongOfflineGapUsesCappedLiveElapsed(
 	}
 }
 
+func TestBuildStartIssuePlan_SelectsQuestionByResumeState(t *testing.T) {
+	svc := newServiceForRecoveryTests(newQAServiceStore(), nil, &qaAIClient{})
+
+	freshPlan, err := svc.buildStartIssuePlan(&startInterviewState{
+		flowState: &FlowState{QuestionNumber: 1},
+		resuming:  false,
+	}, "protected_ground")
+	if err != nil {
+		t.Fatalf("buildStartIssuePlan() fresh error = %v", err)
+	}
+	if freshPlan.resuming {
+		t.Fatalf("fresh plan resuming = %v, want false", freshPlan.resuming)
+	}
+	if freshPlan.issue.question == nil {
+		t.Fatalf("fresh question = nil, want non-nil")
+	}
+	if freshPlan.issue.question.Kind != QuestionKindDisclaimer {
+		t.Fatalf("fresh question.kind = %q, want %q", freshPlan.issue.question.Kind, QuestionKindDisclaimer)
+	}
+	if freshPlan.issue.question.TextEn != "Opening disclaimer EN" {
+		t.Fatalf("fresh question.textEn = %q, want opening disclaimer", freshPlan.issue.question.TextEn)
+	}
+
+	resumePlan, err := svc.buildStartIssuePlan(&startInterviewState{
+		flowState: &FlowState{QuestionNumber: 6},
+		resuming:  true,
+	}, "protected_ground")
+	if err != nil {
+		t.Fatalf("buildStartIssuePlan() resume error = %v", err)
+	}
+	if !resumePlan.resuming {
+		t.Fatalf("resume plan resuming = %v, want true", resumePlan.resuming)
+	}
+	if resumePlan.issue.question == nil {
+		t.Fatalf("resume question = nil, want non-nil")
+	}
+	if resumePlan.issue.question.Kind != QuestionKindReadiness {
+		t.Fatalf("resume question.kind = %q, want %q", resumePlan.issue.question.Kind, QuestionKindReadiness)
+	}
+	if resumePlan.issue.question.TextEn != ResumeQuestion("protected_ground").TextEn {
+		t.Fatalf("resume question.textEn = %q, want %q", resumePlan.issue.question.TextEn, ResumeQuestion("protected_ground").TextEn)
+	}
+}
+
+func TestBuildDisclaimerAdvancePlan_PreservesReadinessTextByQuestionNumber(t *testing.T) {
+	svc := newServiceForRecoveryTests(newQAServiceStore(), nil, &qaAIClient{})
+
+	initialPlan, err := svc.buildDisclaimerAdvancePlan(&turnSnapshot{
+		currentArea: &QuestionArea{Area: "protected_ground"},
+		flowState:   &FlowState{QuestionNumber: 1},
+	})
+	if err != nil {
+		t.Fatalf("buildDisclaimerAdvancePlan() initial error = %v", err)
+	}
+	if initialPlan.issue.question == nil {
+		t.Fatalf("initial question = nil, want non-nil")
+	}
+	if initialPlan.issue.question.Kind != QuestionKindReadiness {
+		t.Fatalf("initial question.kind = %q, want %q", initialPlan.issue.question.Kind, QuestionKindReadiness)
+	}
+	if initialPlan.issue.question.TextEn != svc.settings.ReadinessQuestion.En {
+		t.Fatalf("initial question.textEn = %q, want %q", initialPlan.issue.question.TextEn, svc.settings.ReadinessQuestion.En)
+	}
+
+	resumePlan, err := svc.buildDisclaimerAdvancePlan(&turnSnapshot{
+		currentArea: &QuestionArea{Area: "protected_ground"},
+		flowState:   &FlowState{QuestionNumber: 3},
+	})
+	if err != nil {
+		t.Fatalf("buildDisclaimerAdvancePlan() resume error = %v", err)
+	}
+	if resumePlan.issue.question == nil {
+		t.Fatalf("resume question = nil, want non-nil")
+	}
+	if resumePlan.issue.question.TextEn != ResumeQuestion("protected_ground").TextEn {
+		t.Fatalf("resume question.textEn = %q, want %q", resumePlan.issue.question.TextEn, ResumeQuestion("protected_ground").TextEn)
+	}
+}
+
+func TestIssuedQuestionResultData_PrefersIssuedQuestionAndCarriesFlags(t *testing.T) {
+	svc := newServiceForRecoveryTests(newQAServiceStore(), nil, &qaAIClient{})
+	now := time.Date(2026, time.March, 13, 14, 0, 0, 0, time.UTC)
+	svc.nowFn = func() time.Time { return now }
+
+	fallbackQuestion := &Question{
+		TextEs:         "Fallback",
+		TextEn:         "Fallback",
+		Area:           "protected_ground",
+		Kind:           QuestionKindCriterion,
+		TurnID:         "fallback-turn",
+		QuestionNumber: 3,
+		TotalQuestions: EstimatedTotalQuestions,
+	}
+	issuedQuestion := &IssuedQuestion{
+		Question: Question{
+			TextEs:         "Persisted",
+			TextEn:         "Persisted",
+			Area:           "protected_ground",
+			Kind:           QuestionKindCriterion,
+			TurnID:         "persisted-turn",
+			QuestionNumber: 4,
+			TotalQuestions: EstimatedTotalQuestions,
+		},
+		IssuedAt:         now,
+		AnswerDeadlineAt: now.Add(4 * time.Minute),
+	}
+
+	data := svc.issuedQuestionResultData(issuedQuestion, questionIssue{
+		question:    fallbackQuestion,
+		area:        fallbackQuestion.Area,
+		substituted: true,
+	})
+	if data.question == nil {
+		t.Fatalf("question = nil, want non-nil")
+	}
+	if data.question.TurnID != "persisted-turn" {
+		t.Fatalf("question.turnID = %q, want persisted-turn", data.question.TurnID)
+	}
+	if data.area != "protected_ground" {
+		t.Fatalf("area = %q, want protected_ground", data.area)
+	}
+	if data.answerSubmitWindowRemainingS != 240 {
+		t.Fatalf("answerSubmitWindowRemainingS = %d, want 240", data.answerSubmitWindowRemainingS)
+	}
+	if !data.substituted {
+		t.Fatalf("substituted = %v, want true", data.substituted)
+	}
+}
+
 func TestProcessTurn_ReadinessStepTriggersNewAICallAndReturnsNewQuestion(t *testing.T) {
 	sessionCode := "AP-7K9X-M2NF"
 	store := newQAServiceStore()
@@ -401,6 +531,201 @@ func TestProcessTurn_ReadinessStepTriggersNewAICallAndReturnsNewQuestion(t *test
 	}
 	if result.NextQuestion.QuestionNumber != 3 {
 		t.Fatalf("nextQuestion.questionNumber = %d, want 3", result.NextQuestion.QuestionNumber)
+	}
+}
+
+func TestLoadReadinessOpeningInputs_BuildsOpeningTurnContext(t *testing.T) {
+	sessionCode := "AP-7K9X-M2NF"
+	store := newQAServiceStore()
+	store.getAnswersBySessionFn = func(context.Context, string) ([]Answer, error) {
+		return []Answer{
+			{
+				Area:         "protected_ground",
+				QuestionText: "Prior question",
+				TranscriptEn: "Prior answer",
+				TranscriptEs: "Respuesta previa",
+			},
+		}, nil
+	}
+
+	svc := newServiceForRecoveryTests(store, nil, &qaAIClient{})
+	snapshot := &turnSnapshot{
+		session:           activeSession(sessionCode, "en"),
+		areas:             []QuestionArea{{Area: "protected_ground", Status: AreaStatusInProgress, QuestionsCount: 1}},
+		currentArea:       &QuestionArea{Area: "protected_ground", Status: AreaStatusInProgress, QuestionsCount: 1},
+		flowState:         &FlowState{QuestionNumber: 2},
+		preferredLanguage: "en",
+		timeRemainingS:    1200,
+	}
+
+	inputs, err := svc.loadReadinessOpeningInputs(context.Background(), sessionCode, snapshot)
+	if err != nil {
+		t.Fatalf("loadReadinessOpeningInputs() error = %v", err)
+	}
+	if len(inputs.answers) != 1 {
+		t.Fatalf("answers length = %d, want 1", len(inputs.answers))
+	}
+	if inputs.areaCfg.Slug != "protected_ground" {
+		t.Fatalf("areaCfg.slug = %q, want protected_ground", inputs.areaCfg.Slug)
+	}
+	if inputs.areaIndex != 0 {
+		t.Fatalf("areaIndex = %d, want 0", inputs.areaIndex)
+	}
+	if inputs.fallbackQuestion != "Fallback protected ground question" {
+		t.Fatalf("fallbackQuestion = %q, want fallback question", inputs.fallbackQuestion)
+	}
+	if inputs.turnCtx == nil {
+		t.Fatalf("turnCtx = nil, want non-nil")
+	}
+	if !inputs.turnCtx.IsOpeningTurn {
+		t.Fatalf("turnCtx.isOpeningTurn = %v, want true", inputs.turnCtx.IsOpeningTurn)
+	}
+	if inputs.turnCtx.CurrentAreaSlug != "protected_ground" {
+		t.Fatalf("turnCtx.currentAreaSlug = %q, want protected_ground", inputs.turnCtx.CurrentAreaSlug)
+	}
+	if inputs.turnCtx.HistoryTurns[0].AnswerText != "Prior answer" {
+		t.Fatalf("turnCtx.historyTurns[0].answerText = %q, want Prior answer", inputs.turnCtx.HistoryTurns[0].AnswerText)
+	}
+}
+
+func TestSelectReadinessOpeningQuestion_UsesAIQuestion(t *testing.T) {
+	ai := &qaAIClient{
+		generateTurnFn: func(_ context.Context, _ *AITurnContext) (*AIResponse, error) {
+			return &AIResponse{NextQuestion: "Please tell me more."}, nil
+		},
+	}
+	svc := newServiceForRecoveryTests(newQAServiceStore(), nil, ai)
+	selection, err := svc.selectReadinessOpeningQuestion(context.Background(), "AP-7K9X-M2NF", &turnSnapshot{
+		currentArea: &QuestionArea{Area: "protected_ground"},
+	}, &readinessOpeningInputs{
+		fallbackQuestion: "Fallback protected ground question",
+		turnCtx:          &AITurnContext{CurrentAreaSlug: "protected_ground"},
+	})
+	if err != nil {
+		t.Fatalf("selectReadinessOpeningQuestion() error = %v", err)
+	}
+	if selection.questionText != "Please tell me more." {
+		t.Fatalf("questionText = %q, want AI question", selection.questionText)
+	}
+	if selection.substituted {
+		t.Fatalf("substituted = %v, want false", selection.substituted)
+	}
+}
+
+func TestSelectReadinessOpeningQuestion_RetryExhaustedFallsBack(t *testing.T) {
+	originalBackoffs := aiRetryBackoffs
+	aiRetryBackoffs = nil
+	t.Cleanup(func() {
+		aiRetryBackoffs = originalBackoffs
+	})
+
+	ai := &qaAIClient{
+		generateTurnFn: func(_ context.Context, _ *AITurnContext) (*AIResponse, error) {
+			return nil, errors.New("provider unavailable")
+		},
+	}
+	svc := newServiceForRecoveryTests(newQAServiceStore(), nil, ai)
+	selection, err := svc.selectReadinessOpeningQuestion(context.Background(), "AP-7K9X-M2NF", &turnSnapshot{
+		currentArea: &QuestionArea{Area: "protected_ground"},
+	}, &readinessOpeningInputs{
+		fallbackQuestion: "Fallback protected ground question",
+		turnCtx:          &AITurnContext{CurrentAreaSlug: "protected_ground"},
+	})
+	if err != nil {
+		t.Fatalf("selectReadinessOpeningQuestion() error = %v", err)
+	}
+	if selection.questionText != "Fallback protected ground question" {
+		t.Fatalf("questionText = %q, want fallback question", selection.questionText)
+	}
+	if !selection.substituted {
+		t.Fatalf("substituted = %v, want true", selection.substituted)
+	}
+}
+
+func TestSelectReadinessOpeningQuestion_EmptyAIQuestionFallsBack(t *testing.T) {
+	ai := &qaAIClient{
+		generateTurnFn: func(_ context.Context, _ *AITurnContext) (*AIResponse, error) {
+			return &AIResponse{NextQuestion: "   "}, nil
+		},
+	}
+	svc := newServiceForRecoveryTests(newQAServiceStore(), nil, ai)
+	selection, err := svc.selectReadinessOpeningQuestion(context.Background(), "AP-7K9X-M2NF", &turnSnapshot{
+		currentArea: &QuestionArea{Area: "protected_ground"},
+	}, &readinessOpeningInputs{
+		fallbackQuestion: "Fallback protected ground question",
+		turnCtx:          &AITurnContext{CurrentAreaSlug: "protected_ground"},
+	})
+	if err != nil {
+		t.Fatalf("selectReadinessOpeningQuestion() error = %v", err)
+	}
+	if selection.questionText != "Fallback protected ground question" {
+		t.Fatalf("questionText = %q, want fallback question", selection.questionText)
+	}
+	if !selection.substituted {
+		t.Fatalf("substituted = %v, want true", selection.substituted)
+	}
+}
+
+func TestSelectReadinessOpeningQuestion_AbortedRetryPropagatesError(t *testing.T) {
+	originalBackoffs := aiRetryBackoffs
+	aiRetryBackoffs = []time.Duration{time.Minute}
+	t.Cleanup(func() {
+		aiRetryBackoffs = originalBackoffs
+	})
+
+	ai := &qaAIClient{
+		generateTurnFn: func(_ context.Context, _ *AITurnContext) (*AIResponse, error) {
+			return nil, errors.New("provider unavailable")
+		},
+	}
+	svc := newServiceForRecoveryTests(newQAServiceStore(), nil, ai)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := svc.selectReadinessOpeningQuestion(ctx, "AP-7K9X-M2NF", &turnSnapshot{
+		currentArea: &QuestionArea{Area: "protected_ground"},
+	}, &readinessOpeningInputs{
+		fallbackQuestion: "Fallback protected ground question",
+		turnCtx:          &AITurnContext{CurrentAreaSlug: "protected_ground"},
+	})
+	if err == nil {
+		t.Fatalf("selectReadinessOpeningQuestion() error = nil, want non-nil")
+	}
+	if got := err.Error(); got != "AI retry aborted: context canceled" {
+		t.Fatalf("error = %q, want AI retry aborted: context canceled", got)
+	}
+}
+
+func TestBuildReadinessAdvancePlan_MapsSelectionToCriterionQuestion(t *testing.T) {
+	svc := newServiceForRecoveryTests(newQAServiceStore(), nil, &qaAIClient{})
+
+	plan, err := svc.buildReadinessAdvancePlan(&turnSnapshot{
+		currentArea: &QuestionArea{Area: "protected_ground"},
+		flowState:   &FlowState{QuestionNumber: 2},
+	}, &readinessOpeningSelection{
+		questionText: "Please tell me more.",
+		substituted:  true,
+	})
+	if err != nil {
+		t.Fatalf("buildReadinessAdvancePlan() error = %v", err)
+	}
+	if plan.issue.question == nil {
+		t.Fatalf("plan.issue.question = nil, want non-nil")
+	}
+	if plan.issue.question.Kind != QuestionKindCriterion {
+		t.Fatalf("plan.issue.question.kind = %q, want %q", plan.issue.question.Kind, QuestionKindCriterion)
+	}
+	if plan.issue.question.Area != "protected_ground" {
+		t.Fatalf("plan.issue.question.area = %q, want protected_ground", plan.issue.question.Area)
+	}
+	if plan.issue.question.QuestionNumber != 3 {
+		t.Fatalf("plan.issue.question.questionNumber = %d, want 3", plan.issue.question.QuestionNumber)
+	}
+	if !plan.issue.substituted {
+		t.Fatalf("plan.issue.substituted = %v, want true", plan.issue.substituted)
+	}
+	if plan.issue.question.TurnID == "" {
+		t.Fatalf("plan.issue.question.turnID = empty, want generated turn ID")
 	}
 }
 

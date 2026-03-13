@@ -252,7 +252,11 @@ func TestBuildTurnAnswerResult_PrefersIssuedQuestionAndCarriesFlags(t *testing.T
 		AnswerDeadlineAt: now.Add(4 * time.Minute),
 	}
 
-	got := svc.buildTurnAnswerResult(issuedQuestion, fallbackQuestion, 1234, true)
+	got := svc.buildTurnAnswerResult(svc.issuedQuestionResultData(issuedQuestion, questionIssue{
+		question:    fallbackQuestion,
+		area:        fallbackQuestion.Area,
+		substituted: true,
+	}), 1234)
 	if got.Done {
 		t.Fatalf("done = %v, want false", got.Done)
 	}
