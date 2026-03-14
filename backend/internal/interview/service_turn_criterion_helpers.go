@@ -11,10 +11,9 @@ import (
 )
 
 type criterionTurnInputs struct {
-	answers   []Answer
-	areaCfg   config.AreaConfig
-	areaIndex int
-	turnCtx   *AITurnContext
+	answers []Answer
+	areaCfg config.AreaConfig
+	turnCtx *AITurnContext
 }
 
 type criterionTurnEvaluation struct {
@@ -36,6 +35,12 @@ type criterionTurnNextQuestion struct {
 	substituted    bool
 }
 
+type criterionQuestionSelection struct {
+	area         string
+	questionText string
+	substituted  bool
+}
+
 func (s *Service) loadCriterionTurnAnswers(ctx context.Context, sessionCode string, snapshot *turnSnapshot) (*criterionTurnInputs, error) {
 	answersCtx, answersCancel := context.WithTimeout(ctx, s.dbTimeout)
 	answers, err := s.stateStore.GetAnswersBySession(answersCtx, sessionCode)
@@ -46,9 +51,8 @@ func (s *Service) loadCriterionTurnAnswers(ctx context.Context, sessionCode stri
 
 	areaCfg, areaIndex := s.findAreaConfig(snapshot.currentArea.Area)
 	return &criterionTurnInputs{
-		answers:   answers,
-		areaCfg:   areaCfg,
-		areaIndex: areaIndex,
+		answers: answers,
+		areaCfg: areaCfg,
 		turnCtx: s.buildAITurnContext(
 			*snapshot.currentArea,
 			areaCfg,
@@ -131,54 +135,107 @@ func (s *Service) buildNextCriterionQuestion(
 	plan *criterionTurnPlan,
 	evaluation *criterionTurnEvaluation,
 ) (*criterionTurnNextQuestion, error) {
-	result := &criterionTurnNextQuestion{
-		substituted: evaluation.substituted,
-	}
 	if strings.TrimSpace(plan.nextArea) == "" {
-		return result, nil
+		return &criterionTurnNextQuestion{substituted: evaluation.substituted}, nil
 	}
 
+	selection, err := s.selectCriterionQuestion(ctx, sessionCode, snapshot, plan, evaluation)
+	if err != nil {
+		return nil, err
+	}
+	s.ensureCriterionQuestionText(sessionCode, selection)
+
+	return s.buildIssuedCriterionQuestion(snapshot, selection)
+}
+
+func (s *Service) selectCriterionQuestion(
+	ctx context.Context,
+	sessionCode string,
+	snapshot *turnSnapshot,
+	plan *criterionTurnPlan,
+	evaluation *criterionTurnEvaluation,
+) (*criterionQuestionSelection, error) {
+	if plan.decision.Action == CriterionTurnActionNext {
+		return s.selectCriterionOpeningQuestion(ctx, sessionCode, snapshot, plan, evaluation)
+	}
+
+	return s.selectCriterionFollowUpQuestion(plan, evaluation), nil
+}
+
+func (s *Service) selectCriterionFollowUpQuestion(
+	plan *criterionTurnPlan,
+	evaluation *criterionTurnEvaluation,
+) *criterionQuestionSelection {
+	return &criterionQuestionSelection{
+		area:         plan.nextArea,
+		questionText: strings.TrimSpace(evaluation.aiResult.NextQuestion),
+		substituted:  evaluation.substituted,
+	}
+}
+
+func (s *Service) selectCriterionOpeningQuestion(
+	ctx context.Context,
+	sessionCode string,
+	snapshot *turnSnapshot,
+	plan *criterionTurnPlan,
+	evaluation *criterionTurnEvaluation,
+) (*criterionQuestionSelection, error) {
+	nextQuestionText, nextAreaSubstituted, err := s.generateNextAreaOpeningQuestion(
+		ctx,
+		sessionCode,
+		plan.nextArea,
+		plan.projectedAreas,
+		plan.projectedAnswers,
+		snapshot.session,
+		snapshot.preferredLanguage,
+		snapshot.timeRemainingS,
+		snapshot.failureRecorder,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &criterionQuestionSelection{
+		area:         plan.nextArea,
+		questionText: nextQuestionText,
+		substituted:  evaluation.substituted || nextAreaSubstituted,
+	}, nil
+}
+
+func (s *Service) ensureCriterionQuestionText(sessionCode string, selection *criterionQuestionSelection) {
+	if strings.TrimSpace(selection.questionText) != "" {
+		return
+	}
+
+	selection.substituted = true
+	slog.Warn("next question is empty after AI processing, using fallback", "session", sessionCode, "area", selection.area)
+	selection.questionText = s.fallbackQuestionForArea(selection.area)
+}
+
+func (s *Service) buildIssuedCriterionQuestion(
+	snapshot *turnSnapshot,
+	selection *criterionQuestionSelection,
+) (*criterionTurnNextQuestion, error) {
 	nextTurnID, err := newTurnID()
 	if err != nil {
 		return nil, fmt.Errorf("new turn id: %w", err)
 	}
 
-	nextQuestionText := strings.TrimSpace(evaluation.aiResult.NextQuestion)
-	if plan.decision.Action == CriterionTurnActionNext {
-		var nextAreaSubstituted bool
-		nextQuestionText, nextAreaSubstituted, err = s.generateNextAreaOpeningQuestion(
-			ctx,
-			sessionCode,
-			plan.nextArea,
-			plan.projectedAreas,
-			plan.projectedAnswers,
-			snapshot.session,
-			snapshot.preferredLanguage,
-			snapshot.timeRemainingS,
-			snapshot.failureRecorder,
-		)
-		if err != nil {
-			return nil, err
-		}
-		result.substituted = result.substituted || nextAreaSubstituted
-	}
-	if nextQuestionText == "" {
-		result.substituted = true
-		slog.Warn("next question is empty after AI processing, using fallback", "session", sessionCode, "area", plan.nextArea)
-		nextQuestionText = s.fallbackQuestionForArea(plan.nextArea)
-	}
-
-	result.question = &Question{
-		TextEs:         nextQuestionText,
-		TextEn:         nextQuestionText,
-		Area:           plan.nextArea,
+	question := &Question{
+		TextEs:         selection.questionText,
+		TextEn:         selection.questionText,
+		Area:           selection.area,
 		Kind:           QuestionKindCriterion,
 		TurnID:         nextTurnID,
 		QuestionNumber: snapshot.flowState.QuestionNumber + 1,
 		TotalQuestions: EstimatedTotalQuestions,
 	}
-	result.issuedQuestion = NewIssuedQuestion(result.question, s.nowFn(), s.settings.AnswerTimeLimitSeconds)
-	return result, nil
+
+	return &criterionTurnNextQuestion{
+		question:       question,
+		issuedQuestion: s.issueQuestion(questionIssue{question: question, area: selection.area, substituted: selection.substituted}),
+		substituted:    selection.substituted,
+	}, nil
 }
 
 func (s *Service) persistCriterionTurn(
