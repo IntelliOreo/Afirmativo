@@ -38,7 +38,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Set log level from config.
+	// Set log level and format from config.
 	var logLevel slog.Level
 	switch strings.ToLower(cfg.Server.LogLevel) {
 	case "debug":
@@ -50,14 +50,32 @@ func main() {
 	default:
 		logLevel = slog.LevelInfo
 	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: logLevel,
-	})))
+	logOpts := &slog.HandlerOptions{Level: logLevel}
+	var logHandler slog.Handler
+	switch strings.ToLower(cfg.Server.LogFormat) {
+	case "json":
+		logHandler = shared.NewGCPJSONHandler(os.Stdout, logOpts)
+	default:
+		logHandler = slog.NewTextHandler(os.Stdout, logOpts)
+	}
+	slog.SetDefault(slog.New(logHandler))
 
 	cfg.LogLoaded()
 
-	// Connect to Postgres.
+	// Initialize OpenTelemetry (noop when disabled).
 	ctx := context.Background()
+	otelShutdown, err := shared.InitOTel(ctx, shared.OTelConfig{
+		Enabled:      cfg.OTel.Enabled,
+		GCPProjectID: cfg.OTel.GCPProjectID,
+		ServiceName:  "afirmativo-backend",
+	})
+	if err != nil {
+		slog.Error("failed to initialize otel", "error", err)
+		os.Exit(1)
+	}
+	defer otelShutdown(ctx)
+
+	// Connect to Postgres.
 	pool, err := pgxpool.New(ctx, cfg.Server.DatabaseURL)
 	if err != nil {
 		slog.Error("failed to connect to database", "error", err)
@@ -188,7 +206,7 @@ func main() {
 	// Register routes.
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /api/health", shared.HandleHealth(pool))
+	mux.HandleFunc("GET /api/health", shared.HandleHealth(pool, interviewSvc, reportSvc, &poolStatsProvider{pool: pool}))
 	mux.HandleFunc("POST /api/coupon/validate", sessionHandler.HandleValidateCoupon)
 	mux.HandleFunc("POST /api/session/verify", sessionVerifyIPLimiter.Wrap(sessionHandler.HandleVerifySession))
 	mux.HandleFunc("GET /api/session/access", shared.RequireSessionAuth(sessionAuth, sessionHandler.HandleCheckAccess))
@@ -216,6 +234,7 @@ func main() {
 	handler := shared.Chain(mux,
 		shared.CORS(cfg.Server.FrontendURL),
 		shared.RequestID,
+		shared.Trace,
 		shared.SecurityHeaders,
 		shared.Logger,
 	)
@@ -243,13 +262,22 @@ func main() {
 	<-quit
 
 	slog.Info("shutting down server")
-	asyncRuntimeCancel()
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 
+	// 1. Stop accepting new HTTP connections and drain in-flight requests.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("server forced shutdown", "error", err)
-		os.Exit(1)
 	}
+
+	// 2. Cancel async runtimes (no new jobs can arrive from HTTP handlers).
+	asyncRuntimeCancel()
+
+	// 3. Wait for in-progress workers to finish current jobs.
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer drainCancel()
+	interviewSvc.WaitForDrain(drainCtx)
+	reportSvc.WaitForDrain(drainCtx)
+
 	slog.Info("server stopped")
 }

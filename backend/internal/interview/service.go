@@ -56,6 +56,7 @@ type Service struct {
 	asyncAnswerQueue         chan string
 	asyncRuntimeStartOnce    sync.Once
 	asyncAnswerRequestIDs    sync.Map
+	workerWg                 sync.WaitGroup
 }
 
 type Deps struct {
@@ -95,6 +96,15 @@ func NewService(deps Deps, settings Settings) *Service {
 	}
 	svc.asyncAnswerQueue = make(chan string, settings.AsyncRuntime.QueueSize)
 	return svc
+}
+
+// HealthStats returns async runtime stats for the health endpoint.
+func (s *Service) HealthStats() map[string]any {
+	return map[string]any{
+		"async_answer_queue_depth":    len(s.asyncAnswerQueue),
+		"async_answer_queue_capacity": cap(s.asyncAnswerQueue),
+		"async_answer_workers":        s.asyncAnswerWorkers,
+	}
 }
 
 // StartResult holds the output of a successful interview start.
@@ -153,7 +163,9 @@ func (s *Service) processTurnCore(
 	}
 
 	if snapshot.flowState.Step == FlowStepDone {
-		s.finishSession(ctx, sessionCode)
+		if err := s.finishSession(ctx, sessionCode); err != nil {
+			return nil, err
+		}
 		return doneAnswerResult(false), nil
 	}
 	if strings.TrimSpace(snapshot.turnID) == "" || snapshot.turnID != snapshot.flowState.ExpectedTurnID {

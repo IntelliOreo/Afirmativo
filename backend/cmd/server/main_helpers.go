@@ -8,7 +8,21 @@ import (
 	"github.com/afirmativo/backend/internal/interview"
 	"github.com/afirmativo/backend/internal/report"
 	"github.com/afirmativo/backend/internal/vertexai"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// poolStatsProvider exposes pgxpool connection metrics via the health endpoint.
+type poolStatsProvider struct{ pool *pgxpool.Pool }
+
+func (p *poolStatsProvider) HealthStats() map[string]any {
+	s := p.pool.Stat()
+	return map[string]any{
+		"db_pool_total_conns":    s.TotalConns(),
+		"db_pool_idle_conns":     s.IdleConns(),
+		"db_pool_acquired_conns": s.AcquiredConns(),
+		"db_pool_max_conns":      s.MaxConns(),
+	}
+}
 
 func createAIClients(cfg config.Config) (interview.InterviewAIClient, report.ReportAIClient, error) {
 	if cfg.AI.Provider == "ollama" {

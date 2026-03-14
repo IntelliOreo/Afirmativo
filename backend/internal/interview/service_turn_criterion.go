@@ -7,8 +7,8 @@ import (
 )
 
 func (s *Service) handleCriterionTurn(ctx context.Context, sessionCode string, snapshot *turnSnapshot) (*AnswerResult, error) {
-	if result, done := s.finishIfNoCurrentAreaResult(ctx, sessionCode, snapshot.currentArea, true); done {
-		return result, nil
+	if result, done, err := s.finishIfNoCurrentAreaResult(ctx, sessionCode, snapshot.currentArea, true); done {
+		return result, err
 	}
 
 	inputs, err := s.loadCriterionTurnAnswers(ctx, sessionCode, snapshot)
@@ -35,7 +35,9 @@ func (s *Service) handleCriterionTurn(ctx context.Context, sessionCode string, s
 	}
 
 	if strings.TrimSpace(plan.nextArea) == "" {
-		s.finishSession(ctx, sessionCode)
+		if err := s.finishSession(ctx, sessionCode); err != nil {
+			return nil, err
+		}
 		return doneAnswerResult(false), nil
 	}
 

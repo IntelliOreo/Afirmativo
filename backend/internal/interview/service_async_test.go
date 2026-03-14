@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/afirmativo/backend/internal/config"
 	"github.com/afirmativo/backend/internal/session"
 )
 
@@ -380,6 +381,177 @@ func TestProcessTurnForAsyncJob_UsesSubmissionTimeInsteadOfWorkerDelay(t *testin
 	}
 	if result.TimerRemainingS != 1680 {
 		t.Fatalf("timerRemainingS = %d, want 1680 based on submit time instead of worker delay", result.TimerRemainingS)
+	}
+}
+
+func TestProcessAnswerJob_SessionCompleteFailureStaysRunning(t *testing.T) {
+	t.Parallel()
+
+	const sessionCode = "AP-7K9X-M2NF"
+	completeErr := errors.New("db connection refused")
+
+	store := newQAServiceStore()
+	store.getFlowStateFn = func(context.Context, string) (*FlowState, error) {
+		return &FlowState{Step: FlowStepDone}, nil
+	}
+	store.getAreasBySessionFn = func(context.Context, string) ([]QuestionArea, error) {
+		return []QuestionArea{{Area: "protected_ground", Status: AreaStatusComplete}}, nil
+	}
+	store.getInProgressAreaFn = func(context.Context, string) (*QuestionArea, error) {
+		return nil, nil
+	}
+	store.claimQueuedAnswerJobFn = func(_ context.Context, jobID string) (*AnswerJob, error) {
+		return &AnswerJob{
+			ID:          jobID,
+			SessionCode: sessionCode,
+			TurnID:      "turn-1",
+			AnswerText:  "answer",
+			Status:      AsyncAnswerJobRunning,
+			Attempts:    1,
+			CreatedAt:   time.Now().UTC(),
+		}, nil
+	}
+
+	// Track whether any finalize method is called — it shouldn't be.
+	markSucceededCalled := false
+	markFailedCalled := false
+	store.markAnswerJobOKFn = func(context.Context, string, []byte) error {
+		markSucceededCalled = true
+		return nil
+	}
+	store.markAnswerJobFailedFn = func(context.Context, MarkAnswerJobFailedParams) error {
+		markFailedCalled = true
+		return nil
+	}
+
+	sessions := &fakeInterviewSessionStore{
+		getSessionByCodeFn: func(context.Context, string) (*session.Session, error) {
+			return activeSession(sessionCode, "en"), nil
+		},
+		completeSessionFn: func(context.Context, string) error {
+			return completeErr
+		},
+	}
+
+	svc := newServiceForRecoveryTests(store, sessions, &qaAIClient{})
+	svc.processAnswerJob(context.Background(), "job-1")
+
+	if markSucceededCalled {
+		t.Fatalf("MarkAnswerJobSucceeded was called; job should stay running for recovery")
+	}
+	if markFailedCalled {
+		t.Fatalf("MarkAnswerJobFailed was called; job should stay running for recovery")
+	}
+}
+
+func TestProcessAnswerJob_MaxAttemptsExceeded(t *testing.T) {
+	t.Parallel()
+
+	const sessionCode = "AP-7K9X-M2NF"
+
+	var gotFailedParams MarkAnswerJobFailedParams
+	store := &fakeInterviewStore{
+		claimQueuedAnswerJobFn: func(_ context.Context, jobID string) (*AnswerJob, error) {
+			return &AnswerJob{
+				ID:          jobID,
+				SessionCode: sessionCode,
+				TurnID:      "turn-1",
+				Status:      AsyncAnswerJobRunning,
+				Attempts:    6, // > maxAsyncAnswerJobAttempts (5)
+				CreatedAt:   time.Now().UTC(),
+			}, nil
+		},
+		markAnswerJobFailedFn: func(_ context.Context, params MarkAnswerJobFailedParams) error {
+			gotFailedParams = params
+			return nil
+		},
+	}
+
+	svc := newInterviewServiceForAsyncTests(store)
+	svc.processAnswerJob(context.Background(), "job-max")
+
+	if gotFailedParams.JobID != "job-max" {
+		t.Fatalf("expected job to be marked failed, got JobID=%q", gotFailedParams.JobID)
+	}
+	if gotFailedParams.Status != AsyncAnswerJobFailed {
+		t.Fatalf("status = %q, want %q", gotFailedParams.Status, AsyncAnswerJobFailed)
+	}
+	if gotFailedParams.ErrorCode != "SESSION_COMPLETE_FAILED" {
+		t.Fatalf("errorCode = %q, want SESSION_COMPLETE_FAILED", gotFailedParams.ErrorCode)
+	}
+}
+
+func TestEnqueueAsyncAnswerJob_QueueFullReturnsFalse(t *testing.T) {
+	t.Parallel()
+
+	svc := newInterviewServiceForAsyncTests(&fakeInterviewStore{}, config.AsyncRuntimeConfig{
+		Workers:       1,
+		QueueSize:     1,
+		RecoveryBatch: 1,
+		RecoveryEvery: time.Hour,
+		StaleAfter:    time.Hour,
+		JobTimeout:    time.Hour,
+	})
+
+	// Fill the queue.
+	if !svc.enqueueAsyncAnswerJob("job-fill") {
+		t.Fatalf("first enqueue should succeed")
+	}
+
+	// Queue is full — should return false.
+	if svc.enqueueAsyncAnswerJob("job-overflow") {
+		t.Fatalf("second enqueue should return false when queue is full")
+	}
+}
+
+func TestProcessAnswerJob_MarkSucceededDBFailureLeavesRunning(t *testing.T) {
+	t.Parallel()
+
+	const sessionCode = "AP-7K9X-M2NF"
+
+	store := newQAServiceStore()
+	store.getFlowStateFn = func(context.Context, string) (*FlowState, error) {
+		return &FlowState{Step: FlowStepDone}, nil
+	}
+	store.getAreasBySessionFn = func(context.Context, string) ([]QuestionArea, error) {
+		return []QuestionArea{{Area: "protected_ground", Status: AreaStatusComplete}}, nil
+	}
+	store.getInProgressAreaFn = func(context.Context, string) (*QuestionArea, error) {
+		return nil, nil
+	}
+	store.claimQueuedAnswerJobFn = func(_ context.Context, jobID string) (*AnswerJob, error) {
+		return &AnswerJob{
+			ID:          jobID,
+			SessionCode: sessionCode,
+			TurnID:      "turn-1",
+			AnswerText:  "answer",
+			Status:      AsyncAnswerJobRunning,
+			Attempts:    1,
+			CreatedAt:   time.Now().UTC(),
+		}, nil
+	}
+	store.markAnswerJobOKFn = func(context.Context, string, []byte) error {
+		return errors.New("db write failed")
+	}
+
+	markFailedCalled := false
+	store.markAnswerJobFailedFn = func(context.Context, MarkAnswerJobFailedParams) error {
+		markFailedCalled = true
+		return nil
+	}
+
+	sessions := &fakeInterviewSessionStore{
+		getSessionByCodeFn: func(context.Context, string) (*session.Session, error) {
+			return activeSession(sessionCode, "en"), nil
+		},
+	}
+
+	svc := newServiceForRecoveryTests(store, sessions, &qaAIClient{})
+	svc.processAnswerJob(context.Background(), "job-mark-fail")
+
+	// When MarkAnswerJobSucceeded fails, the job stays in running (no terminal mark).
+	if markFailedCalled {
+		t.Fatalf("MarkAnswerJobFailed should not be called when MarkSucceeded fails; job stays running for recovery")
 	}
 }
 

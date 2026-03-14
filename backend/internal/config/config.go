@@ -42,6 +42,7 @@ type ServerConfig struct {
 	FrontendURL             string
 	DatabaseURL             string
 	LogLevel                string
+	LogFormat               string // "text" (default, human-readable) or "json" (GCP Cloud Logging)
 	AllowSensitiveDebugLogs bool
 	HTTPReadTimeout         time.Duration
 	HTTPWriteTimeout        time.Duration
@@ -129,6 +130,11 @@ type RateLimitConfig struct {
 	Voice  VoiceRateLimitConfig
 }
 
+type OTelConfig struct {
+	Enabled      bool
+	GCPProjectID string
+}
+
 type AdminConfig struct {
 	CleanupEnabled bool
 }
@@ -144,6 +150,7 @@ type Config struct {
 	AI        AIConfig
 	Voice     VoiceConfig
 	RateLimit RateLimitConfig
+	OTel      OTelConfig
 	Admin     AdminConfig
 }
 
@@ -237,6 +244,11 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	otelEnabled, err := envBool("OTEL_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+
 	adminCleanupEnabled, err := envBool("ADMIN_CLEANUP_ENABLED", false)
 	if err != nil {
 		return Config{}, err
@@ -344,6 +356,7 @@ func Load() (Config, error) {
 			FrontendURL:             envOr("FRONTEND_URL", "http://localhost:3000"),
 			DatabaseURL:             os.Getenv("DATABASE_URL"),
 			LogLevel:                envOr("LOG_LEVEL", "info"),
+			LogFormat:               envOr("LOG_FORMAT", "text"),
 			AllowSensitiveDebugLogs: allowSensitiveDebugLogs,
 			HTTPReadTimeout:         time.Duration(httpReadTimeoutSeconds) * time.Second,
 			HTTPWriteTimeout:        time.Duration(httpWriteTimeoutSeconds) * time.Second,
@@ -439,6 +452,10 @@ func Load() (Config, error) {
 				SessionRatePerMinute: voiceSessionRatePerMinute,
 				SessionBurst:         voiceSessionBurst,
 			},
+		},
+		OTel: OTelConfig{
+			Enabled:      otelEnabled,
+			GCPProjectID: os.Getenv("GCP_PROJECT_ID"),
 		},
 		Admin: AdminConfig{
 			CleanupEnabled: adminCleanupEnabled,

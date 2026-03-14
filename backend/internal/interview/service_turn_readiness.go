@@ -5,8 +5,8 @@ import (
 )
 
 func (s *Service) handleReadinessTurn(ctx context.Context, sessionCode string, snapshot *turnSnapshot) (*AnswerResult, error) {
-	if result, done := s.finishIfNoCurrentAreaResult(ctx, sessionCode, snapshot.currentArea, false); done {
-		return result, nil
+	if result, done, err := s.finishIfNoCurrentAreaResult(ctx, sessionCode, snapshot.currentArea, false); done {
+		return result, err
 	}
 
 	inputs, err := s.loadReadinessOpeningInputs(ctx, sessionCode, snapshot)

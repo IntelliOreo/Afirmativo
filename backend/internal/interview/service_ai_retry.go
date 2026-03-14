@@ -7,6 +7,9 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 var aiRetryBackoffs = []time.Duration{
@@ -44,6 +47,13 @@ func formatAIFailureReason(attempt int, err error) string {
 }
 
 func (s *Service) callAIWithRetry(ctx context.Context, turnCtx *AITurnContext, failureRecorder aiRetryFailureRecorder) (*AIResponse, error) {
+	tracer := otel.Tracer("afirmativo-interview")
+	ctx, span := tracer.Start(ctx, "ai.generate_turn")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("ai.area", turnCtx.CurrentAreaSlug),
+	)
+
 	maxAttempts := len(aiRetryBackoffs) + 1
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		aiResult, err := s.aiClient.GenerateTurn(ctx, turnCtx)

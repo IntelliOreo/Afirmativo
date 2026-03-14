@@ -19,15 +19,15 @@ Core product constraints:
 ```text
 +-------------------+      HTTP / JSON      +--------------------+      SQL      +--------------+
 | frontend/         | <-------------------> | backend/           | <-----------> | PostgreSQL   |
-| Next.js + React   |                       | Go stdlib HTTP     |               |              |
+| Next.js + React   |                       | Go stdlib HTTP     |               | (pgxpool)    |
 +---------+---------+                       +----------+---------+               +--------------+
-          |                                             |
-          | voice token minting                         | AI calls
-          v                                             v
-   +--------------+                             +-------------------+
-   | Deepgram     |                             | Claude / Ollama / |
-   | voice APIs   |                             | Vertex AI         |
-   +--------------+                             +-------------------+
+          |                                            |  |
+          | voice token minting                        |  | OTel traces + metrics
+          v                                            |  v
+   +--------------+                             +------+--------+     +-------------------+
+   | Deepgram     |                             | Claude/Ollama/ |     | GCP Cloud Trace   |
+   | voice APIs   |                             | Vertex AI      |     | + Cloud Monitoring |
+   +--------------+                             +---------------+     +-------------------+
 ```
 
 At a high level:
@@ -53,7 +53,7 @@ backend/
   internal/payment/              stable 501 payment handlers
   internal/voice/                Deepgram token flow
   internal/admin/                gated cleanup tools
-  internal/shared/               middleware, auth, rate limiting, responses
+  internal/shared/               middleware, auth, health, rate limiting, OTel, logging
 
 database/
   migrations/                    schema history
@@ -67,7 +67,7 @@ doc/
 ## 4. Main Runtime Routes
 
 ```text
-GET  /api/health
+GET  /api/health                            DB ping + pool stats + async queue stats
 POST /api/coupon/validate
 POST /api/session/verify
 GET  /api/session/access
@@ -245,36 +245,138 @@ render next state
 Job lifecycle:
 
 ```text
-queued
-  -> running
-  -> succeeded
-
-queued
-  -> running
-  -> failed
-
-queued
-  -> running
-  -> canceled
-
-queued
-  -> running
-  -> conflict
+                  +--------+
+                  | queued |
+                  +---+----+
+                      |
+                      v
+                  +---------+
+            +---->| running |<----+
+            |     +----+----+     |
+            |          |          |
+     recovery          |          recovery
+     loop requeue      |          loop requeue
+     (stale)           |          (stale)
+            |     +----+----+----+----+-----+
+            |     |         |         |     |
+            |     v         v         v     |
+       +---------+  +------+  +----------+  |
+       |succeeded|  |failed|  | canceled |  |
+       +---------+  +------+  +----------+  |
+                                            |
+                                  +---------+
+                                  | conflict|
+                                  +---------+
 ```
 
-Recovery loop view:
+## 8. Async Error Propagation And Recovery
+
+This section documents how the async pipeline handles failures at each stage, and how the recovery loop provides at-least-once delivery.
+
+### Session completion failure
+
+When the interview is done and `finishSession` (CompleteSession) fails:
 
 ```text
-every recovery tick
-  -> find stale running jobs
-  -> requeue them
-  -> list queued jobs
-  -> push ids back into worker channel
+worker processes turn
+  -> processTurnCore returns FlowStepDone
+  -> finishSession calls CompleteSession
+  -> CompleteSession fails (DB error)
+  -> processTurnForAsyncJob returns ErrSessionCompleteFailed
+  -> processAnswerJob detects ErrSessionCompleteFailed
+  -> does NOT mark job as terminal
+  -> job stays in "running"
+                    |
+                    v
+         +--------------------+
+         | recovery loop tick |
+         +--------+-----------+
+                  |
+                  v
+         job is stale running
+           -> requeued to "queued"
+           -> re-enqueued to worker channel
+           -> worker retries from scratch
 ```
 
-This is an at-least-once processing model backed by idempotency and turn conflict checks.
+### Max retry cap
 
-## 8. Idempotency And Concurrency
+To prevent infinite retry when CompleteSession is permanently broken:
+
+```text
+worker claims job
+  -> check job.Attempts > 5?
+     +-- yes --> mark failed with SESSION_COMPLETE_FAILED (permanent)
+     +-- no  --> process turn normally
+```
+
+### Full error classification flow
+
+```text
+processAnswerJob
+  |
+  +-- claim fails?            --> log, return (job stays queued)
+  |
+  +-- attempts > 5?           --> mark FAILED: SESSION_COMPLETE_FAILED
+  |
+  +-- processTurnForAsyncJob
+  |     |
+  |     +-- ErrSessionCompleteFailed?  --> log, leave running (recovery retries)
+  |     +-- ErrTurnConflict?           --> mark CONFLICT
+  |     +-- ErrInvalidFlow?            --> mark FAILED: FLOW_INVALID
+  |     +-- ErrAIRetryExhausted?       --> mark CANCELED: AI_RETRY_EXHAUSTED
+  |     +-- other error?               --> mark FAILED: INTERNAL_ERROR
+  |
+  +-- answerResult.Substituted?  --> mark CANCELED: AI_RETRY_EXHAUSTED
+  |
+  +-- encode payload fails?      --> mark FAILED: SERIALIZATION_ERROR
+  |
+  +-- MarkSucceeded fails?       --> log, leave running (recovery retries)
+  |
+  +-- success                    --> mark SUCCEEDED
+```
+
+### Recovery loop
+
+```text
+every recovery tick (default 10s)
+  |
+  +-- 1. find running jobs older than stale_after (default 180s)
+  |      -> UPDATE status = 'queued' WHERE status = 'running' AND started_at < staleBefore
+  |      -> these are jobs where the worker crashed or timed out
+  |
+  +-- 2. list all queued job IDs (batch limit)
+  |
+  +-- 3. push each ID into the worker channel
+  |      -> if channel full, job stays queued for next tick
+  |
+  +-- worker picks up job -> claim -> process -> terminal
+```
+
+## 9. Retry Inventory
+
+```text
++-------------+----------------------------+------+----------------+
+| Pipeline    | What retries               | Max  | Backoffs       |
++-------------+----------------------------+------+----------------+
+| Interview   | AI GenerateTurn calls      | 3    | 3s, 7s         |
+| Interview   | Stale running jobs         | *    | Every 10s tick |
+| Interview   | Session completion failure | 5    | Recovery loop  |
+| Report      | AI GenerateReport calls    | 3    | 3s, 7s         |
+| Report      | Stale running reports      | *    | Every 10s tick |
+| Report      | Report generation failure  | 5    | Recovery loop  |
++-------------+----------------------------+------+----------------+
+
+* = unlimited by the recovery loop, but bounded by job timeout + stale threshold
+```
+
+What has NO retry and fails permanently:
+
+- `MarkAnswerJobSucceeded` DB failure: job stays running, recovery retries the whole turn
+- `MarkReportReady` DB failure: report is marked failed with `PERSIST_READY_FAILED`
+- Turn conflict, invalid flow: these are logic errors, not transient
+
+## 10. Idempotency And Concurrency
 
 Server-side answer submission uses two guards:
 
@@ -300,7 +402,7 @@ old turn id
 
 This combination protects both duplicate network submission and stale browser state after reload or parallel tabs.
 
-## 9. Retry And Fallback Strategy
+## 11. Retry And Fallback Strategy
 
 Primary file:
 
@@ -338,7 +440,7 @@ AI returns evaluation for wrong criterion id
   -> mark substituted
 ```
 
-## 10. Opening Questions vs Follow-Up Questions
+## 12. Opening Questions vs Follow-Up Questions
 
 This distinction explains why some criterion answers use one AI call and others use two.
 
@@ -384,7 +486,7 @@ Callers still differ:
 
 That is why the current refactor only shares opening-question selection policy, not the entire caller workflow.
 
-## 11. Criterion Turn Flow
+## 13. Criterion Turn Flow
 
 Primary files:
 
@@ -445,7 +547,7 @@ criterion answer
 
 This is still the densest backend path, but it is now more explicitly split than earlier revisions.
 
-## 12. Recovery Model
+## 14. Recovery Model
 
 Frontend recovery relies on local storage.
 
@@ -479,9 +581,121 @@ Backend recovery relies on:
 - persisted flow state
 - persisted active question
 - persisted async job table
-- periodic async job recovery
+- periodic async job recovery loop (requeues stale running jobs)
+- max retry cap (5 attempts before permanent failure)
 
-## 13. Dependency Injection And Layering
+## 15. Observability Stack
+
+Primary files:
+
+- `backend/internal/shared/otel.go` (OTel initialization)
+- `backend/internal/shared/gcplog.go` (GCP-structured JSON logging)
+- `backend/internal/shared/middleware.go` (HTTP trace middleware)
+- `backend/internal/shared/health.go` (health endpoint with extensible stats)
+
+### Logging
+
+```text
+LOG_FORMAT=text (default)     plain slog text output for local dev
+LOG_FORMAT=json               GCP Cloud Logging structured JSON
+                              severity field mapped from slog level
+                              msg renamed to "message" for Cloud Logging
+```
+
+### Tracing
+
+```text
+OTEL_ENABLED=false (default)  noop tracer and meter, zero overhead
+OTEL_ENABLED=true             GCP Cloud Trace exporter + Cloud Monitoring
+
+Spans created:
+  afirmativo-http / {method} {path}     per HTTP request (middleware)
+  afirmativo-async / async.answer_job   per async answer worker job
+  afirmativo-ai / ai.generate_turn      per AI retry call
+```
+
+### Health endpoint
+
+```text
+GET /api/health returns:
+  {
+    "status": "ok",
+    "db": "connected",
+    "async_answer_queue_depth": 0,
+    "async_answer_queue_capacity": 256,
+    "async_answer_workers": 4,
+    "async_report_queue_depth": 0,
+    "async_report_queue_capacity": 256,
+    "async_report_workers": 4,
+    "db_pool_total_conns": 10,
+    "db_pool_idle_conns": 8,
+    "db_pool_acquired_conns": 2,
+    "db_pool_max_conns": 10
+  }
+```
+
+Stats are provided via the `HealthStatsProvider` interface, making it easy to add new providers.
+
+## 16. Graceful Shutdown
+
+Primary files:
+
+- `backend/cmd/server/main.go` (shutdown sequence)
+- `backend/internal/shared/drain.go` (`WaitForWorkers` shared by both pipelines)
+
+The shutdown sequence is ordered to avoid losing in-flight work:
+
+```text
+SIGTERM / SIGINT received
+  |
+  v
++------------------------------------------+
+| 1. srv.Shutdown (10s timeout)            |
+|    - stop accepting new connections      |
+|    - drain in-flight HTTP requests       |
+|    - after this, no new async jobs can   |
+|      be submitted via HTTP handlers      |
++------------------------------------------+
+  |
+  v
++------------------------------------------+
+| 2. asyncRuntimeCancel()                  |
+|    - cancel the context for all workers  |
+|    - workers exit their select loop      |
+|    - recovery loop stops                 |
++------------------------------------------+
+  |
+  v
++------------------------------------------+
+| 3. WaitForDrain (15s timeout)            |
+|    - interview workers: workerWg.Wait()  |
+|    - report workers: workerWg.Wait()     |
+|    - workers finishing current job will   |
+|      complete before exit                |
+|    - if timeout, in-progress jobs stay   |
+|      in "running" and the recovery loop  |
+|      will requeue them on next startup   |
++------------------------------------------+
+  |
+  v
++------------------------------------------+
+| 4. pool.Close() + otelShutdown()         |
+|    - close DB connections                |
+|    - flush OTel spans and metrics        |
++------------------------------------------+
+```
+
+Why this order matters:
+
+```text
+BAD (old):  cancel workers -> shutdown HTTP
+            workers die -> HTTP still accepts -> new jobs -> nobody processes them
+
+GOOD (new): shutdown HTTP -> cancel workers -> drain workers
+            no new jobs arrive -> workers finish current work -> clean exit
+```
+
+## 17. Dependency Injection And Layering
 
 The backend follows interface-based composition from `backend/cmd/server/main.go`.
 
@@ -501,12 +715,12 @@ The interview package is a same-package mini-module rather than a single giant f
 - helper files carry planning and selection logic
 - store files stay separated by persistence concern
 
-## 14. Security Model
+## 18. Security Model
 
 ```text
-JWT cookie auth
+JWT cookie auth (golang-jwt/v5)
   + session-code binding
-  + rate limiting
+  + rate limiting (token bucket per IP, per session)
   + failed-attempt lockout
   + CORS allowlist
   + security headers
@@ -515,7 +729,57 @@ JWT cookie auth
 
 The backend also redacts or constrains sensitive logging and expects strong secrets for auth and provider integration.
 
-## 15. Current Caveats
+## 19. Report Pipeline
+
+Primary files:
+
+- `backend/internal/report/service.go`
+
+The report pipeline mirrors the interview async pipeline:
+
+```text
+browser
+  -> POST /api/report/{code}/generate
+  -> backend creates or re-queues report record
+  -> worker claims report
+  -> builds area summaries from interview data
+  -> AI generates bilingual report (3 attempts, 3s/7s backoffs)
+  -> marks report ready
+  -> browser polls GET /api/report/{code}
+```
+
+Report job lifecycle:
+
+```text
+  +--------+
+  | queued |
+  +---+----+
+      |
+      v
+  +---------+
+  | running |<---- recovery loop requeue (stale)
+  +----+----+
+       |
+  +----+----+
+  |         |
+  v         v
++-------+ +--------+
+| ready | | failed |
++-------+ +--------+
+```
+
+Error handling:
+
+```text
+AI retry exhausted       -> mark FAILED: AI_RETRY_EXHAUSTED
+session not found        -> mark FAILED: SESSION_NOT_FOUND
+session not completed    -> mark FAILED: NOT_COMPLETED
+MarkReportReady DB fail  -> mark FAILED: PERSIST_READY_FAILED
+attempts > 5             -> mark FAILED: GENERATION_ERROR (permanent)
+context canceled         -> leave running for recovery (capped at 5 retries)
+```
+
+## 20. Current Caveats
 
 This is the most important truthful snapshot to keep in mind while reading the code:
 
@@ -523,9 +787,8 @@ This is the most important truthful snapshot to keep in mind while reading the c
 - payment is scaffold/stub level
 - PDF report download is not implemented yet
 - `internal/interview` is still the main backend complexity hotspot
-- observability is still modest compared with a production-hardened platform
 
-## 16. Recommended Reading Order
+## 21. Recommended Reading Order
 
 If you are onboarding into the codebase, this order gives the fastest useful model:
 
@@ -538,9 +801,11 @@ If you are onboarding into the codebase, this order gives the fastest useful mod
 7. `backend/internal/interview/service_async_api.go`
 8. `backend/internal/interview/service_async_runtime.go`
 9. `backend/internal/interview/service_async_processor.go`
-10. `frontend/src/app/interview/[code]/hooks/useInterviewMachine.ts`
+10. `backend/internal/interview/service_finish.go`
+11. `backend/internal/report/service.go`
+12. `frontend/src/app/interview/[code]/hooks/useInterviewMachine.ts`
 
-## 17. Quick Flow Cheatsheet
+## 22. Quick Flow Cheatsheet
 
 Interview lifecycle:
 
@@ -565,4 +830,18 @@ submit answer
   -> 2 AI calls if moving to a new area
   -> persist next active question or finish interview
   -> browser receives terminal job result
+```
+
+Async error lifecycle:
+
+```text
+transient failure (DB, session complete)
+  -> job stays running
+  -> recovery loop requeues after stale threshold
+  -> worker retries
+  -> max 5 attempts before permanent failure
+
+permanent failure (turn conflict, invalid flow)
+  -> job marked terminal immediately
+  -> no retry
 ```

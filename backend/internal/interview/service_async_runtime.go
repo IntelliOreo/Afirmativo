@@ -5,6 +5,11 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/afirmativo/backend/internal/shared"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // StartAsyncAnswerRuntime launches bounded workers and periodic recovery.
@@ -21,23 +26,40 @@ func (s *Service) StartAsyncAnswerRuntime(ctx context.Context) {
 
 		for i := 0; i < s.asyncAnswerWorkers; i++ {
 			workerID := i + 1
+			s.workerWg.Add(1)
 			go s.runAsyncAnswerWorker(ctx, workerID)
 		}
 		go s.runAsyncAnswerRecoveryLoop(ctx)
 	})
 }
 
+// WaitForDrain blocks until all async answer workers have exited or the
+// context deadline is reached. Call after cancelling the runtime context.
+func (s *Service) WaitForDrain(ctx context.Context) {
+	shared.WaitForWorkers(ctx, &s.workerWg, "async answer")
+}
+
 func (s *Service) runAsyncAnswerWorker(ctx context.Context, workerID int) {
+	defer s.workerWg.Done()
 	slog.Debug("async answer worker started", "worker_id", workerID)
 	defer slog.Debug("async answer worker stopped", "worker_id", workerID)
 
+	tracer := otel.Tracer("afirmativo-async")
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case jobID := <-s.asyncAnswerQueue:
 			processCtx, cancel := context.WithTimeout(ctx, s.asyncAnswerJobTimeout)
+			processCtx, span := tracer.Start(processCtx, "async.answer_job",
+				trace.WithNewRoot(),
+			)
+			span.SetAttributes(
+				attribute.String("job.id", jobID),
+				attribute.Int("worker.id", workerID),
+			)
 			s.processAnswerJob(processCtx, jobID)
+			span.End()
 			cancel()
 		}
 	}

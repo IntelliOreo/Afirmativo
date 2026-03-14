@@ -2,17 +2,13 @@ package shared
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 const (
@@ -22,20 +18,10 @@ const (
 	sessionAuthClockSkew         = 30 * time.Second
 )
 
-type jwtHeader struct {
-	Alg string `json:"alg"`
-	Typ string `json:"typ"`
-}
-
 // SessionAuthClaims defines the JWT payload for authenticated session routes.
 type SessionAuthClaims struct {
 	SessionCode string `json:"session_code"`
-	Issuer      string `json:"iss"`
-	Audience    string `json:"aud"`
-	ExpiresAt   int64  `json:"exp"`
-	IssuedAt    int64  `json:"iat"`
-	NotBefore   int64  `json:"nbf"`
-	JWTID       string `json:"jti"`
+	jwt.RegisteredClaims
 }
 
 // SessionAuthConfig defines JWT/cookie settings for session auth.
@@ -108,107 +94,53 @@ func (m *SessionAuthManager) MintToken(sessionCode string, expiresAt time.Time) 
 		return "", fmt.Errorf("token expiry must be in the future")
 	}
 
-	jti, err := randomHex(16)
-	if err != nil {
-		return "", fmt.Errorf("generate jti: %w", err)
-	}
-
-	headerJSON, err := json.Marshal(jwtHeader{
-		Alg: "HS256",
-		Typ: "JWT",
-	})
-	if err != nil {
-		return "", fmt.Errorf("marshal header: %w", err)
-	}
-
-	claimsJSON, err := json.Marshal(SessionAuthClaims{
+	claims := SessionAuthClaims{
 		SessionCode: code,
-		Issuer:      m.issuer,
-		Audience:    m.audience,
-		ExpiresAt:   exp.Unix(),
-		IssuedAt:    now.Unix(),
-		NotBefore:   now.Unix(),
-		JWTID:       jti,
-	})
-	if err != nil {
-		return "", fmt.Errorf("marshal claims: %w", err)
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    m.issuer,
+			Audience:  jwt.ClaimStrings{m.audience},
+			ExpiresAt: jwt.NewNumericDate(exp),
+			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now),
+		},
 	}
 
-	encodedHeader := base64.RawURLEncoding.EncodeToString(headerJSON)
-	encodedClaims := base64.RawURLEncoding.EncodeToString(claimsJSON)
-	signingInput := encodedHeader + "." + encodedClaims
-	signature := m.sign(signingInput)
-
-	return signingInput + "." + base64.RawURLEncoding.EncodeToString(signature), nil
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString(m.secret)
+	if err != nil {
+		return "", fmt.Errorf("sign token: %w", err)
+	}
+	return signed, nil
 }
 
 // ValidateToken verifies token signature and required claims.
-func (m *SessionAuthManager) ValidateToken(token string) (*SessionAuthClaims, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return nil, ErrUnauthorized
-	}
+func (m *SessionAuthManager) ValidateToken(tokenString string) (*SessionAuthClaims, error) {
+	parser := jwt.NewParser(
+		jwt.WithValidMethods([]string{"HS256"}),
+		jwt.WithLeeway(sessionAuthClockSkew),
+		jwt.WithIssuer(m.issuer),
+		jwt.WithAudience(m.audience),
+		jwt.WithExpirationRequired(),
+		jwt.WithIssuedAt(),
+	)
 
-	headerBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
-		return nil, ErrUnauthorized
-	}
-	var header jwtHeader
-	if err := json.Unmarshal(headerBytes, &header); err != nil {
-		return nil, ErrUnauthorized
-	}
-	if header.Alg != "HS256" {
-		return nil, ErrUnauthorized
-	}
-	if header.Typ != "" && header.Typ != "JWT" {
-		return nil, ErrUnauthorized
-	}
-
-	signatureBytes, err := base64.RawURLEncoding.DecodeString(parts[2])
-	if err != nil {
-		return nil, ErrUnauthorized
-	}
-	signingInput := parts[0] + "." + parts[1]
-	expectedSignature := m.sign(signingInput)
-	if !hmac.Equal(signatureBytes, expectedSignature) {
-		return nil, ErrUnauthorized
-	}
-
-	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	token, err := parser.ParseWithClaims(tokenString, &SessionAuthClaims{}, func(t *jwt.Token) (any, error) {
+		return m.secret, nil
+	})
 	if err != nil {
 		return nil, ErrUnauthorized
 	}
 
-	var claims SessionAuthClaims
-	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
+	claims, ok := token.Claims.(*SessionAuthClaims)
+	if !ok || !token.Valid {
 		return nil, ErrUnauthorized
 	}
 
-	now := m.nowFn().UTC()
-	nowUnix := now.Unix()
 	if strings.TrimSpace(claims.SessionCode) == "" {
 		return nil, ErrUnauthorized
 	}
-	if claims.Issuer != m.issuer || claims.Audience != m.audience {
-		return nil, ErrUnauthorized
-	}
-	if claims.IssuedAt == 0 || claims.NotBefore == 0 || claims.ExpiresAt == 0 {
-		return nil, ErrUnauthorized
-	}
-	if claims.ExpiresAt <= nowUnix {
-		return nil, ErrUnauthorized
-	}
-	if claims.NotBefore > nowUnix+int64(sessionAuthClockSkew.Seconds()) {
-		return nil, ErrUnauthorized
-	}
-	if claims.IssuedAt > nowUnix+int64(sessionAuthClockSkew.Seconds()) {
-		return nil, ErrUnauthorized
-	}
-	if claims.ExpiresAt <= claims.IssuedAt {
-		return nil, ErrUnauthorized
-	}
 
-	return &claims, nil
+	return claims, nil
 }
 
 // SetCookie writes the signed JWT as an HttpOnly auth cookie.
@@ -349,18 +281,4 @@ func RequireSessionCodeMatch(w http.ResponseWriter, r *http.Request, sessionCode
 		return false
 	}
 	return true
-}
-
-func (m *SessionAuthManager) sign(input string) []byte {
-	mac := hmac.New(sha256.New, m.secret)
-	_, _ = mac.Write([]byte(input))
-	return mac.Sum(nil)
-}
-
-func randomHex(bytesLen int) (string, error) {
-	buf := make([]byte, bytesLen)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(buf), nil
 }

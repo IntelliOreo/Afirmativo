@@ -15,10 +15,13 @@ import (
 )
 
 const (
-	sessionCompleted    = "completed"
-	reportAIMaxAttempts = 3
-	reportAIRetryDelay  = 500 * time.Millisecond
+	sessionCompleted       = "completed"
+	reportAIMaxAttempts    = 3
+	maxReportJobAttempts   = 5
 )
+
+// reportAIRetryBackoffs matches the interview pipeline's AI retry backoffs.
+var reportAIRetryBackoffs = []time.Duration{3 * time.Second, 7 * time.Second}
 
 type reportGenerationInput struct {
 	summaries           []AreaSummary
@@ -63,6 +66,7 @@ type Service struct {
 	asyncQueue            chan string
 	asyncRuntimeOnce      sync.Once
 	asyncReportRequestIDs sync.Map
+	workerWg              sync.WaitGroup
 }
 
 type Deps struct {
@@ -97,6 +101,15 @@ func NewService(deps Deps, settings Settings) *Service {
 	}
 }
 
+// HealthStats returns async runtime stats for the health endpoint.
+func (s *Service) HealthStats() map[string]any {
+	return map[string]any{
+		"async_report_queue_depth":    len(s.asyncQueue),
+		"async_report_queue_capacity": cap(s.asyncQueue),
+		"async_report_workers":        s.asyncWorkers,
+	}
+}
+
 func (s *Service) StartAsyncRuntime(ctx context.Context) {
 	s.asyncRuntimeOnce.Do(func() {
 		slog.Info("starting async report runtime",
@@ -110,13 +123,21 @@ func (s *Service) StartAsyncRuntime(ctx context.Context) {
 
 		for i := 0; i < s.asyncWorkers; i++ {
 			workerID := i + 1
+			s.workerWg.Add(1)
 			go s.runAsyncWorker(ctx, workerID)
 		}
 		go s.runAsyncRecoveryLoop(ctx)
 	})
 }
 
+// WaitForDrain blocks until all async report workers have exited or the
+// context deadline is reached. Call after cancelling the runtime context.
+func (s *Service) WaitForDrain(ctx context.Context) {
+	shared.WaitForWorkers(ctx, &s.workerWg, "async report")
+}
+
 func (s *Service) runAsyncWorker(ctx context.Context, workerID int) {
+	defer s.workerWg.Done()
 	slog.Debug("async report worker started", "worker_id", workerID)
 	defer slog.Debug("async report worker stopped", "worker_id", workerID)
 
@@ -298,6 +319,16 @@ func (s *Service) processQueuedReport(ctx context.Context, sessionCode string) {
 		"attempts", reportRecord.Attempts,
 	)
 
+	if reportRecord.Attempts > maxReportJobAttempts {
+		slog.Error("async report exceeded max attempts",
+			"request_id", requestID,
+			"session_code", reportRecord.SessionCode,
+			"attempts", reportRecord.Attempts,
+		)
+		s.markReportFailed(ctx, reportRecord.SessionCode, fmt.Errorf("report generation failed after %d attempts", reportRecord.Attempts))
+		return
+	}
+
 	sess, err := s.getCompletedSession(ctx, reportRecord.SessionCode)
 	if err != nil {
 		s.markReportFailed(ctx, reportRecord.SessionCode, err)
@@ -318,11 +349,13 @@ func (s *Service) processQueuedReport(ctx context.Context, sessionCode string) {
 
 	successCtx, successCancel := context.WithTimeout(context.Background(), s.dbTimeout)
 	if err := s.store.MarkReportReady(successCtx, reportResult); err != nil {
+		successCancel()
 		slog.Error("failed to mark report ready", "session_code", reportRecord.SessionCode, "request_id", requestID, "error", err)
-	} else {
-		slog.Info("async report marked ready", "session_code", reportRecord.SessionCode, "request_id", requestID)
+		s.markReportFailed(ctx, reportRecord.SessionCode, fmt.Errorf("persist ready failed: %w", err))
+		return
 	}
 	successCancel()
+	slog.Info("async report marked ready", "session_code", reportRecord.SessionCode, "request_id", requestID)
 }
 
 func (s *Service) markReportFailed(ctx context.Context, sessionCode string, err error) {
@@ -380,6 +413,9 @@ func reportFailureDetails(err error) (string, string) {
 	var retryErr *reportAIRetryExhaustedError
 	if errors.As(err, &retryErr) {
 		return "AI_RETRY_EXHAUSTED", "AI report generation failed after retries"
+	}
+	if strings.Contains(err.Error(), "persist ready failed") {
+		return "PERSIST_READY_FAILED", "Failed to persist report after successful generation"
 	}
 
 	message := strings.TrimSpace(err.Error())
@@ -485,7 +521,11 @@ func (s *Service) generateReportWithRetry(ctx context.Context, sessionCode strin
 			break
 		}
 
-		timer := time.NewTimer(time.Duration(attempt) * reportAIRetryDelay)
+		backoff := reportAIRetryBackoffs[len(reportAIRetryBackoffs)-1]
+		if idx := attempt - 1; idx < len(reportAIRetryBackoffs) {
+			backoff = reportAIRetryBackoffs[idx]
+		}
+		timer := time.NewTimer(backoff)
 		select {
 		case <-ctx.Done():
 			timer.Stop()

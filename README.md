@@ -7,15 +7,15 @@ Afirmativo is a bilingual AI-assisted practice tool for asylum interview prepara
 ```text
 +-------------------+      HTTP / JSON      +--------------------+      SQL      +--------------+
 | frontend/         | <-------------------> | backend/           | <-----------> | PostgreSQL   |
-| Next.js + React   |                       | Go stdlib HTTP     |               |              |
+| Next.js + React   |                       | Go stdlib HTTP     |               | (pgxpool)    |
 +---------+---------+                       +----------+---------+               +--------------+
-          |                                             |
-          | voice token minting                         | AI calls
-          v                                             v
-   +--------------+                             +-------------------+
-   | Deepgram     |                             | Claude / Ollama / |
-   | voice APIs   |                             | Vertex AI         |
-   +--------------+                             +-------------------+
+          |                                            |  |
+          | voice token minting                        |  | OTel traces + metrics
+          v                                            |  v
+   +--------------+                             +------+--------+     +-------------------+
+   | Deepgram     |                             | Claude/Ollama/ |     | GCP Cloud Trace   |
+   | voice APIs   |                             | Vertex AI      |     | + Cloud Monitoring |
+   +--------------+                             +---------------+     +-------------------+
 ```
 
 ## Repo Map
@@ -25,13 +25,12 @@ frontend/     Next.js app and browser-side interview state machine
 backend/      Go API for sessions, interview flow, reports, payments, admin, voice
 database/     Migration CLI, coupon loader, and local DB studio
 doc/          Committed developer docs
-utils/design/ Local design notes and refactor working docs, not the committed source of truth
 ```
 
 ## Main Backend Routes
 
 ```text
-GET  /api/health
+GET  /api/health                            health + pool stats + async queue stats
 POST /api/coupon/validate
 POST /api/session/verify
 GET  /api/session/access
@@ -53,8 +52,9 @@ POST /api/admin/cleanup-db
 start
   -> disclaimer
   -> readiness
-  -> criterion turns
+  -> criterion turns (loop across evaluation areas)
   -> done
+  -> report generation
 ```
 
 Criterion turns are the core of the product:
@@ -68,11 +68,29 @@ Criterion turns are the core of the product:
 ```text
 browser submit
   -> POST /api/interview/answer-async
-  -> backend upserts async job
+  -> backend upserts async job (idempotent by clientRequestId)
   -> worker claims job
   -> interview service processes turn
   -> job marked succeeded / failed / canceled / conflict
   -> browser polls GET /api/interview/answer-jobs/{jobId}
+```
+
+Recovery: stale running jobs are requeued by a periodic recovery loop. Jobs that exceed max retry attempts are marked permanently failed.
+
+## Observability
+
+- **Logging**: structured JSON for GCP Cloud Logging (`LOG_FORMAT=json`) or plain text for local dev
+- **Tracing**: OpenTelemetry spans on HTTP requests and AI calls, exported to GCP Cloud Trace when `OTEL_ENABLED=true`
+- **Health endpoint**: DB ping, async queue depths, DB connection pool stats (`db_pool_*`)
+
+## Graceful Shutdown
+
+```text
+SIGTERM received
+  1. stop accepting new HTTP connections, drain in-flight requests (10s)
+  2. cancel async runtimes (no new jobs can be enqueued)
+  3. wait for in-progress workers to finish current jobs (15s)
+  4. close DB pool, flush OTel
 ```
 
 ## Current Notes

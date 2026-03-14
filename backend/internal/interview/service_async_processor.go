@@ -18,6 +18,9 @@ type asyncAnswerTerminalOutcome struct {
 	errorMessage string
 }
 
+// maxAsyncAnswerJobAttempts is the ceiling before a job is marked as permanently failed.
+const maxAsyncAnswerJobAttempts = 5
+
 func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
 	claimed, ok := s.claimAsyncAnswerJob(ctx, jobID)
 	if !ok {
@@ -25,8 +28,36 @@ func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
 	}
 	defer s.asyncAnswerRequestIDs.Delete(claimed.job.ID)
 
+	// If the job has been retried too many times, mark it as permanently failed.
+	if claimed.job.Attempts > maxAsyncAnswerJobAttempts {
+		slog.Error("async answer job exceeded max attempts",
+			"request_id", claimed.requestID,
+			"job_id", claimed.job.ID,
+			"session_code", claimed.job.SessionCode,
+			"attempts", claimed.job.Attempts,
+		)
+		s.finalizeAsyncAnswerJobTerminal(ctx, claimed, asyncAnswerTerminalOutcome{
+			status:       AsyncAnswerJobFailed,
+			errorCode:    "SESSION_COMPLETE_FAILED",
+			errorMessage: "Session completion failed after maximum retry attempts",
+		}, ErrSessionCompleteFailed)
+		return
+	}
+
 	answerResult, err := s.processTurnForAsyncJob(ctx, claimed.job)
 	if err != nil {
+		// Session completion failure: leave job in "running" so the recovery
+		// loop requeues it and retries on the next cycle.
+		if errors.Is(err, ErrSessionCompleteFailed) {
+			slog.Warn("session completion failed; leaving job running for recovery retry",
+				"request_id", claimed.requestID,
+				"job_id", claimed.job.ID,
+				"session_code", claimed.job.SessionCode,
+				"attempts", claimed.job.Attempts,
+				"error", err,
+			)
+			return
+		}
 		outcome := classifyAsyncAnswerTerminalOutcome(err)
 		s.finalizeAsyncAnswerJobTerminal(ctx, claimed, outcome, err)
 		return
