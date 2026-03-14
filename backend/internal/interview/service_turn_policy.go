@@ -2,7 +2,6 @@ package interview
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -50,21 +49,19 @@ func (s *Service) generateNextAreaOpeningQuestion(
 	)
 
 	slog.Debug("calling AI for next criterion opening question", "session", sessionCode, "area", nextAreaSlug)
-	nextAreaAIResult, err := s.callAIWithRetry(ctx, openingTurnCtx, failureRecorder)
+	selection, err := s.selectOpeningQuestion(ctx, openingTurnCtx, question, failureRecorder)
 	if err != nil {
-		if !errors.Is(err, ErrAIRetryExhausted) {
-			return "", false, err
-		}
-		slog.Warn("AI retries exhausted on next criterion opening question, using fallback", "error", err, "area", nextAreaSlug)
-		return question, true, nil
+		return "", false, err
 	}
 
-	if candidate := strings.TrimSpace(nextAreaAIResult.NextQuestion); candidate != "" {
-		return candidate, false, nil
+	switch selection.fallbackReason {
+	case openingQuestionFallbackRetryExhausted:
+		slog.Warn("AI retries exhausted on next criterion opening question, using fallback", "error", selection.fallbackErr, "area", nextAreaSlug)
+	case openingQuestionFallbackEmptyQuestion:
+		slog.Warn("AI returned empty next criterion opening question, using fallback", "session", sessionCode, "area", nextAreaSlug)
 	}
 
-	slog.Warn("AI returned empty next criterion opening question, using fallback", "session", sessionCode, "area", nextAreaSlug)
-	return question, true, nil
+	return selection.questionText, selection.substituted, nil
 }
 
 func (s *Service) projectAreasForNextAreaOpening(

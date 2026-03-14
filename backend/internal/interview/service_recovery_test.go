@@ -562,15 +562,6 @@ func TestLoadReadinessOpeningInputs_BuildsOpeningTurnContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadReadinessOpeningInputs() error = %v", err)
 	}
-	if len(inputs.answers) != 1 {
-		t.Fatalf("answers length = %d, want 1", len(inputs.answers))
-	}
-	if inputs.areaCfg.Slug != "protected_ground" {
-		t.Fatalf("areaCfg.slug = %q, want protected_ground", inputs.areaCfg.Slug)
-	}
-	if inputs.areaIndex != 0 {
-		t.Fatalf("areaIndex = %d, want 0", inputs.areaIndex)
-	}
 	if inputs.fallbackQuestion != "Fallback protected ground question" {
 		t.Fatalf("fallbackQuestion = %q, want fallback question", inputs.fallbackQuestion)
 	}
@@ -582,6 +573,15 @@ func TestLoadReadinessOpeningInputs_BuildsOpeningTurnContext(t *testing.T) {
 	}
 	if inputs.turnCtx.CurrentAreaSlug != "protected_ground" {
 		t.Fatalf("turnCtx.currentAreaSlug = %q, want protected_ground", inputs.turnCtx.CurrentAreaSlug)
+	}
+	if inputs.turnCtx.CurrentAreaID != 1 {
+		t.Fatalf("turnCtx.currentAreaID = %d, want 1", inputs.turnCtx.CurrentAreaID)
+	}
+	if inputs.turnCtx.CurrentAreaIndex != 0 {
+		t.Fatalf("turnCtx.currentAreaIndex = %d, want 0", inputs.turnCtx.CurrentAreaIndex)
+	}
+	if len(inputs.turnCtx.HistoryTurns) != 1 {
+		t.Fatalf("turnCtx.historyTurns length = %d, want 1", len(inputs.turnCtx.HistoryTurns))
 	}
 	if inputs.turnCtx.HistoryTurns[0].AnswerText != "Prior answer" {
 		t.Fatalf("turnCtx.historyTurns[0].answerText = %q, want Prior answer", inputs.turnCtx.HistoryTurns[0].AnswerText)

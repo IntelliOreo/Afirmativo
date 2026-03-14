@@ -2,18 +2,11 @@ package interview
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
-
-	"github.com/afirmativo/backend/internal/config"
 )
 
 type readinessOpeningInputs struct {
-	answers          []Answer
-	areaCfg          config.AreaConfig
-	areaIndex        int
 	turnCtx          *AITurnContext
 	fallbackQuestion string
 }
@@ -37,9 +30,6 @@ func (s *Service) loadReadinessOpeningInputs(
 
 	areaCfg, areaIndex := s.findAreaConfig(snapshot.currentArea.Area)
 	return &readinessOpeningInputs{
-		answers:          answers,
-		areaCfg:          areaCfg,
-		areaIndex:        areaIndex,
 		fallbackQuestion: s.fallbackQuestionForArea(snapshot.currentArea.Area),
 		turnCtx: s.buildAITurnContext(
 			*snapshot.currentArea,
@@ -65,28 +55,22 @@ func (s *Service) selectReadinessOpeningQuestion(
 ) (*readinessOpeningSelection, error) {
 	slog.Debug("calling AI for first criterion question", "session", sessionCode, "area", snapshot.currentArea.Area)
 
-	selection := &readinessOpeningSelection{
-		questionText: inputs.fallbackQuestion,
-	}
-
-	aiResult, err := s.callAIWithRetry(ctx, inputs.turnCtx, snapshot.failureRecorder)
+	selection, err := s.selectOpeningQuestion(ctx, inputs.turnCtx, inputs.fallbackQuestion, snapshot.failureRecorder)
 	if err != nil {
-		if !errors.Is(err, ErrAIRetryExhausted) {
-			return nil, err
-		}
-		selection.substituted = true
-		slog.Warn("AI retries exhausted on first criterion question, using fallback", "error", err, "area", snapshot.currentArea.Area)
-		return selection, nil
+		return nil, err
 	}
 
-	if candidate := strings.TrimSpace(aiResult.NextQuestion); candidate != "" {
-		selection.questionText = candidate
-		return selection, nil
+	switch selection.fallbackReason {
+	case openingQuestionFallbackRetryExhausted:
+		slog.Warn("AI retries exhausted on first criterion question, using fallback", "error", selection.fallbackErr, "area", snapshot.currentArea.Area)
+	case openingQuestionFallbackEmptyQuestion:
+		slog.Warn("AI returned empty first criterion question, using fallback", "session", sessionCode, "area", snapshot.currentArea.Area)
 	}
 
-	selection.substituted = true
-	slog.Warn("AI returned empty first criterion question, using fallback", "session", sessionCode, "area", snapshot.currentArea.Area)
-	return selection, nil
+	return &readinessOpeningSelection{
+		questionText: selection.questionText,
+		substituted:  selection.substituted,
+	}, nil
 }
 
 func (s *Service) buildReadinessAdvancePlan(
