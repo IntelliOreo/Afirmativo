@@ -80,6 +80,14 @@ function InterviewPageContent() {
   const error = state.phase === "error" ? state.message : "";
   const errorCode = state.phase === "error" ? state.code ?? "" : "";
 
+  const handleTextChange = useCallback((value: string) => {
+    dispatch({ type: "TEXT_CHANGED", payload: { value } });
+  }, [dispatch]);
+
+  const handleInputModeChange = useCallback((mode: "text" | "voice") => {
+    dispatch({ type: "INPUT_MODE_CHANGED", payload: { mode } });
+  }, [dispatch]);
+
   const [hasMicOptIn, setHasMicOptIn] = useState(false);
   const handleMicOptIn = useCallback(() => setHasMicOptIn(true), []);
 
@@ -235,7 +243,8 @@ function InterviewPageContent() {
                     secondsLeft={secondsLeft}
                     hasMicOptIn={hasMicOptIn}
                     onMicOptIn={handleMicOptIn}
-                    dispatch={dispatch}
+                    onTextChange={handleTextChange}
+                    onInputModeChange={handleInputModeChange}
                     requestSubmit={requestSubmit}
                   />
 

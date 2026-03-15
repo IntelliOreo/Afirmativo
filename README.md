@@ -110,6 +110,9 @@ SIGTERM received
 
 - Frontend interview page: `frontend/src/app/interview/[code]/page.tsx`
 - Frontend state machine: `frontend/src/app/interview/[code]/hooks/useInterviewMachine.ts`
+- Frontend active screen orchestrator: `frontend/src/app/interview/[code]/components/InterviewActiveScreen.tsx`
+- Frontend answer timeout hook: `frontend/src/app/interview/[code]/hooks/useAnswerTimeout.ts`
+- Frontend answer draft hook: `frontend/src/app/interview/[code]/hooks/useAnswerDraft.ts`
 - Backend composition root: `backend/cmd/server/main.go`
 - Backend interview service shell: `backend/internal/interview/service.go`
 - Backend async pipeline: `backend/internal/interview/service_async_api.go`, `service_async_runtime.go`, `service_async_processor.go`

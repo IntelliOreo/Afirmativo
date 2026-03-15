@@ -96,6 +96,9 @@ Primary files:
 - `frontend/src/app/interview/[code]/page.tsx`
 - `frontend/src/app/interview/[code]/hooks/useInterviewMachine.ts`
 - `frontend/src/app/interview/[code]/hooks/useAsyncAnswerPolling.ts`
+- `frontend/src/app/interview/[code]/hooks/useAnswerTimeout.ts`
+- `frontend/src/app/interview/[code]/hooks/useAnswerDraft.ts`
+- `frontend/src/app/interview/[code]/components/InterviewActiveScreen.tsx`
 
 The interview UI is driven by a reducer-based finite state machine.
 
@@ -111,7 +114,118 @@ loading -> error
 submitting -> error
 ```
 
-Page-level lifecycle:
+### Component and hook ownership
+
+Each concern lives in exactly one place. `page.tsx` owns the reducer and creates typed callbacks; child components and hooks never touch `InterviewAction` directly.
+
+```text
+page.tsx
+  |
+  |  useInterviewMachine        -- reducer, bootstrap, async polling
+  |    returns: state, dispatch, requestSubmit
+  |
+  |  creates typed callbacks:
+  |    handleTextChange      --> dispatch(TEXT_CHANGED)
+  |    handleInputModeChange --> dispatch(INPUT_MODE_CHANGED)
+  |
+  +---> InterviewActiveScreen
+          |
+          |  props: onTextChange, onInputModeChange, requestSubmit
+          |  (no dispatch, no InterviewAction import)
+          |
+          +---> useVoiceRecorder          -- mic lifecycle, recording, transcription
+          +---> useMicrophoneDialogState   -- mic opt-in dialog
+          +---> useAnswerTimeout           -- timeout state machine (5 effects, 4 refs)
+          +---> useAnswerDraft             -- localStorage draft persistence (2 effects, 1 ref)
+          |
+          +---> InputModeSwitch
+          +---> TextAnswerPanel
+          +---> VoiceAnswerSection
+          +---> TimeoutDialog
+          +---> MicrophoneWarmupDialog
+```
+
+### Dispatch boundary
+
+`dispatch` is only used inside two files. Everything else receives narrow typed callbacks.
+
+```text
+                  +-------------------+
+                  |   page.tsx        |
+                  |                   |
+                  |  dispatch --------+---> handleTextChange(value)
+                  |  (InterviewAction)|     handleInputModeChange(mode)
+                  +-------------------+
+                          |
+              +-----------+-----------+
+              |                       |
+     onTextChange(v)        onInputModeChange(m)
+              |                       |
+     +--------v-----------+-----------v--------+
+     | InterviewActiveScreen                   |
+     |   uses onTextChange / onInputModeChange |
+     |   passes same to useAnswerDraft         |
+     |   NO dispatch, NO InterviewAction       |
+     +----+------------------------------------+
+          |
+     +----v--------------+
+     | useAnswerDraft     |
+     |   onTextChange     |   (restore saved draft)
+     |   onInputModeChange|   (restore voice_review mode)
+     +--------------------+
+```
+
+### Answer timeout state machine
+
+The timeout flow was the most implicit part of the old code -- 3 effects, 4 refs, and a pure function spread across InterviewActiveScreen. It is now encapsulated in `useAnswerTimeout`.
+
+```text
+                        answerSecondsLeft
+                              |
+              +---------------v----------------+
+              |        useAnswerTimeout         |
+              |                                 |
+              |  tracks: timedOutTurnRef         |
+              |          timeoutReviewTurnRef    |
+              |          liveExpiredTurnRef      |
+              |          previousAnswerWindowRef |
+              |                                 |
+              |  detects >0 --> <=0 transition  |
+              +---+----------+----------+-------+
+                  |          |          |
+                  v          v          v
+           show timeout   auto-stop   auto-review
+             dialog       recording   voice audio
+                  |                     |
+                  v                     v
+           handleTimeoutSubmit   onAutoReviewVoice
+              |                     |
+              v                     v
+         requestSubmit        reviewVoiceRecording
+                               --> onTextChange
+```
+
+### Answer draft persistence
+
+`useAnswerDraft` handles saving and restoring in-progress answers across page reloads.
+
+```text
+question mount                         textAnswer changes
+     |                                       |
+     v                                       v
+clearStale(code, turnId)              text empty?
+     |                                  +--yes--> clear(code, turnId)
+     v                                  +--no---> write(code, draft)
+read(code, turnId)
+     |
+     +-- draft found?
+     |     +--yes--> onTextChange(draftText)
+     |     |         source === "voice_review"?
+     |     |           +--yes--> onInputModeChange("voice")
+     |     +--no---> (noop)
+```
+
+### Page-level lifecycle
 
 ```text
 page load
@@ -127,7 +241,8 @@ page load
 The important browser-side safety properties are:
 
 - reducer stays pure
-- side effects live in hooks
+- side effects live in dedicated hooks, each owning one concern
+- `InterviewAction` never leaks past `page.tsx` -- children use typed callbacks
 - pending answers are persisted before network submission
 - boot-time recovery can resume or re-submit safely
 
@@ -549,11 +664,18 @@ This is still the densest backend path, but it is now more explicitly split than
 
 ## 14. Recovery Model
 
-Frontend recovery relies on local storage.
+Frontend recovery relies on two local storage mechanisms:
+
+- **pendingAnswerStore**: persists in-flight async job state so polling can resume after reload
+- **answerDraftStore**: persists the current text/voice draft so in-progress answers survive reload (managed by `useAnswerDraft` hook)
 
 ```text
+during active question
+  -> useAnswerDraft writes draft to answerDraftStore on every change
+  -> on reload, useAnswerDraft restores draft text and input mode
+
 before submit
-  -> write pending answer locally
+  -> write pending answer to pendingAnswerStore
 
 on reload
   -> if job id exists, poll existing job
@@ -804,6 +926,9 @@ If you are onboarding into the codebase, this order gives the fastest useful mod
 10. `backend/internal/interview/service_finish.go`
 11. `backend/internal/report/service.go`
 12. `frontend/src/app/interview/[code]/hooks/useInterviewMachine.ts`
+13. `frontend/src/app/interview/[code]/components/InterviewActiveScreen.tsx`
+14. `frontend/src/app/interview/[code]/hooks/useAnswerTimeout.ts`
+15. `frontend/src/app/interview/[code]/hooks/useAnswerDraft.ts`
 
 ## 22. Quick Flow Cheatsheet
 

@@ -1,21 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { Dispatch } from "react";
+import { useCallback, useEffect } from "react";
 import type { Lang } from "@/lib/language";
-import * as answerDraftStore from "@/lib/storage/answerDraftStore";
 import { TEXT_ANSWER_MAX_CHARS } from "../constants";
+import { useAnswerDraft } from "../hooks/useAnswerDraft";
+import { useAnswerTimeout } from "../hooks/useAnswerTimeout";
 import { useMicrophoneDialogState } from "../hooks/useMicrophoneDialogState";
 import { useVoiceRecorder } from "../hooks/useVoiceRecorder";
-import { getTimeoutDialogState } from "../lib/getTimeoutDialogState";
 import {
   getAnswerTimerMessage,
   getInterviewMessages,
   getVoiceFeedbackMessage,
 } from "../messages/interviewMessages";
 import type { Question } from "../models";
-import { getQuestionText } from "../models";
-import type { InterviewAction } from "../hooks/useInterviewMachine";
 import { formatClock, getVoiceCapabilities } from "../utils";
 import type { InputMode } from "../viewTypes";
 import { InputModeSwitch } from "./InputModeSwitch";
@@ -36,7 +33,8 @@ interface InterviewActiveScreenProps {
   secondsLeft: number;
   hasMicOptIn: boolean;
   onMicOptIn: () => void;
-  dispatch: Dispatch<InterviewAction>;
+  onTextChange: (value: string) => void;
+  onInputModeChange: (mode: InputMode) => void;
   requestSubmit: (answerText: string) => void;
 }
 
@@ -58,15 +56,10 @@ export function InterviewActiveScreen({
   secondsLeft: _secondsLeft,
   hasMicOptIn,
   onMicOptIn,
-  dispatch,
+  onTextChange,
+  onInputModeChange,
   requestSubmit,
 }: InterviewActiveScreenProps) {
-  const [showTimeoutDialog, setShowTimeoutDialog] = useState(false);
-  const restoredDraftTurnRef = useRef("");
-  const timedOutTurnRef = useRef("");
-  const timeoutReviewTurnRef = useRef("");
-  const liveExpiredTurnRef = useRef("");
-  const previousAnswerWindowRef = useRef<{ turnId: string; answerSecondsLeft: number } | null>(null);
   const shouldKeepMicWarm = hasMicOptIn && (phase === "active" || phase === "submitting");
 
   const {
@@ -109,53 +102,47 @@ export function InterviewActiveScreen({
     onMicOptIn,
   });
 
+  const handleReviewVoiceAnswer = useCallback(async () => {
+    if (phase !== "active") return;
+    const transcript = await reviewVoiceRecording(code);
+    if (!transcript) return;
+    onTextChange(transcript);
+  }, [code, onTextChange, phase, reviewVoiceRecording]);
+
+  const {
+    shouldShowTimeoutDialog,
+    isTimeoutDialogTranscribing,
+    isTimeoutDialogInterrupted,
+    handleTimeoutSubmit,
+  } = useAnswerTimeout({
+    phase,
+    currentQuestion,
+    isTimerExpired,
+    answerSecondsLeft,
+    inputMode,
+    voiceRecorderState,
+    textAnswer,
+    completeVoiceRecording,
+    onAutoReviewVoice: handleReviewVoiceAnswer,
+    requestSubmit,
+  });
+
+  useAnswerDraft({
+    code,
+    currentQuestion,
+    textAnswer,
+    inputMode,
+    voiceRecorderState,
+    lang,
+    phase,
+    onTextChange,
+    onInputModeChange,
+  });
+
+  // Discard voice recording on question change
   useEffect(() => {
-    restoredDraftTurnRef.current = "";
     discardVoiceRecording();
   }, [currentQuestion.turnId, discardVoiceRecording]);
-
-  useEffect(() => {
-    setShowTimeoutDialog(false);
-    timedOutTurnRef.current = "";
-    timeoutReviewTurnRef.current = "";
-    liveExpiredTurnRef.current = "";
-    previousAnswerWindowRef.current = null;
-  }, [currentQuestion.turnId]);
-
-  useEffect(() => {
-    if (phase !== "active") return;
-
-    answerDraftStore.clearStale(code, currentQuestion.turnId);
-    if (restoredDraftTurnRef.current === currentQuestion.turnId) return;
-    restoredDraftTurnRef.current = currentQuestion.turnId;
-
-    const savedDraft = answerDraftStore.read(code, currentQuestion.turnId);
-    if (!savedDraft) return;
-
-    dispatch({ type: "TEXT_CHANGED", payload: { value: savedDraft.draftText } });
-    if (savedDraft.source === "voice_review") {
-      dispatch({ type: "INPUT_MODE_CHANGED", payload: { mode: "voice" } });
-    }
-  }, [code, currentQuestion.turnId, dispatch, phase]);
-
-  useEffect(() => {
-    if (phase !== "active") return;
-
-    if (!textAnswer.trim()) {
-      answerDraftStore.clear(code, currentQuestion.turnId);
-      return;
-    }
-
-    answerDraftStore.write(code, {
-      turnId: currentQuestion.turnId,
-      questionText: getQuestionText(currentQuestion, lang),
-      draftText: textAnswer,
-      source: inputMode === "voice" && voiceRecorderState === "review_ready"
-        ? "voice_review"
-        : "text",
-      updatedAt: Date.now(),
-    });
-  }, [code, currentQuestion, inputMode, lang, phase, textAnswer, voiceRecorderState]);
 
   const handleInputModeSwitch = useCallback((nextMode: InputMode) => {
     if (phase !== "active" || nextMode === inputMode) return;
@@ -178,9 +165,9 @@ export function InterviewActiveScreen({
       if (!confirmed) return;
       discardVoiceRecording();
     }
-    dispatch({ type: "INPUT_MODE_CHANGED", payload: { mode: nextMode } });
+    onInputModeChange(nextMode);
   }, [
-    dispatch,
+    onInputModeChange,
     discardVoiceRecording,
     inputMode,
     lang,
@@ -195,26 +182,14 @@ export function InterviewActiveScreen({
     requestSubmit(textAnswer);
   }, [phase, requestSubmit, textAnswer]);
 
-  const handleReviewVoiceAnswer = useCallback(async () => {
-    if (phase !== "active") return;
-    const transcript = await reviewVoiceRecording(code);
-    if (!transcript) return;
-    dispatch({ type: "TEXT_CHANGED", payload: { value: transcript } });
-  }, [code, dispatch, phase, reviewVoiceRecording]);
-
   const handleSubmitReviewedVoiceAnswer = useCallback(() => {
     if (phase !== "active" || !textAnswer.trim()) return;
     requestSubmit(textAnswer);
   }, [phase, requestSubmit, textAnswer]);
 
-  const handleTimeoutSubmit = useCallback(() => {
-    if (phase !== "active") return;
-    requestSubmit(textAnswer);
-  }, [phase, requestSubmit, textAnswer]);
-
   const handleTextAnswerChange = useCallback((nextValue: string) => {
-    dispatch({ type: "TEXT_CHANGED", payload: { value: nextValue } });
-  }, [dispatch]);
+    onTextChange(nextValue);
+  }, [onTextChange]);
 
   const handleSelectTextInput = useCallback(() => {
     handleInputModeSwitch("text");
@@ -223,69 +198,6 @@ export function InterviewActiveScreen({
   const handleSelectVoiceInput = useCallback(() => {
     handleInputModeSwitch("voice");
   }, [handleInputModeSwitch]);
-
-  useEffect(() => {
-    if (phase !== "active" || currentQuestion.kind !== "criterion") {
-      previousAnswerWindowRef.current = null;
-      return;
-    }
-
-    const previous = previousAnswerWindowRef.current;
-    if (
-      previous
-      && previous.turnId === currentQuestion.turnId
-      && previous.answerSecondsLeft > 0
-      && answerSecondsLeft <= 0
-    ) {
-      liveExpiredTurnRef.current = currentQuestion.turnId;
-    }
-
-    previousAnswerWindowRef.current = {
-      turnId: currentQuestion.turnId,
-      answerSecondsLeft,
-    };
-  }, [answerSecondsLeft, currentQuestion, phase]);
-
-  useEffect(() => {
-    if (!isTimerExpired) return;
-    if (voiceRecorderState === "recording" || voiceRecorderState === "paused") {
-      completeVoiceRecording();
-    }
-  }, [completeVoiceRecording, isTimerExpired, voiceRecorderState]);
-
-  useEffect(() => {
-    if (phase !== "active" || currentQuestion.kind !== "criterion") {
-      setShowTimeoutDialog(false);
-      return;
-    }
-    if (!isTimerExpired) return;
-    if (timedOutTurnRef.current === currentQuestion.turnId) return;
-    timedOutTurnRef.current = currentQuestion.turnId;
-    setShowTimeoutDialog(true);
-  }, [currentQuestion, isTimerExpired, phase]);
-
-  const {
-    shouldShowTimeoutDialog,
-    shouldAutoReviewTimedOutVoice,
-    isTimeoutDialogTranscribing,
-    isTimeoutDialogInterrupted,
-  } = getTimeoutDialogState({
-    showTimeoutDialog,
-    phase,
-    currentQuestion,
-    isTimerExpired,
-    inputMode,
-    voiceRecorderState,
-    textAnswer,
-    liveExpiredTurnId: liveExpiredTurnRef.current,
-    timeoutReviewTurnId: timeoutReviewTurnRef.current,
-  });
-
-  useEffect(() => {
-    if (!shouldAutoReviewTimedOutVoice) return;
-    timeoutReviewTurnRef.current = currentQuestion.turnId;
-    void handleReviewVoiceAnswer();
-  }, [currentQuestion.turnId, handleReviewVoiceAnswer, shouldAutoReviewTimedOutVoice]);
 
   const canSwitchModes = getVoiceCapabilities({
     phase,
