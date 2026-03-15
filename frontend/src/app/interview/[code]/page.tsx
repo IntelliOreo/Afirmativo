@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { NavHeader } from "@components/NavHeader";
@@ -79,6 +79,9 @@ function InterviewPageContent() {
   const completionSource = state.phase === "done" ? state.completionSource : "finished";
   const error = state.phase === "error" ? state.message : "";
   const errorCode = state.phase === "error" ? state.code ?? "" : "";
+
+  const [hasMicOptIn, setHasMicOptIn] = useState(false);
+  const handleMicOptIn = useCallback(() => setHasMicOptIn(true), []);
 
   const {
     disclaimerScrollRef,
@@ -208,37 +211,7 @@ function InterviewPageContent() {
                 />
               )}
 
-              {isSubmittingInQuestionFlow ? (
-                <>
-                  {!isConsentQuestion && (
-                    <InterviewActiveScreen
-                      lang={lang}
-                      code={code}
-                      phase="submitting"
-                      currentQuestion={currentQuestion}
-                      textAnswer={textAnswer}
-                      inputMode={inputMode}
-                      answerSecondsLeft={answerSecondsLeft}
-                      isTimerExpired={isTimerExpired}
-                      secondsLeft={secondsLeft}
-                      dispatch={dispatch}
-                      requestSubmit={requestSubmit}
-                    />
-                  )}
-
-                  <Card className="mb-6 text-center py-10 px-4">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-primary">
-                      {t.page.processingAnswer}
-                    </p>
-                    {questionWaitStatus && (
-                      <p className="mt-3 text-base sm:text-lg text-primary-dark leading-snug">
-                        {questionWaitStatus}
-                      </p>
-                    )}
-                    <div className="mt-6 inline-block h-8 w-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
-                  </Card>
-                </>
-              ) : isConsentQuestion ? (
+              {isConsentQuestion ? (
                 <DisclaimerConsentPanel
                   lang={lang}
                   consentBlocks={consentBlocks}
@@ -249,19 +222,37 @@ function InterviewPageContent() {
                   onAgreeAndContinue={handleAgreeAndContinue}
                 />
               ) : (
-                <InterviewActiveScreen
-                  lang={lang}
-                  code={code}
-                  phase="active"
-                  currentQuestion={currentQuestion}
-                  textAnswer={textAnswer}
-                  inputMode={inputMode}
-                  answerSecondsLeft={answerSecondsLeft}
-                  isTimerExpired={isTimerExpired}
-                  secondsLeft={secondsLeft}
-                  dispatch={dispatch}
-                  requestSubmit={requestSubmit}
-                />
+                <>
+                  <InterviewActiveScreen
+                    lang={lang}
+                    code={code}
+                    phase={isSubmittingInQuestionFlow ? "submitting" : "active"}
+                    currentQuestion={currentQuestion}
+                    textAnswer={textAnswer}
+                    inputMode={inputMode}
+                    answerSecondsLeft={answerSecondsLeft}
+                    isTimerExpired={isTimerExpired}
+                    secondsLeft={secondsLeft}
+                    hasMicOptIn={hasMicOptIn}
+                    onMicOptIn={handleMicOptIn}
+                    dispatch={dispatch}
+                    requestSubmit={requestSubmit}
+                  />
+
+                  {isSubmittingInQuestionFlow && (
+                    <Card className="mb-6 text-center py-10 px-4">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-primary">
+                        {t.page.processingAnswer}
+                      </p>
+                      {questionWaitStatus && (
+                        <p className="mt-3 text-base sm:text-lg text-primary-dark leading-snug">
+                          {questionWaitStatus}
+                        </p>
+                      )}
+                      <div className="mt-6 inline-block h-8 w-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+                    </Card>
+                  )}
+                </>
               )}
             </>
           )}

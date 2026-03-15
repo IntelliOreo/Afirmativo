@@ -34,6 +34,8 @@ interface InterviewActiveScreenProps {
   answerSecondsLeft: number;
   isTimerExpired: boolean;
   secondsLeft: number;
+  hasMicOptIn: boolean;
+  onMicOptIn: () => void;
   dispatch: Dispatch<InterviewAction>;
   requestSubmit: (answerText: string) => void;
 }
@@ -54,10 +56,11 @@ export function InterviewActiveScreen({
   answerSecondsLeft,
   isTimerExpired,
   secondsLeft: _secondsLeft,
+  hasMicOptIn,
+  onMicOptIn,
   dispatch,
   requestSubmit,
 }: InterviewActiveScreenProps) {
-  const [hasMicOptIn, setHasMicOptIn] = useState(false);
   const [showTimeoutDialog, setShowTimeoutDialog] = useState(false);
   const restoredDraftTurnRef = useRef("");
   const timedOutTurnRef = useRef("");
@@ -103,9 +106,7 @@ export function InterviewActiveScreen({
     currentQuestion,
     phase,
     hasMicOptIn,
-    onMicOptIn: () => {
-      setHasMicOptIn(true);
-    },
+    onMicOptIn,
   });
 
   useEffect(() => {

@@ -40,7 +40,7 @@ export function getTimeoutDialogState({
     textAnswer.trim().length > 0
     || hasRecoverableVoiceState;
   const shouldShowTimeoutDialog =
-    showTimeoutDialog
+    (showTimeoutDialog || (isVoiceMode && voiceRecorderState === "review_ready"))
     && phase === "active"
     && currentQuestion.kind === "criterion"
     && isTimerExpired;
