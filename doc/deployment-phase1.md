@@ -43,20 +43,30 @@ Local development and local container validation use:
 - `API_PROXY_TARGET=http://backend:8080` or similar for container-to-container tests
 
 The browser should never need to know that backend origin directly.
+In GCP, do not set `API_PROXY_TARGET`; the load balancer should route `/api/*`.
 
 ## Backend runtime contract
 
 `backend/internal/config/config.go` is the source of truth.
 
-### Required secrets
+### Required secrets and startup-critical values
 
 - `DATABASE_URL`
 - `JWT_SECRET`
+- `AI_AREA_CONFIG`
 - `AI_API_KEY` when `AI_PROVIDER=claude`
 - `VOICE_AI_API_KEY`
 - `VERTEX_AI_API_KEY` when `AI_PROVIDER=vertex` and `VERTEX_AI_AUTH_MODE=api_key`
 
-### Required plain env vars in production
+### Prompt and content env vars commonly set explicitly in production
+
+- `AI_INTERVIEW_SYSTEM_PROMPT`
+- `AI_REPORT_PROMPT`
+- `AI_INTERVIEW_PROMPT_LAST_QUESTION`
+- `AI_INTERVIEW_PROMPT_CLOSING`
+- `AI_INTERVIEW_PROMPT_OPENING_TURN`
+
+### Plain env vars to set explicitly in production
 
 - `FRONTEND_URL`
   - must match the public app origin used by the browser
@@ -64,6 +74,7 @@ The browser should never need to know that backend origin directly.
 - `AI_PROVIDER`
 - `AI_MODEL`
 - `LOG_LEVEL`
+- `LOG_FORMAT`
 
 ### Provider-specific plain env vars
 
@@ -73,6 +84,9 @@ The browser should never need to know that backend origin directly.
   - `VERTEX_AI_AUTH_MODE`
   - `VERTEX_AI_PROJECT_ID`
   - optional `VERTEX_AI_LOCATION`
+- OTel runtime
+  - `OTEL_ENABLED`
+  - `GCP_PROJECT_ID` when `OTEL_ENABLED=true`
 - Voice runtime
   - `VOICE_AI_BASE_URL`
   - `VOICE_AI_MODEL`

@@ -33,8 +33,8 @@ Core product constraints:
 At a high level:
 
 - `frontend/` owns the interview UI, client-side state machine, polling, local persistence, and voice UX
-- `backend/` owns session auth, interview state, async workers, report generation, voice token minting, payment stubs, and admin cleanup
-- `database/` owns schema migration tooling and a local DB studio
+- `backend/` owns session auth, interview state, async workers, report generation, voice token minting, payment stubs, and config-gated admin cleanup
+- `utils/database/` owns schema migration tooling and a local DB studio
 
 ## 3. Repo Layout
 
@@ -52,10 +52,10 @@ backend/
   internal/report/               report generation and retrieval
   internal/payment/              stable 501 payment handlers
   internal/voice/                Deepgram token flow
-  internal/admin/                gated cleanup tools
+  internal/admin/                config-gated cleanup tools
   internal/shared/               middleware, auth, health, rate limiting, OTel, logging
 
-database/
+utils/database/
   migrations/                    schema history
   main.go                        migration CLI, coupon loader, DB studio
 

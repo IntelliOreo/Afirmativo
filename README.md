@@ -23,7 +23,7 @@ Afirmativo is a bilingual AI-assisted practice tool for asylum interview prepara
 ```text
 frontend/     Next.js app and browser-side interview state machine
 backend/      Go API for sessions, interview flow, reports, payments, admin, voice
-database/     Migration CLI, coupon loader, and local DB studio
+utils/database/     Migration CLI, coupon loader, and local DB studio
 doc/          Committed developer docs
 ```
 

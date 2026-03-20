@@ -6,12 +6,11 @@ This document is the current local development guide for this repository.
 
 - `frontend/`: Next.js app for the bilingual interview flow
 - `backend/`: Go API for sessions, interview state, reports, payments, admin cleanup, and voice token minting
-- `database/`: Go tooling for SQL migrations, coupon loading, and the local Postgres Studio UI
-- `mockThirdpartyAPIs/`: local mock AI service for development and testing
-- `design/`: product specs, technical notes, and refactoring docs
-- `infra/`: Terraform for Cloud Run, networking, and secrets (future/planned)
+- `utils/database/`: Go tooling for SQL migrations, coupon loading, and the local Postgres Studio UI
+- `utils/mockThirdpartyAPIs/`: local mock AI service for development and testing
+- `utils/design/`: product specs, technical notes, and refactoring docs
+- `utils/terraform/`: Terraform for Cloud Run, networking, and secrets
 - `doc/`: developer documentation
-- `docker-compose.yml`: local dev only (future/planned)
 - `.github/workflows/`: CI/CD pipeline (future/planned)
 - `dev-all.sh`: helper script that starts frontend, backend, the mock server, and the database UI together
 
@@ -29,16 +28,19 @@ This document is the current local development guide for this repository.
 
 - Frontend:
   - Create `frontend/.env.local`
-  - Set `NEXT_PUBLIC_API_URL=http://localhost:8080`
+  - Set `API_PROXY_TARGET=http://localhost:8080`
   - `frontend/.env.example` exists if you want a template
 - Backend:
   - Create `backend/.env` from `backend/.env.example`
   - The backend loads `.env` automatically in local development
 - Database CLI:
-  - Create `database/.env`
+  - Create `utils/database/.env`
   - It must include `DATABASE_URL_DIRECT`
 
 Important:
+- The browser-facing app now calls same-origin `/api/*`
+- Locally, the frontend proxies `/api/*` to `API_PROXY_TARGET`
+- In GCP, do not set `API_PROXY_TARGET`; the load balancer should own `/api/*`
 - The backend reads `DATABASE_URL`
 - The database migration CLI reads `DATABASE_URL_DIRECT`
 - They are not interchangeable
@@ -62,7 +64,7 @@ If that container already exists:
 docker start test-postgres
 ```
 
-If you are pointing `database/.env` at that container, use:
+If you are pointing `utils/database/.env` at that container, use:
 
 ```env
 DATABASE_URL_DIRECT=postgres://postgres:password@localhost:5432/postgres?sslmode=disable
@@ -71,7 +73,7 @@ DATABASE_URL_DIRECT=postgres://postgres:password@localhost:5432/postgres?sslmode
 ### 3. Apply migrations
 
 ```bash
-cd database
+cd utils/database
 go run main.go up
 go run main.go version
 ```
@@ -81,7 +83,7 @@ go run main.go version
 Option A: mock AI server
 
 ```bash
-cd mockThirdpartyAPIs
+cd utils/mockThirdpartyAPIs
 go run .
 ```
 
@@ -124,6 +126,7 @@ Once everything is running:
 
 - Frontend: `http://localhost:3000`
 - Backend health check: `http://localhost:8080/api/health`
+- Browser health check through the frontend proxy: `http://localhost:3000/api/health`
 - Postgres Studio: `http://localhost:3010`
 - Mock AI server: `http://localhost:9090/api`
 - Ollama default base URL: `http://localhost:11434`
@@ -172,7 +175,7 @@ sqlc generate
 ### Database
 
 ```bash
-cd database
+cd utils/database
 go run main.go up
 go run main.go down
 go run main.go down all
@@ -184,26 +187,26 @@ go run main.go studio
 
 ### Local Postgres Studio
 
-The `database` module also includes a local read-only table browser for the database pointed to by `DATABASE_URL_DIRECT`.
+The `utils/database` module also includes a local read-only table browser for the database pointed to by `DATABASE_URL_DIRECT`.
 
 Start it with:
 
 ```bash
-cd database
+cd utils/database
 go run main.go studio
 ```
 
 Defaults:
 
 - Binds to `127.0.0.1:3010`
-- Reads the same `database/.env` file and `DATABASE_URL_DIRECT` as the migration CLI
+- Reads the same `utils/database/.env` file and `DATABASE_URL_DIRECT` as the migration CLI
 - Shows all non-system schemas and tables, lets you browse table data, add dropdown-based filters, and inspect the generated SQL preview
 - Allows deleting selected rows from the current filtered page for tables that have a primary key; tables without a primary key remain browse-only
 
 Optional:
 
 ```bash
-cd database
+cd utils/database
 STUDIO_ADDR=127.0.0.1:3010 go run main.go studio
 go run main.go studio --addr 127.0.0.1:3010
 ```
@@ -230,7 +233,7 @@ go run main.go load_coupon --prefix TEST --count 5 --max-uses 100 --discount-pct
 Full example with every supported flag:
 
 ```bash
-cd database
+cd utils/database
 go run main.go load_coupon --prefix BETA --count 25 --max-uses 1 --discount-pct 100 --source beta_testers --token-length 8
 ```
 
@@ -245,7 +248,7 @@ This is the section to use when you want to wipe local Postgres state during dev
 If you want to clear the database and rebuild it with the current migrations:
 
 ```bash
-cd database
+cd utils/database
 ./reset.sh
 ```
 
@@ -258,7 +261,7 @@ That script does two things:
 If you want the database cleaned out without reapplying migrations:
 
 ```bash
-cd database
+cd utils/database
 go run main.go down all
 ```
 
@@ -298,4 +301,4 @@ That command does not attach a named Docker volume, so removing `test-postgres` 
 - The backend async Postgres integration tests are opt-in and can run against a local Docker Postgres instance when `AFIRMATIVO_TEST_DATABASE_URL` is set
 - Those integration tests create and clean up their own temporary databases
 
-gcloud auth application-default login
+`dev-all.sh` can optionally prompt for `gcloud auth application-default login` before starting services.
