@@ -11,8 +11,6 @@ import { beforeYouStartContent } from "../../../content/beforeYouStart";
 import { withLang } from "@/lib/language";
 import { useLanguage } from "@/lib/useLanguage";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
-
 function BeforeYouStartPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -22,7 +20,7 @@ function BeforeYouStartPageContent() {
 
   // Fire Neon warm-up on page load — wakes the DB before user reaches /pay
   useEffect(() => {
-    fetch(`${API_URL}/api/health`).catch(() => {
+    fetch("/api/health").catch(() => {
       // Best-effort; silently ignore errors
     });
   }, []);

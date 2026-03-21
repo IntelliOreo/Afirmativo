@@ -61,20 +61,14 @@ function InterviewPageContent() {
     setLang,
   });
 
-  const currentQuestion =
-    state.phase === "active" || state.phase === "submitting"
-      ? state.question
-      : null;
-  const secondsLeft =
-    state.phase === "active" || state.phase === "submitting"
-      ? state.secondsLeft
-      : 0;
-  const answerSecondsLeft =
-    state.phase === "active" || state.phase === "submitting"
-      ? state.answerSecondsLeft
-      : 0;
-  const textAnswer = state.phase === "active" ? state.textAnswer : "";
-  const inputMode = state.phase === "active" ? state.inputMode : "text";
+  const isActive = state.phase === "active";
+  const isActiveOrSubmitting = isActive || state.phase === "submitting";
+
+  const currentQuestion = isActiveOrSubmitting ? state.question : null;
+  const secondsLeft = isActiveOrSubmitting ? state.secondsLeft : 0;
+  const answerSecondsLeft = isActiveOrSubmitting ? state.answerSecondsLeft : 0;
+  const textAnswer = isActive ? state.textAnswer : "";
+  const inputMode = isActive ? state.inputMode : "text";
   const submitMode = state.phase === "submitting" ? state.submitMode : null;
   const completionSource = state.phase === "done" ? state.completionSource : "finished";
   const error = state.phase === "error" ? state.message : "";
@@ -117,8 +111,6 @@ function InterviewPageContent() {
   }, []);
 
   const timerLabel = formatClock(secondsLeft);
-  const answerTimerLabel = formatClock(answerSecondsLeft);
-  const textAnswerCharCount = textAnswer.length;
   const isWarning = secondsLeft <= WARNING_AT_SECONDS;
   const isWrapup = secondsLeft <= WRAPUP_AT_SECONDS;
   const isBlinkingTimer = secondsLeft <= 30 && secondsLeft > 0;
@@ -155,7 +147,6 @@ function InterviewPageContent() {
           isWrapup={isWrapup}
           isWarning={isWarning}
           timerLabel={timerLabel}
-          question={currentQuestion}
           progressPct={progressPct}
         />
       )}
@@ -240,7 +231,6 @@ function InterviewPageContent() {
                     inputMode={inputMode}
                     answerSecondsLeft={answerSecondsLeft}
                     isTimerExpired={isTimerExpired}
-                    secondsLeft={secondsLeft}
                     hasMicOptIn={hasMicOptIn}
                     onMicOptIn={handleMicOptIn}
                     onTextChange={handleTextChange}

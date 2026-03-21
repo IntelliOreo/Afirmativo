@@ -21,14 +21,15 @@ type HealthStatsProvider interface {
 
 // HandleHealth returns a health check handler that pings the database
 // and optionally merges stats from the given providers.
-func HandleHealth(db DBPinger, providers ...HealthStatsProvider) http.HandlerFunc {
+func HandleHealth(db DBPinger, version string, providers ...HealthStatsProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 
 		resp := map[string]any{
-			"status": "ok",
-			"db":     "connected",
+			"status":  "ok",
+			"version": version,
+			"db":      "connected",
 		}
 
 		if err := db.Ping(ctx); err != nil {

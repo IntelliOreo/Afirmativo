@@ -1,15 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { isAdminToolsEnabled } from "@/lib/env";
+import { backendBaseURL, isAdminToolsEnabled } from "@/lib/env";
 
 type CleanupRequest = {
   hours?: number;
 };
-
-function backendBaseURL(): string {
-  const raw = process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "";
-  return raw.replace(/\/+$/, "");
-}
 
 export async function POST(request: NextRequest) {
   if (!isAdminToolsEnabled()) {
@@ -22,7 +17,10 @@ export async function POST(request: NextRequest) {
   const apiURL = backendBaseURL();
   if (!apiURL) {
     return NextResponse.json(
-      { error: "Backend API URL is not configured", code: "BACKEND_URL_MISSING" },
+      {
+        error: "Local backend proxy target is not configured",
+        code: "API_PROXY_TARGET_MISSING",
+      },
       { status: 500 },
     );
   }

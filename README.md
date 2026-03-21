@@ -24,7 +24,9 @@ Afirmativo is a bilingual AI-assisted practice tool for asylum interview prepara
 frontend/     Next.js app and browser-side interview state machine
 backend/      Go API for sessions, interview flow, reports, payments, admin, voice
 utils/database/     Migration CLI, coupon loader, and local DB studio
+utils/terraform/    optional local checkout of the private infra repo for operators
 doc/          Committed developer docs
+run-*.sh / rebuild-*.sh     Local container verification helpers
 ```
 
 ## Main Backend Routes
@@ -93,6 +95,15 @@ SIGTERM received
   4. close DB pool, flush OTel
 ```
 
+## Versioning
+
+Both frontend and backend carry their own version, currently kept in sync:
+
+- Backend: `backend/cmd/server/version.go` (compiled into the binary, exposed in `GET /api/health`)
+- Frontend: `frontend/package.json` `"version"` field (read at build time via `next.config.ts`)
+
+To bump: edit both files. They can be decoupled later by bumping independently.
+
 ## Current Notes
 
 - The backend still assumes a low-traffic single-server shape for async workers, in-memory request de-duplication, and process-local rate limiting.
@@ -104,7 +115,47 @@ SIGTERM received
 
 - Deep-dive walkthrough: [doc/codebase-deep-dive.md](doc/codebase-deep-dive.md)
 - Local setup and commands: [doc/commands.md](doc/commands.md)
-- Deployment/runtime contract: [doc/deployment-phase1.md](doc/deployment-phase1.md)
+- Deployment/runtime baseline: [doc/deployment-phase1.md](doc/deployment-phase1.md)
+- Release automation contract: [doc/deployment-phase2-github-actions.md](doc/deployment-phase2-github-actions.md)
+- Local container verification runbook: [utils/design/local-container-verification-2026-03-19.md](utils/design/local-container-verification-2026-03-19.md)
+
+## Deploy Status
+
+Phase 1 is complete and remains the truthful runtime baseline:
+
+- browser contract is same-origin `/api/*`
+- GCP load balancer routes `/api/*` to backend and everything else to frontend
+- manual Terraform deploys use explicit image refs, environment-specific `tfvars`, and Secret Manager for sensitive runtime values
+- when `app_domain` is set, the load balancer terminates HTTPS with a Google-managed certificate and redirects HTTP to HTTPS
+
+Phase 2 is implemented as a cross-repo release flow:
+
+- `main` in this public repo builds immutable candidate images in the dev Artifact Registry
+- `release-dev-*` and `release-prod-*` in this repo dispatch the private Terraform repo
+- the private `afirmativo-tf` repo runs Terraform `plan/apply`, smoke tests, and environment approvals
+- backend/runtime secrets stay in GCP Secret Manager; this repo does not read local `.env` files during CI
+
+## Local Workflows
+
+Use two local workflows on purpose:
+
+- Native development:
+  - `go run ./cmd/server`
+  - `npm run dev`
+  - or `./dev-all.sh`
+  - fastest iteration path for daily coding
+- Local container verification:
+  - `./rebuild-local-containers.sh`
+  - `./run-backend-container.sh`
+  - `./run-frontend-container.sh`
+  - deployment-parity path for validating Docker + Cloud Run assumptions
+
+Important:
+
+- frontend code or `next.config.ts` changes require a frontend image rebuild before the container reflects them
+- backend code changes require a backend image rebuild before the container reflects them
+- runtime-only env changes can often be tested by restarting the container without rebuilding
+- the frontend image should not hardcode a Cloud Run port assumption; local container runs should pass `PORT=3000`, while Cloud Run injects its own `PORT` at runtime
 
 ## Useful Entry Points
 

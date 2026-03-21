@@ -2,7 +2,6 @@
 
 import type { Lang } from "@/lib/language";
 import { getInterviewMessages } from "../messages/interviewMessages";
-import type { Question } from "../models";
 
 interface InterviewProgressHeaderProps {
   lang: Lang;
@@ -10,7 +9,6 @@ interface InterviewProgressHeaderProps {
   isWrapup: boolean;
   isWarning: boolean;
   timerLabel: string;
-  question: Question | null;
   progressPct: number;
 }
 
@@ -26,7 +24,6 @@ export function InterviewProgressHeader({
   isWrapup,
   isWarning,
   timerLabel,
-  question: _question,
   progressPct,
 }: InterviewProgressHeaderProps) {
   const t = getInterviewMessages(lang).progress;

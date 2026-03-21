@@ -1,3 +1,10 @@
+// Local-only proxy target used by next dev and local container validation.
+// In GCP, the load balancer owns /api routing before requests reach Next.
+export function backendBaseURL(): string | null {
+  const value = (process.env.API_PROXY_TARGET ?? "").trim().replace(/\/+$/, "");
+  return value || null;
+}
+
 // Admin tooling is only enabled in local development.
 // In development, ENABLE_ADMIN_TOOLS can explicitly disable/enable it.
 // If APP_ENV is set, it must also be "development".

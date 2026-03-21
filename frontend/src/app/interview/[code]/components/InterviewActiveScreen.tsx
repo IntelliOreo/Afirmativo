@@ -30,7 +30,6 @@ interface InterviewActiveScreenProps {
   inputMode: InputMode;
   answerSecondsLeft: number;
   isTimerExpired: boolean;
-  secondsLeft: number;
   hasMicOptIn: boolean;
   onMicOptIn: () => void;
   onTextChange: (value: string) => void;
@@ -53,7 +52,6 @@ export function InterviewActiveScreen({
   inputMode,
   answerSecondsLeft,
   isTimerExpired,
-  secondsLeft: _secondsLeft,
   hasMicOptIn,
   onMicOptIn,
   onTextChange,
@@ -177,19 +175,10 @@ export function InterviewActiveScreen({
     voiceRecorderState,
   ]);
 
-  const handleSubmitAnswer = useCallback(() => {
+  const handleSubmit = useCallback(() => {
     if (phase !== "active" || !textAnswer.trim()) return;
     requestSubmit(textAnswer);
   }, [phase, requestSubmit, textAnswer]);
-
-  const handleSubmitReviewedVoiceAnswer = useCallback(() => {
-    if (phase !== "active" || !textAnswer.trim()) return;
-    requestSubmit(textAnswer);
-  }, [phase, requestSubmit, textAnswer]);
-
-  const handleTextAnswerChange = useCallback((nextValue: string) => {
-    onTextChange(nextValue);
-  }, [onTextChange]);
 
   const handleSelectTextInput = useCallback(() => {
     handleInputModeSwitch("text");
@@ -254,8 +243,8 @@ export function InterviewActiveScreen({
               textAnswerCharCount={textAnswerCharCount}
               maxChars={TEXT_ANSWER_MAX_CHARS}
               isTimerExpired={isTimerExpired}
-              onTextAnswerChange={handleTextAnswerChange}
-              onSubmitAnswer={handleSubmitAnswer}
+              onTextAnswerChange={onTextChange}
+              onSubmitAnswer={handleSubmit}
             />
           ) : (
             <VoiceAnswerSection
@@ -281,8 +270,8 @@ export function InterviewActiveScreen({
               onStartVoiceRecording={startVoiceRecording}
               onCompleteVoiceRecording={completeVoiceRecording}
               onReviewVoiceAnswer={handleReviewVoiceAnswer}
-              onTranscriptChange={handleTextAnswerChange}
-              onSubmitAnswer={handleSubmitReviewedVoiceAnswer}
+              onTranscriptChange={onTextChange}
+              onSubmitAnswer={handleSubmit}
             />
           )}
         </>

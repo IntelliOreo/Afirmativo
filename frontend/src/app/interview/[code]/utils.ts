@@ -83,42 +83,52 @@ export function extractErrorCode(err: unknown): string {
   return typeof maybeCode === "string" ? maybeCode : "";
 }
 
+const EC_UNAUTHORIZED = "UNAUTHORIZED";
+const EC_SESSION_MISMATCH = "SESSION_MISMATCH";
+const EC_INTERVIEW_COMPLETED = "INTERVIEW_COMPLETED";
+const EC_TURN_CONFLICT = "TURN_CONFLICT";
+const EC_IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT";
+const EC_ASYNC_POLL_TIMEOUT = "ASYNC_POLL_TIMEOUT";
+const EC_ASYNC_POLL_CIRCUIT_OPEN = "ASYNC_POLL_CIRCUIT_OPEN";
+const EC_AI_RETRY_EXHAUSTED = "AI_RETRY_EXHAUSTED";
+const EC_SESSION_EXPIRED = "SESSION_EXPIRED";
+
 export function isUnauthorizedResponse(httpStatus: number, code?: string): boolean {
-  return httpStatus === 401 || code === "UNAUTHORIZED" || code === "SESSION_MISMATCH";
+  return httpStatus === 401 || code === EC_UNAUTHORIZED || code === EC_SESSION_MISMATCH;
 }
 
 export function isCompletedResponse(httpStatus: number, code?: string, message?: string): boolean {
   return httpStatus === 409
-    || code === "INTERVIEW_COMPLETED"
+    || code === EC_INTERVIEW_COMPLETED
     || (message ?? "").toLowerCase().includes("completed");
 }
 
 export function isReloadRecoveryErrorCode(errorCode: string): boolean {
-  return errorCode === "TURN_CONFLICT"
-    || errorCode === "IDEMPOTENCY_CONFLICT"
-    || errorCode === "ASYNC_POLL_TIMEOUT"
-    || errorCode === "ASYNC_POLL_CIRCUIT_OPEN"
-    || errorCode === "AI_RETRY_EXHAUSTED";
+  return errorCode === EC_TURN_CONFLICT
+    || errorCode === EC_IDEMPOTENCY_CONFLICT
+    || errorCode === EC_ASYNC_POLL_TIMEOUT
+    || errorCode === EC_ASYNC_POLL_CIRCUIT_OPEN
+    || errorCode === EC_AI_RETRY_EXHAUSTED;
 }
 
 export function isPendingRecoveryRetryableErrorCode(errorCode: string): boolean {
   return errorCode === ""
-    || errorCode === "ASYNC_POLL_TIMEOUT"
-    || errorCode === "ASYNC_POLL_CIRCUIT_OPEN";
+    || errorCode === EC_ASYNC_POLL_TIMEOUT
+    || errorCode === EC_ASYNC_POLL_CIRCUIT_OPEN;
 }
 
 export function shouldAttemptStartAfterRecoveryError(errorCode: string): boolean {
-  return errorCode === "TURN_CONFLICT"
-    || errorCode === "IDEMPOTENCY_CONFLICT"
-    || errorCode === "AI_RETRY_EXHAUSTED";
+  return errorCode === EC_TURN_CONFLICT
+    || errorCode === EC_IDEMPOTENCY_CONFLICT
+    || errorCode === EC_AI_RETRY_EXHAUSTED;
 }
 
 export function shouldClearPendingAnswerOnError(errorCode: string): boolean {
-  return errorCode === "IDEMPOTENCY_CONFLICT"
-    || errorCode === "TURN_CONFLICT"
-    || errorCode === "SESSION_EXPIRED"
-    || errorCode === "UNAUTHORIZED"
-    || errorCode === "SESSION_MISMATCH";
+  return errorCode === EC_IDEMPOTENCY_CONFLICT
+    || errorCode === EC_TURN_CONFLICT
+    || errorCode === EC_SESSION_EXPIRED
+    || errorCode === EC_UNAUTHORIZED
+    || errorCode === EC_SESSION_MISMATCH;
 }
 
 export function getVoiceCapabilities(params: {
@@ -152,14 +162,13 @@ export function getVoiceCapabilities(params: {
       && (
         voiceRecorderState === "recording"
         || voiceRecorderState === "paused"
-        || (voiceRecorderState === "idle" && !isFinalReviewWindow)
+        || voiceRecorderState === "idle"
       ),
     canCompleteRecording:
       phase === "active"
       && isRecordingState,
     canDiscardRecording:
       phase === "active"
-      && !isFinalReviewWindow
       && (
         voiceRecorderState === "recording"
         || voiceRecorderState === "paused"

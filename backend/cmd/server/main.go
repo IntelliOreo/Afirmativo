@@ -206,7 +206,7 @@ func main() {
 	// Register routes.
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /api/health", shared.HandleHealth(pool, interviewSvc, reportSvc, &poolStatsProvider{pool: pool}))
+	mux.HandleFunc("GET /api/health", shared.HandleHealth(pool, Version, interviewSvc, reportSvc, &poolStatsProvider{pool: pool}))
 	mux.HandleFunc("POST /api/coupon/validate", sessionHandler.HandleValidateCoupon)
 	mux.HandleFunc("POST /api/session/verify", sessionVerifyIPLimiter.Wrap(sessionHandler.HandleVerifySession))
 	mux.HandleFunc("GET /api/session/access", shared.RequireSessionAuth(sessionAuth, sessionHandler.HandleCheckAccess))
@@ -249,7 +249,7 @@ func main() {
 	}
 
 	go func() {
-		slog.Info("server starting", "port", cfg.Server.Port)
+		slog.Info("server starting", "port", cfg.Server.Port, "version", Version)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("server error", "error", err)
 			os.Exit(1)

@@ -373,9 +373,11 @@ export function useInterviewMachine({
     };
   }, [bootAttempt, code, lang, langInitialized, setLang, submitPendingAnswerJob]);
 
+  const tickSecondsLeft = state.phase === "active" ? state.secondsLeft : 0;
+
   useEffect(() => {
     if (state.phase !== "active") return;
-    if (state.secondsLeft <= 0) return;
+    if (tickSecondsLeft <= 0) return;
 
     const intervalId = window.setInterval(() => {
       dispatch({ type: "TICK" });
@@ -384,11 +386,7 @@ export function useInterviewMachine({
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [
-    dispatch,
-    state.phase,
-    state.phase === "active" ? state.secondsLeft : 0,
-  ]);
+  }, [dispatch, state.phase, tickSecondsLeft]);
 
   useEffect(() => {
     if (!submissionPendingJob || !submissionRequestKind || !submissionMode) {

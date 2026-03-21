@@ -42,17 +42,25 @@ type reportReadyResponse struct {
 	DurationMinutes         int      `json:"duration_minutes"`
 }
 
-// HandleGenerateReport queues report generation or returns the ready report.
-func (h *Handler) HandleGenerateReport(w http.ResponseWriter, r *http.Request) {
+func requireReportCode(w http.ResponseWriter, r *http.Request) (string, bool) {
 	code := r.PathValue("code")
 	if code == "" {
 		shared.WriteJSON(w, http.StatusBadRequest, shared.ErrorResponse{
 			Error: "session code is required",
 			Code:  "MISSING_CODE",
 		})
-		return
+		return "", false
 	}
 	if !shared.RequireSessionCodeMatch(w, r, code) {
+		return "", false
+	}
+	return code, true
+}
+
+// HandleGenerateReport queues report generation or returns the ready report.
+func (h *Handler) HandleGenerateReport(w http.ResponseWriter, r *http.Request) {
+	code, ok := requireReportCode(w, r)
+	if !ok {
 		return
 	}
 
@@ -66,15 +74,8 @@ func (h *Handler) HandleGenerateReport(w http.ResponseWriter, r *http.Request) {
 
 // HandleGetReport returns the report JSON for a session.
 func (h *Handler) HandleGetReport(w http.ResponseWriter, r *http.Request) {
-	code := r.PathValue("code")
-	if code == "" {
-		shared.WriteJSON(w, http.StatusBadRequest, shared.ErrorResponse{
-			Error: "session code is required",
-			Code:  "MISSING_CODE",
-		})
-		return
-	}
-	if !shared.RequireSessionCodeMatch(w, r, code) {
+	code, ok := requireReportCode(w, r)
+	if !ok {
 		return
 	}
 

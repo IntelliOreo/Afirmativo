@@ -70,23 +70,29 @@ vi.mock("./hooks/useInterviewMachine", () => ({
 
 vi.mock("./components/InterviewQuestionCard", async () => {
   const React = await import("react");
+  const MockInterviewQuestionCard = React.memo(function MockInterviewQuestionCard(
+    { questionText }: { questionText: string },
+  ) {
+    questionCardRenderMock(questionText);
+    return <div>{questionText}</div>;
+  });
 
   return {
-    InterviewQuestionCard: React.memo(({ questionText }: { questionText: string }) => {
-      questionCardRenderMock(questionText);
-      return <div>{questionText}</div>;
-    }),
+    InterviewQuestionCard: MockInterviewQuestionCard,
   };
 });
 
 vi.mock("./components/VoiceAnswerSection", async () => {
   const React = await import("react");
+  const MockVoiceAnswerSection = React.memo(function MockVoiceAnswerSection(
+    { voiceDurationSeconds }: { voiceDurationSeconds: number },
+  ) {
+    voiceAnswerSectionRenderMock(voiceDurationSeconds);
+    return <div>Voice section {voiceDurationSeconds}</div>;
+  });
 
   return {
-    VoiceAnswerSection: React.memo(({ voiceDurationSeconds }: { voiceDurationSeconds: number }) => {
-      voiceAnswerSectionRenderMock(voiceDurationSeconds);
-      return <div>Voice section {voiceDurationSeconds}</div>;
-    }),
+    VoiceAnswerSection: MockVoiceAnswerSection,
   };
 });
 

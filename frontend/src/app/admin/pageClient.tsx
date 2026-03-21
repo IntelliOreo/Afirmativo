@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { Alert } from "@components/Alert";
 import { Button } from "@components/Button";
@@ -8,6 +8,7 @@ import { Card } from "@components/Card";
 import { Footer } from "@components/Footer";
 import { Input } from "@components/Input";
 import { NavHeader } from "@components/NavHeader";
+import { api } from "@/lib/api";
 
 type CleanupResult = {
   hours: number;
@@ -22,9 +23,8 @@ type CleanupResult = {
   total_deleted: number;
 };
 
-type ErrorResult = {
+type CleanupErrorResponse = {
   error?: string;
-  code?: string;
 };
 
 function formatCutoff(raw: string): string {
@@ -33,13 +33,30 @@ function formatCutoff(raw: string): string {
   return d.toLocaleString();
 }
 
+function isCleanupResult(value: CleanupResult | CleanupErrorResponse | null): value is CleanupResult {
+  if (!value || typeof value !== "object") return false;
+
+  const candidate = value as Partial<CleanupResult>;
+  const deleted = candidate.deleted;
+  return typeof candidate.hours === "number"
+    && typeof candidate.cutoff === "string"
+    && typeof candidate.total_deleted === "number"
+    && typeof deleted === "object"
+    && deleted !== null
+    && typeof deleted.answers === "number"
+    && typeof deleted.interview_events === "number"
+    && typeof deleted.question_areas === "number"
+    && typeof deleted.reports === "number"
+    && typeof deleted.sessions === "number";
+}
+
 export function AdminPageClient() {
   const [hours, setHours] = useState("24");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<CleanupResult | null>(null);
 
-  const totalDeleted = useMemo(() => result?.total_deleted ?? 0, [result]);
+  const totalDeleted = result?.total_deleted ?? 0;
 
   async function runCleanup() {
     setError("");
@@ -57,28 +74,26 @@ export function AdminPageClient() {
 
     setLoading(true);
     try {
-      const res = await fetch("/api/admin/cleanup-db", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      const { ok, data } = await api<CleanupResult | CleanupErrorResponse>(
+        "/api/admin/cleanup-db",
+        { method: "POST", body: payload },
+      );
 
-      const contentType = res.headers.get("content-type") ?? "";
-      let data: CleanupResult | ErrorResult | null = null;
-      if (contentType.includes("application/json")) {
-        data = (await res.json()) as CleanupResult | ErrorResult;
-      }
-
-      if (!res.ok) {
+      if (!ok) {
         const msg =
-          data && "error" in data && data.error
+          data && "error" in data && typeof data.error === "string"
             ? data.error
             : "No se pudo ejecutar la limpieza. / Failed to run cleanup.";
         setError(msg);
         return;
       }
 
-      setResult(data as CleanupResult);
+      if (!isCleanupResult(data)) {
+        setError("Respuesta inesperada del servidor. / Unexpected server response.");
+        return;
+      }
+
+      setResult(data);
     } catch {
       setError("Error de red al ejecutar limpieza. / Network error while running cleanup.");
     } finally {

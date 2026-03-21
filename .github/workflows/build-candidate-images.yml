@@ -1,0 +1,105 @@
+name: Build Candidate Images
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: candidate-images-main
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      REGISTRY_HOST: ${{ vars.GCP_REGION }}-docker.pkg.dev
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      REPOSITORY: ${{ vars.ARTIFACT_REGISTRY_REPOSITORY }}
+      BACKEND_IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.ARTIFACT_REGISTRY_REPOSITORY }}/backend:${{ github.sha }}
+      FRONTEND_DEV_IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.ARTIFACT_REGISTRY_REPOSITORY }}/frontend:${{ github.sha }}-devcfg
+      FRONTEND_PROD_IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.ARTIFACT_REGISTRY_REPOSITORY }}/frontend:${{ github.sha }}-prodcfg
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_BUILD_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_BUILD_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Configure Docker auth
+        run: gcloud auth configure-docker "${REGISTRY_HOST}" --quiet
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push backend candidate image
+        id: backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.BACKEND_IMAGE }}
+
+      - name: Build and push frontend dev candidate image
+        id: frontend_dev
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.FRONTEND_DEV_IMAGE }}
+          build-args: |
+            NEXT_PUBLIC_VOICE_API_URL=${{ vars.DEV_NEXT_PUBLIC_VOICE_API_URL }}
+            NEXT_PUBLIC_LOG_LEVEL=${{ vars.DEV_NEXT_PUBLIC_LOG_LEVEL || 'info' }}
+            NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=${{ vars.DEV_NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY }}
+            NEXT_PUBLIC_ALLOW_SENSITIVE_DEBUG_LOGS=${{ vars.DEV_NEXT_PUBLIC_ALLOW_SENSITIVE_DEBUG_LOGS || 'false' }}
+            NEXT_PUBLIC_ASYNC_POLL_TIMEOUT_SECONDS=${{ vars.DEV_NEXT_PUBLIC_ASYNC_POLL_TIMEOUT_SECONDS }}
+            NEXT_PUBLIC_ASYNC_POLL_CIRCUIT_BREAKER_FAILURES=${{ vars.DEV_NEXT_PUBLIC_ASYNC_POLL_CIRCUIT_BREAKER_FAILURES }}
+            NEXT_PUBLIC_ASYNC_POLL_CIRCUIT_BREAKER_COOLDOWN_SECONDS=${{ vars.DEV_NEXT_PUBLIC_ASYNC_POLL_CIRCUIT_BREAKER_COOLDOWN_SECONDS }}
+            NEXT_PUBLIC_VOICE_MAX_SECONDS=${{ vars.DEV_NEXT_PUBLIC_VOICE_MAX_SECONDS }}
+
+      - name: Build and push frontend prod candidate image
+        id: frontend_prod
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.FRONTEND_PROD_IMAGE }}
+          build-args: |
+            NEXT_PUBLIC_VOICE_API_URL=${{ vars.PROD_NEXT_PUBLIC_VOICE_API_URL }}
+            NEXT_PUBLIC_LOG_LEVEL=${{ vars.PROD_NEXT_PUBLIC_LOG_LEVEL || 'info' }}
+            NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=${{ vars.PROD_NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY }}
+            NEXT_PUBLIC_ALLOW_SENSITIVE_DEBUG_LOGS=${{ vars.PROD_NEXT_PUBLIC_ALLOW_SENSITIVE_DEBUG_LOGS || 'false' }}
+            NEXT_PUBLIC_ASYNC_POLL_TIMEOUT_SECONDS=${{ vars.PROD_NEXT_PUBLIC_ASYNC_POLL_TIMEOUT_SECONDS }}
+            NEXT_PUBLIC_ASYNC_POLL_CIRCUIT_BREAKER_FAILURES=${{ vars.PROD_NEXT_PUBLIC_ASYNC_POLL_CIRCUIT_BREAKER_FAILURES }}
+            NEXT_PUBLIC_ASYNC_POLL_CIRCUIT_BREAKER_COOLDOWN_SECONDS=${{ vars.PROD_NEXT_PUBLIC_ASYNC_POLL_CIRCUIT_BREAKER_COOLDOWN_SECONDS }}
+            NEXT_PUBLIC_VOICE_MAX_SECONDS=${{ vars.PROD_NEXT_PUBLIC_VOICE_MAX_SECONDS }}
+
+      - name: Write candidate image summary
+        run: |
+          {
+            echo "## Candidate images"
+            echo ""
+            echo "| Artifact | Image ref | Digest |"
+            echo "| --- | --- | --- |"
+            echo "| Backend | \`${BACKEND_IMAGE}\` | \`${{ steps.backend.outputs.digest }}\` |"
+            echo "| Frontend dev | \`${FRONTEND_DEV_IMAGE}\` | \`${{ steps.frontend_dev.outputs.digest }}\` |"
+            echo "| Frontend prod | \`${FRONTEND_PROD_IMAGE}\` | \`${{ steps.frontend_prod.outputs.digest }}\` |"
+            echo ""
+            echo "Verify in GCP: \`Artifact Registry > Repositories > ${REPOSITORY}\` in project \`${PROJECT_ID}\`."
+          } >> "$GITHUB_STEP_SUMMARY"

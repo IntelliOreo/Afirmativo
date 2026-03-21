@@ -92,6 +92,37 @@ describe("getVoiceCapabilities", () => {
     expect(caps.centerControlLabel).toBe("Record");
   });
 
+  it("allows discard and re-record during final review window", () => {
+    const caps = getVoiceCapabilities({
+      phase: "active",
+      voiceRecorderState: "recording",
+      voiceBlob: null,
+      voicePreviewUrl: null,
+      hasDraftText: false,
+      isFinalReviewWindow: true,
+    });
+
+    expect(caps.canSwitchModes).toBe(false);
+    expect(caps.canToggleRecording).toBe(true);
+    expect(caps.canCompleteRecording).toBe(true);
+    expect(caps.canDiscardRecording).toBe(true);
+  });
+
+  it("allows starting a new recording from idle during final review window", () => {
+    const caps = getVoiceCapabilities({
+      phase: "active",
+      voiceRecorderState: "idle",
+      voiceBlob: null,
+      voicePreviewUrl: null,
+      hasDraftText: false,
+      isFinalReviewWindow: true,
+    });
+
+    expect(caps.canSwitchModes).toBe(false);
+    expect(caps.canToggleRecording).toBe(true);
+    expect(caps.canDiscardRecording).toBe(false);
+  });
+
   it("blocks sending empty audio and all controls when interview is inactive", () => {
     const caps = getVoiceCapabilities({
       phase: "done",

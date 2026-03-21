@@ -10,19 +10,6 @@ import (
 	"time"
 )
 
-// FixedWindowRateLimiterConfig defines per-key fixed-window rate limiting settings.
-type FixedWindowRateLimiterConfig struct {
-	Name        string
-	MaxRequests int
-	Window      time.Duration
-	KeyFunc     func(*http.Request) string
-}
-
-type fixedWindowBucket struct {
-	count   int
-	resetAt time.Time
-}
-
 // TokenBucketRateLimiterConfig defines token-bucket rate limiting settings.
 type TokenBucketRateLimiterConfig struct {
 	Name              string
@@ -50,17 +37,6 @@ type failedAttemptState struct {
 	lastSeen     time.Time
 }
 
-// FixedWindowRateLimiter enforces a simple fixed-window request cap by key.
-type FixedWindowRateLimiter struct {
-	name        string
-	maxRequests int
-	window      time.Duration
-	keyFn       func(*http.Request) string
-
-	mu      sync.Mutex
-	buckets map[string]fixedWindowBucket
-}
-
 // TokenBucketRateLimiter enforces burst-aware limits per key.
 type TokenBucketRateLimiter struct {
 	name         string
@@ -81,30 +57,6 @@ type FailedAttemptLockoutLimiter struct {
 
 	mu     sync.Mutex
 	states map[string]failedAttemptState
-}
-
-// NewFixedWindowRateLimiter creates a limiter with sane defaults.
-func NewFixedWindowRateLimiter(cfg FixedWindowRateLimiterConfig) *FixedWindowRateLimiter {
-	maxRequests := cfg.MaxRequests
-	if maxRequests <= 0 {
-		maxRequests = 1
-	}
-	window := cfg.Window
-	if window <= 0 {
-		window = time.Minute
-	}
-	keyFn := cfg.KeyFunc
-	if keyFn == nil {
-		keyFn = ClientIPRateLimitKey
-	}
-
-	return &FixedWindowRateLimiter{
-		name:        cfg.Name,
-		maxRequests: maxRequests,
-		window:      window,
-		keyFn:       keyFn,
-		buckets:     make(map[string]fixedWindowBucket),
-	}
 }
 
 // NewTokenBucketRateLimiter creates a burst-aware limiter with sane defaults.
@@ -151,26 +103,6 @@ func NewFailedAttemptLockoutLimiter(cfg FailedAttemptLockoutConfig) *FailedAttem
 		window:      window,
 		lockout:     lockout,
 		states:      make(map[string]failedAttemptState),
-	}
-}
-
-// Wrap applies per-key fixed-window limiting and returns 429 when exceeded.
-func (l *FixedWindowRateLimiter) Wrap(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		now := time.Now().UTC()
-		key := strings.TrimSpace(l.keyFn(r))
-		if key == "" {
-			key = "unknown"
-		}
-
-		allow, retryAfterS := l.allow(now, key)
-		if !allow {
-			w.Header().Set("Retry-After", strconv.Itoa(retryAfterS))
-			WriteError(w, ErrRateLimited, "Too many requests", "RATE_LIMITED")
-			return
-		}
-
-		next(w, r)
 	}
 }
 
@@ -273,32 +205,6 @@ func (l *FailedAttemptLockoutLimiter) Reset(key string) {
 	l.mu.Lock()
 	delete(l.states, key)
 	l.mu.Unlock()
-}
-
-func (l *FixedWindowRateLimiter) allow(now time.Time, key string) (bool, int) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	b := l.buckets[key]
-	if b.resetAt.IsZero() || !now.Before(b.resetAt) {
-		b = fixedWindowBucket{
-			count:   0,
-			resetAt: now.Add(l.window),
-		}
-	}
-
-	if b.count >= l.maxRequests {
-		retryAfter := int(time.Until(b.resetAt).Seconds())
-		if retryAfter < 1 {
-			retryAfter = 1
-		}
-		l.buckets[key] = b
-		return false, retryAfter
-	}
-
-	b.count++
-	l.buckets[key] = b
-	return true, 0
 }
 
 func (l *TokenBucketRateLimiter) allow(now time.Time, key string) (bool, int) {

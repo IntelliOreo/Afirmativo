@@ -137,6 +137,7 @@ export function useVoiceRecorder({
     }
   }, [togglePlayback]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- deps are manually listed; factory return is opaque to the plugin
   const reviewVoiceRecording = useCallback(createReviewVoiceRecording({
     isActive,
     voiceRecorderState,

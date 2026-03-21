@@ -1,6 +1,8 @@
 import { log } from "./logger";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
+// Browser clients should always use same-origin /api paths.
+// Local development reaches the backend through the frontend proxy route.
+const API_URL = "";
 const DEFAULT_TIMEOUT_MS = 30_000;
 const RETRY_BASE_DELAY_MS = 1_000;
 

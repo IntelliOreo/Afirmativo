@@ -9,9 +9,9 @@ This document is the current local development guide for this repository.
 - `utils/database/`: Go tooling for SQL migrations, coupon loading, and the local Postgres Studio UI
 - `utils/mockThirdpartyAPIs/`: local mock AI service for development and testing
 - `utils/design/`: product specs, technical notes, and refactoring docs
-- `utils/terraform/`: Terraform for Cloud Run, networking, and secrets
+- `utils/terraform/`: optional local checkout of the private `afirmativo-tf` infra repo when operators need Terraform access
 - `doc/`: developer documentation
-- `.github/workflows/`: CI/CD pipeline (future/planned)
+- `.github/workflows/`: app-repo CI/CD that builds candidate images on `main` and dispatches release deploys to the private infra repo
 - `dev-all.sh`: helper script that starts frontend, backend, the mock server, and the database UI together
 
 ## Prerequisites
@@ -21,6 +21,29 @@ This document is the current local development guide for this repository.
 - Go 1.26+
 - Docker Desktop optional, only if you want a local Postgres container
 - Ollama optional, only if you want local LLM inference instead of the mock or hosted AI path
+
+## Release Automation
+
+This public repo no longer runs Terraform directly in GitHub Actions.
+
+- `main`
+  - builds one backend candidate image and two frontend candidate images (`devcfg`, `prodcfg`)
+  - pushes them to the dev Artifact Registry
+- `release-dev-*`
+  - dispatches the private infra repo to deploy dev with the exact candidate image refs for that commit
+- `release-prod-*`
+  - dispatches the private infra repo to deploy prod with the exact candidate image refs for that commit
+
+The private infra repo owns:
+
+- Terraform remote state
+- Terraform `plan/apply`
+- prod approval gates
+- image promotion from dev registry to prod registry
+- post-deploy smoke tests
+
+Public build-time frontend values (`NEXT_PUBLIC_*`) come from GitHub variables, not local `.env` files.
+Backend/runtime secrets stay in GCP Secret Manager and are referenced by Terraform.
 
 ## Local Development Flow
 
@@ -145,6 +168,58 @@ Notes:
 - Run it only after your env files are ready
 - It does not start Docker Postgres or Ollama for you
 
+### 7. Optional helper: local container verification
+
+Use this path when you want deployment-parity validation, not day-to-day iteration.
+
+From the project root, one-time setup if the scripts are not executable yet:
+
+```bash
+chmod +x run-backend-container.sh run-frontend-container.sh rebuild-local-containers.sh
+```
+
+Rebuild both local images:
+
+```bash
+./rebuild-local-containers.sh
+```
+
+Run backend:
+
+```bash
+./run-backend-container.sh
+```
+
+Common backend runtime overrides:
+
+```bash
+VOICE_AI_BASE_URL_OVERRIDE=http://host.docker.internal:9090 ./run-backend-container.sh
+MOCK_API_URL_OVERRIDE=http://host.docker.internal:9090 ./run-backend-container.sh
+OLLAMA_BASE_URL_OVERRIDE=http://host.docker.internal:11434 ./run-backend-container.sh
+```
+
+Run frontend in another terminal:
+
+```bash
+./run-frontend-container.sh
+```
+
+What these scripts do:
+
+- write root-level log files like `container_back_<timestamp>.log`
+- create the `afirmativo-local` Docker network if needed
+- remove stale containers with the same names before starting
+- mount local ADC automatically in the backend script if the default gcloud ADC file exists
+
+Important:
+
+- native dev remains the main workflow
+- container verification is the pre-deploy workflow
+- if you change frontend code or `frontend/next.config.ts`, rebuild the frontend image before rerunning the container
+- if you change backend code, rebuild the backend image before rerunning the backend container
+- if you only change runtime env overrides, restarting the affected container is often enough
+- the frontend local container runner passes `PORT=3000` explicitly; the deploy image should not rely on a hardcoded Cloud Run port default
+
 ## Common Commands
 
 ### Frontend
@@ -157,12 +232,25 @@ npm run test
 npm run build
 ```
 
+Container verification helpers from the project root:
+
+```bash
+./rebuild-local-containers.sh
+./run-frontend-container.sh
+```
+
 ### Backend
 
 ```bash
 cd backend
 go run ./cmd/server
 go test ./...
+```
+
+Container verification helper from the project root:
+
+```bash
+./run-backend-container.sh
 ```
 
 If you edit SQL queries and need regenerated types:
@@ -302,3 +390,58 @@ That command does not attach a named Docker volume, so removing `test-postgres` 
 - Those integration tests create and clean up their own temporary databases
 
 `dev-all.sh` can optionally prompt for `gcloud auth application-default login` before starting services.
+
+## GCP Verification Shortcuts
+
+Use these commands after a Terraform apply when the deployed app or domain does not behave as expected.
+
+Check the backend Cloud Run service template, including plain env vars and Secret Manager references:
+
+```bash
+gcloud run services describe asilo-backend \
+  --region=us-central1 \
+  --project=asilo-afirmativo-dev \
+  --format=export
+```
+
+Show the newest backend revision and the latest healthy revision:
+
+```bash
+gcloud run services describe asilo-backend \
+  --region=us-central1 \
+  --project=asilo-afirmativo-dev \
+  --format='value(status.latestCreatedRevisionName,status.latestReadyRevisionName)'
+```
+
+Inspect one backend revision's logs:
+
+```bash
+gcloud logging read \
+  'resource.type="cloud_run_revision"
+   resource.labels.service_name="asilo-backend"
+   resource.labels.revision_name="REVISION_NAME"' \
+  --project=asilo-afirmativo-dev \
+  --limit=100 \
+  --format='table(timestamp,severity,textPayload,jsonPayload.message,jsonPayload.error)'
+```
+
+Check the custom-domain certificate state:
+
+```bash
+gcloud compute ssl-certificates describe asilo-app-managed-cert \
+  --global \
+  --project=asilo-afirmativo-dev \
+  --format='yaml(managed.status,managed.domainStatus)'
+```
+
+Check that DNS resolves the root domain to the load balancer IP:
+
+```bash
+dig +short asilo-afirmativo.com
+```
+
+Important:
+
+- `terraform output` is not the source of truth for loaded runtime env vars
+- Cloud Run `Variables & Secrets` or `gcloud run services describe ... --format=export` is the source of truth
+- Google-managed certificates can remain in `PROVISIONING` until DNS points at the load balancer and propagation finishes

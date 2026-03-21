@@ -92,7 +92,7 @@ function SessionPageContent() {
       setView("verification");
     }
     init();
-  }, [code, goToInterview, lang]);
+  }, [code, goToInterview, lang, t.genericAccessError, t.networkError]);
 
   function getResumeUrl() {
     if (typeof window === "undefined") return "";

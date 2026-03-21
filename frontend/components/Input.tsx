@@ -4,14 +4,12 @@ import type { InputHTMLAttributes } from "react";
 
 interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   label: string;
-  labelEs?: string;
   error?: string;
   hint?: string;
 }
 
 export function Input({
   label,
-  labelEs,
   error,
   hint,
   id,
@@ -24,11 +22,6 @@ export function Input({
     <div className="flex flex-col gap-1">
       <label htmlFor={inputId} className="font-semibold text-primary-darkest">
         {label}
-        {labelEs && (
-          <span className="block text-sm font-normal text-gray-600">
-            {labelEs}
-          </span>
-        )}
       </label>
       {hint && <p className="text-sm text-gray-600">{hint}</p>}
       <input

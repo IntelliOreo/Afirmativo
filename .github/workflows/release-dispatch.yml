@@ -1,0 +1,90 @@
+name: Dispatch Infra Deploy
+
+on:
+  push:
+    branches:
+      - "release-dev-*"
+      - "release-prod-*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-dispatch-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Select target environment
+        id: target
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == release-dev-* ]]; then
+            echo "environment=dev" >> "$GITHUB_OUTPUT"
+            echo "frontend_suffix=devcfg" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_REF_NAME}" == release-prod-* ]]; then
+            echo "environment=prod" >> "$GITHUB_OUTPUT"
+            echo "frontend_suffix=prodcfg" >> "$GITHUB_OUTPUT"
+          else
+            echo "Unsupported branch ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+
+      - name: Build dispatch payload
+        id: payload
+        env:
+          DEV_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION }}
+          REPOSITORY: ${{ vars.ARTIFACT_REGISTRY_REPOSITORY }}
+        run: |
+          registry="${REGION}-docker.pkg.dev/${DEV_PROJECT_ID}/${REPOSITORY}"
+          backend_image="${registry}/backend:${GITHUB_SHA}"
+          frontend_image="${registry}/frontend:${GITHUB_SHA}-${{ steps.target.outputs.frontend_suffix }}"
+          echo "backend_image=${backend_image}" >> "$GITHUB_OUTPUT"
+          echo "frontend_image=${frontend_image}" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch private infra deploy
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.INFRA_REPO_DISPATCH_TOKEN }}
+          script: |
+            const repo = process.env.INFRA_REPO;
+            const ref = process.env.INFRA_REPO_REF;
+            const [owner, name] = repo.split("/");
+            await github.rest.actions.createWorkflowDispatch({
+              owner,
+              repo: name,
+              workflow_id: "release-deploy.yml",
+              ref,
+              inputs: {
+                environment: process.env.TARGET_ENVIRONMENT,
+                app_sha: process.env.APP_SHA,
+                source_repo: process.env.SOURCE_REPO,
+                source_ref: process.env.SOURCE_REF,
+                backend_image: process.env.BACKEND_IMAGE,
+                frontend_image: process.env.FRONTEND_IMAGE,
+              },
+            });
+        env:
+          INFRA_REPO: ${{ vars.INFRA_REPO }}
+          INFRA_REPO_REF: ${{ vars.INFRA_REPO_REF || 'main' }}
+          TARGET_ENVIRONMENT: ${{ steps.target.outputs.environment }}
+          APP_SHA: ${{ github.sha }}
+          SOURCE_REPO: ${{ github.repository }}
+          SOURCE_REF: ${{ github.ref_name }}
+          BACKEND_IMAGE: ${{ steps.payload.outputs.backend_image }}
+          FRONTEND_IMAGE: ${{ steps.payload.outputs.frontend_image }}
+
+      - name: Write release summary
+        run: |
+          {
+            echo "## Infra dispatch"
+            echo ""
+            echo "- Target environment: \`${{ steps.target.outputs.environment }}\`"
+            echo "- Source branch: \`${GITHUB_REF_NAME}\`"
+            echo "- App SHA: \`${GITHUB_SHA}\`"
+            echo "- Backend candidate: \`${{ steps.payload.outputs.backend_image }}\`"
+            echo "- Frontend candidate: \`${{ steps.payload.outputs.frontend_image }}\`"
+            echo "- Infra repo: \`${{ vars.INFRA_REPO }}@${{ vars.INFRA_REPO_REF || 'main' }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

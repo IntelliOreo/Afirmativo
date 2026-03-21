@@ -62,6 +62,7 @@ utils/database/
 doc/
   commands.md                    developer setup and common commands
   deployment-phase1.md           deployment/runtime contract
+  deployment-phase2-github-actions.md GitHub Actions automation contract
 ```
 
 ## 4. Main Runtime Routes
@@ -742,6 +743,7 @@ Spans created:
 GET /api/health returns:
   {
     "status": "ok",
+    "version": "0.1.0",
     "db": "connected",
     "async_answer_queue_depth": 0,
     "async_answer_queue_capacity": 256,
