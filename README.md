@@ -57,6 +57,8 @@ Zero-dependency Stripe integration: form-encoded POST for hosted checkout, HMAC-
 
 Both the Stripe webhook and the browser poll can provision a session. `FOR UPDATE` in a Postgres transaction prevents double-provisioning. The reveal PIN has a 10-minute TTL and is consumed on first read — prevents replay from stolen poll responses.
 
+The frontend session handoff bootstrap waits for language initialization and runs once per session page load. This keeps the one-time PIN handoff resilient to client rerenders while preserving immediate PIN consumption from browser storage.
+
 **Trade-off**: row-level locks under contention. A single payment rarely has concurrent mutations.
 
 ### JWT in HttpOnly cookies

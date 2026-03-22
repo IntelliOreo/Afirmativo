@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState, useEffect, useCallback } from "react";
+import { Suspense, useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { NavHeader } from "@components/NavHeader";
 import { Footer } from "@components/Footer";
@@ -23,7 +23,7 @@ function SessionPageContent() {
   const code = params.code as string;
   const requestedLang = searchParams.get("lang");
 
-  const { lang, setLang } = useLanguage({ requestedLang, sessionCode: code });
+  const { lang, setLang, initialized } = useLanguage({ requestedLang, sessionCode: code });
   const t = getSessionMessages(lang);
   const common = getCommonMessages(lang);
   const [view, setView] = useState<View>("loading");
@@ -32,6 +32,7 @@ function SessionPageContent() {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [copied, setCopied] = useState(false);
+  const startedBootstrapSessionRef = useRef<string | null>(null);
 
   const interviewUrlForLang = useCallback(
     (selectedLang: "es" | "en") => `/interview/${code}?lang=${selectedLang}`,
@@ -52,10 +53,23 @@ function SessionPageContent() {
   );
 
   useEffect(() => {
+    if (!initialized) {
+      return;
+    }
+    if (startedBootstrapSessionRef.current === code) {
+      return;
+    }
+    startedBootstrapSessionRef.current = code;
+
+    let cancelled = false;
+
     async function init() {
       const storedPin = readAndConsumePin(code);
       if (storedPin) {
         const result = await verifySession(code, storedPin);
+        if (cancelled) {
+          return;
+        }
         if (result.ok) {
           setDisplayPin(storedPin);
           if (result.interviewStartedAt) {
@@ -78,6 +92,9 @@ function SessionPageContent() {
       }
 
       const accessResult = await checkSessionAccess(code);
+      if (cancelled) {
+        return;
+      }
       if (accessResult.ok) {
         goToInterview(lang, true);
         return;
@@ -92,7 +109,11 @@ function SessionPageContent() {
       setView("verification");
     }
     init();
-  }, [code, goToInterview, lang, t.genericAccessError, t.networkError]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [code, goToInterview, initialized, lang, t.genericAccessError, t.networkError]);
 
   function getResumeUrl() {
     if (typeof window === "undefined") return "";

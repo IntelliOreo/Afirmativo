@@ -38,7 +38,7 @@ const LANDING_MESSAGES = {
     headline: "Prepare for your affirmative asylum interview",
     subheadline: "A confidential practice tool with a bilingual assessment report.",
     steps: [
-      "Read Before You Start and agree to the terms",
+      "Read before you start and agree to the terms",
       "Enter a coupon code or pay online",
       "Complete the simulated interview - one question at a time",
       "Download your bilingual assessment report",
@@ -61,7 +61,7 @@ const LANDING_MESSAGES = {
     headline: "Preparese para su entrevista afirmativa de asilo",
     subheadline: "Una herramienta confidencial de practica con reporte bilingue.",
     steps: [
-      "Lea Antes de Comenzar y acepte los terminos",
+      "Lea antes de comenzar y acepte los terminos",
       "Ingrese un cupon o pague en linea",
       "Realice la entrevista simulada - una pregunta a la vez",
       "Descargue su reporte bilingue de evaluacion",

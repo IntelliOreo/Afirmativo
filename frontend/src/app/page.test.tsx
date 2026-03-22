@@ -83,6 +83,7 @@ describe("LandingPage", () => {
     render(<LandingPage />);
 
     expect(screen.queryByText("Based on real reviews")).not.toBeInTheDocument();
+    expect(screen.getByText("Read before you start and agree to the terms")).toBeInTheDocument();
     expect(
       screen.getByText(
         "“Practicar esto de verdad ha hecho una gran diferencia. Explicar lo que pasó ahora me sale mucho más claro y natural. Antes era un punto débil, pero ha mejorado bastante.”",
@@ -103,6 +104,7 @@ describe("LandingPage", () => {
     render(<LandingPage />);
 
     expect(screen.queryByText("Basado en resenas reales")).not.toBeInTheDocument();
+    expect(screen.getByText("Lea antes de comenzar y acepte los terminos")).toBeInTheDocument();
     expect(
       screen.getByText(
         "“Practicar esto de verdad ha hecho una gran diferencia. Explicar lo que pasó ahora me sale mucho más claro y natural. Antes era un punto débil, pero ha mejorado bastante.”",

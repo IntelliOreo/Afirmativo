@@ -11,6 +11,8 @@ const readAndConsumePinMock = vi.fn();
 const verifySessionMock = vi.fn();
 const checkSessionAccessMock = vi.fn();
 const writeInterviewLangMock = vi.fn();
+const setLangMock = vi.fn();
+const useLanguageMock = vi.fn();
 
 vi.mock("next/navigation", () => ({
   useParams: () => useParamsMock(),
@@ -35,10 +37,7 @@ vi.mock("@/lib/sessionService", () => ({
 }));
 
 vi.mock("@/lib/useLanguage", () => ({
-  useLanguage: () => ({
-    lang: "en",
-    setLang: vi.fn(),
-  }),
+  useLanguage: (...args: unknown[]) => useLanguageMock(...args),
 }));
 
 describe("SessionPage", () => {
@@ -49,6 +48,13 @@ describe("SessionPage", () => {
     verifySessionMock.mockReset();
     checkSessionAccessMock.mockReset();
     writeInterviewLangMock.mockReset();
+    setLangMock.mockReset();
+    useLanguageMock.mockReset();
+    useLanguageMock.mockReturnValue({
+      lang: "en",
+      setLang: setLangMock,
+      initialized: true,
+    });
   });
 
   it("shows the ready state when a stored PIN verifies a not-started session", async () => {
@@ -84,6 +90,66 @@ describe("SessionPage", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Resume session" })).toBeInTheDocument();
+    });
+  });
+
+  it("consumes the handoff PIN only once across rerenders", async () => {
+    readAndConsumePinMock.mockReturnValue("482917");
+    verifySessionMock.mockReturnValue(new Promise(() => {}));
+
+    const { rerender, unmount } = render(<SessionPage />);
+    rerender(<SessionPage />);
+
+    await waitFor(() => {
+      expect(readAndConsumePinMock).toHaveBeenCalledTimes(1);
+      expect(verifySessionMock).toHaveBeenCalledTimes(1);
+    });
+    expect(checkSessionAccessMock).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it("does not fall back to cookie access while stored PIN verification is pending", async () => {
+    readAndConsumePinMock.mockReturnValue("482917");
+    verifySessionMock.mockReturnValue(new Promise(() => {}));
+
+    const { rerender, unmount } = render(<SessionPage />);
+    rerender(<SessionPage />);
+
+    await waitFor(() => {
+      expect(verifySessionMock).toHaveBeenCalledTimes(1);
+    });
+    expect(checkSessionAccessMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: "Resume session" })).not.toBeInTheDocument();
+    unmount();
+  });
+
+  it("waits for language initialization before bootstrapping session access", async () => {
+    useLanguageMock.mockReturnValue({
+      lang: "en",
+      setLang: setLangMock,
+      initialized: false,
+    });
+    readAndConsumePinMock.mockReturnValue("482917");
+    verifySessionMock.mockResolvedValue({ ok: true });
+
+    const { rerender } = render(<SessionPage />);
+
+    expect(readAndConsumePinMock).not.toHaveBeenCalled();
+    expect(checkSessionAccessMock).not.toHaveBeenCalled();
+
+    useLanguageMock.mockReturnValue({
+      lang: "en",
+      setLang: setLangMock,
+      initialized: true,
+    });
+
+    rerender(<SessionPage />);
+
+    await waitFor(() => {
+      expect(readAndConsumePinMock).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(screen.getByText("Your session is ready")).toBeInTheDocument();
     });
   });
 });
