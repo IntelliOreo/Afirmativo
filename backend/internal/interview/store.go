@@ -57,8 +57,8 @@ type AsyncAnswerJobStore interface {
 	// ClaimQueuedAnswerJob marks a queued job as running and returns it. Returns nil,nil if already claimed/terminal.
 	ClaimQueuedAnswerJob(ctx context.Context, jobID string) (*AnswerJob, error)
 
-	// ListQueuedAnswerJobIDs returns queued job IDs ordered oldest-first.
-	ListQueuedAnswerJobIDs(ctx context.Context, limit int) ([]string, error)
+	// ClaimNextQueuedAnswerJob atomically claims the oldest queued job. Returns nil,nil when no queued job exists.
+	ClaimNextQueuedAnswerJob(ctx context.Context) (*AnswerJob, error)
 
 	// RequeueStaleRunningAnswerJobs moves stale running jobs back to queued status.
 	RequeueStaleRunningAnswerJobs(ctx context.Context, staleBefore time.Time) (int64, error)
@@ -134,6 +134,7 @@ type ProcessCriterionTurnResult struct {
 type UpsertAnswerJobParams struct {
 	SessionCode     string
 	ClientRequestID string
+	LastRequestID   string
 	TurnID          string
 	QuestionText    string
 	AnswerText      string

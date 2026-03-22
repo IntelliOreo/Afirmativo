@@ -8,6 +8,7 @@ import (
 
 	"github.com/afirmativo/backend/internal/config"
 	"github.com/afirmativo/backend/internal/session"
+	"github.com/afirmativo/backend/internal/shared"
 )
 
 func TestSubmitAnswerAsync_IdempotencyConflictWhenPayloadDiffers(t *testing.T) {
@@ -38,6 +39,45 @@ func TestSubmitAnswerAsync_IdempotencyConflictWhenPayloadDiffers(t *testing.T) {
 	)
 	if !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("SubmitAnswerAsync() error = %v, want ErrIdempotencyConflict", err)
+	}
+}
+
+func TestSubmitAnswerAsync_PersistsRequestID(t *testing.T) {
+	t.Parallel()
+
+	var gotParams UpsertAnswerJobParams
+	store := &fakeInterviewStore{
+		upsertAnswerJobFn: func(_ context.Context, params UpsertAnswerJobParams) (*AnswerJob, error) {
+			gotParams = params
+			return &AnswerJob{
+				ID:              "job-req",
+				SessionCode:     params.SessionCode,
+				ClientRequestID: params.ClientRequestID,
+				LastRequestID:   params.LastRequestID,
+				TurnID:          params.TurnID,
+				QuestionText:    params.QuestionText,
+				AnswerText:      params.AnswerText,
+				Status:          AsyncAnswerJobQueued,
+			}, nil
+		},
+	}
+	svc := newInterviewServiceForAsyncTests(store)
+
+	ctx := shared.WithRequestID(context.Background(), "req-interview-1")
+	_, err := svc.SubmitAnswerAsync(
+		ctx,
+		"AP-7K9X-M2NF",
+		"Answer text",
+		"Question text",
+		"turn-1",
+		"client-1",
+	)
+	if err != nil {
+		t.Fatalf("SubmitAnswerAsync() error = %v", err)
+	}
+
+	if gotParams.LastRequestID != "req-interview-1" {
+		t.Fatalf("LastRequestID = %q, want req-interview-1", gotParams.LastRequestID)
 	}
 }
 
@@ -434,7 +474,11 @@ func TestProcessAnswerJob_SessionCompleteFailureStaysRunning(t *testing.T) {
 	}
 
 	svc := newServiceForRecoveryTests(store, sessions, &qaAIClient{})
-	svc.processAnswerJob(context.Background(), "job-1")
+	claimed, ok := svc.claimAsyncAnswerJob(context.Background(), "job-1", asyncAnswerClaimSourceChannel)
+	if !ok {
+		t.Fatalf("claimAsyncAnswerJob() = false, want true")
+	}
+	svc.processClaimedAsyncAnswerJob(context.Background(), claimed)
 
 	if markSucceededCalled {
 		t.Fatalf("MarkAnswerJobSucceeded was called; job should stay running for recovery")
@@ -468,7 +512,11 @@ func TestProcessAnswerJob_MaxAttemptsExceeded(t *testing.T) {
 	}
 
 	svc := newInterviewServiceForAsyncTests(store)
-	svc.processAnswerJob(context.Background(), "job-max")
+	claimed, ok := svc.claimAsyncAnswerJob(context.Background(), "job-max", asyncAnswerClaimSourceChannel)
+	if !ok {
+		t.Fatalf("claimAsyncAnswerJob() = false, want true")
+	}
+	svc.processClaimedAsyncAnswerJob(context.Background(), claimed)
 
 	if gotFailedParams.JobID != "job-max" {
 		t.Fatalf("expected job to be marked failed, got JobID=%q", gotFailedParams.JobID)
@@ -487,19 +535,18 @@ func TestEnqueueAsyncAnswerJob_QueueFullReturnsFalse(t *testing.T) {
 	svc := newInterviewServiceForAsyncTests(&fakeInterviewStore{}, config.AsyncRuntimeConfig{
 		Workers:       1,
 		QueueSize:     1,
-		RecoveryBatch: 1,
 		RecoveryEvery: time.Hour,
 		StaleAfter:    time.Hour,
 		JobTimeout:    time.Hour,
 	})
 
 	// Fill the queue.
-	if !svc.enqueueAsyncAnswerJob("job-fill") {
+	if !svc.enqueueAsyncAnswerJob("job-fill", "") {
 		t.Fatalf("first enqueue should succeed")
 	}
 
 	// Queue is full — should return false.
-	if svc.enqueueAsyncAnswerJob("job-overflow") {
+	if svc.enqueueAsyncAnswerJob("job-overflow", "") {
 		t.Fatalf("second enqueue should return false when queue is full")
 	}
 }
@@ -547,7 +594,11 @@ func TestProcessAnswerJob_MarkSucceededDBFailureLeavesRunning(t *testing.T) {
 	}
 
 	svc := newServiceForRecoveryTests(store, sessions, &qaAIClient{})
-	svc.processAnswerJob(context.Background(), "job-mark-fail")
+	claimed, ok := svc.claimAsyncAnswerJob(context.Background(), "job-mark-fail", asyncAnswerClaimSourceChannel)
+	if !ok {
+		t.Fatalf("claimAsyncAnswerJob() = false, want true")
+	}
+	svc.processClaimedAsyncAnswerJob(context.Background(), claimed)
 
 	// When MarkAnswerJobSucceeded fails, the job stays in running (no terminal mark).
 	if markFailedCalled {
@@ -555,26 +606,20 @@ func TestProcessAnswerJob_MarkSucceededDBFailureLeavesRunning(t *testing.T) {
 	}
 }
 
-func TestStartAsyncAnswerRuntime_DispatchesRecoveredJobs(t *testing.T) {
+func TestStartAsyncAnswerRuntime_ClaimsNextQueuedJobOnIdleFallback(t *testing.T) {
 	t.Parallel()
 
 	claimed := make(chan string, 1)
 	store := &fakeInterviewStore{
-		requeueStaleRunningAnswerJobsFn: func(_ context.Context, _ time.Time) (int64, error) {
-			return 1, nil
-		},
-		listQueuedAnswerJobIDsFn: func(_ context.Context, limit int) ([]string, error) {
-			if limit <= 0 {
-				t.Fatalf("recovery limit = %d, want positive value", limit)
-			}
-			return []string{"job-a"}, nil
-		},
-		claimQueuedAnswerJobFn: func(_ context.Context, jobID string) (*AnswerJob, error) {
+		claimNextQueuedAnswerJobFn: func(_ context.Context) (*AnswerJob, error) {
 			select {
-			case claimed <- jobID:
+			case claimed <- "job-db":
 			default:
 			}
-			// nil means "not claimable now", which is enough for this runtime dispatch check.
+			return nil, nil
+		},
+		claimQueuedAnswerJobFn: func(context.Context, string) (*AnswerJob, error) {
+			t.Fatalf("channel-hint claim should not run without a hinted job")
 			return nil, nil
 		},
 	}
@@ -587,10 +632,137 @@ func TestStartAsyncAnswerRuntime_DispatchesRecoveredJobs(t *testing.T) {
 
 	select {
 	case got := <-claimed:
-		if got != "job-a" {
-			t.Fatalf("claimed job id = %q, want job-a", got)
+		if got != "job-db" {
+			t.Fatalf("claimed job id = %q, want job-db", got)
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatalf("timed out waiting for recovered job dispatch")
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for idle fallback claim")
+	}
+}
+
+func TestRecoverAsyncAnswerJobs_RequeuesOnlyStaleRunning(t *testing.T) {
+	t.Parallel()
+
+	requeued := false
+	store := &fakeInterviewStore{
+		requeueStaleRunningAnswerJobsFn: func(_ context.Context, _ time.Time) (int64, error) {
+			requeued = true
+			return 1, nil
+		},
+		claimNextQueuedAnswerJobFn: func(context.Context) (*AnswerJob, error) {
+			t.Fatalf("recovery should not claim queued jobs")
+			return nil, nil
+		},
+		claimQueuedAnswerJobFn: func(context.Context, string) (*AnswerJob, error) {
+			t.Fatalf("recovery should not issue hinted claims")
+			return nil, nil
+		},
+	}
+
+	svc := newInterviewServiceForAsyncTests(store)
+	svc.recoverAsyncAnswerJobs(context.Background())
+
+	if !requeued {
+		t.Fatalf("expected stale running jobs to be requeued")
+	}
+}
+
+func TestClaimAsyncAnswerJob_CanceledContextSkipsDBClaim(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	store := &fakeInterviewStore{
+		claimQueuedAnswerJobFn: func(context.Context, string) (*AnswerJob, error) {
+			called = true
+			return nil, nil
+		},
+	}
+	svc := newInterviewServiceForAsyncTests(store)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	claimed, ok := svc.claimAsyncAnswerJob(ctx, "job-canceled", asyncAnswerClaimSourceChannel)
+	if ok || claimed != nil {
+		t.Fatalf("claimAsyncAnswerJob() = (%v, %v), want (nil, false)", claimed, ok)
+	}
+	if called {
+		t.Fatalf("claimAsyncAnswerJob should not hit the store after cancellation")
+	}
+}
+
+func TestClaimNextAsyncAnswerJob_CanceledContextSkipsDBClaim(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	store := &fakeInterviewStore{
+		claimNextQueuedAnswerJobFn: func(context.Context) (*AnswerJob, error) {
+			called = true
+			return nil, nil
+		},
+	}
+	svc := newInterviewServiceForAsyncTests(store)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	claimed, ok := svc.claimNextAsyncAnswerJob(ctx)
+	if ok || claimed != nil {
+		t.Fatalf("claimNextAsyncAnswerJob() = (%v, %v), want (nil, false)", claimed, ok)
+	}
+	if called {
+		t.Fatalf("claimNextAsyncAnswerJob should not hit the store after cancellation")
+	}
+}
+
+func TestStartAsyncAnswerRuntime_IdleFallbackClaimsQueuedJobAfterQueueOverflow(t *testing.T) {
+	t.Parallel()
+
+	claimed := make(chan string, 2)
+	store := &fakeInterviewStore{
+		claimQueuedAnswerJobFn: func(_ context.Context, jobID string) (*AnswerJob, error) {
+			select {
+			case claimed <- jobID:
+			default:
+			}
+			return nil, nil
+		},
+		claimNextQueuedAnswerJobFn: func(_ context.Context) (*AnswerJob, error) {
+			select {
+			case claimed <- "job-overflow":
+			default:
+			}
+			return nil, nil
+		},
+	}
+
+	svc := newInterviewServiceForAsyncTests(store, config.AsyncRuntimeConfig{
+		Workers:       1,
+		QueueSize:     1,
+		RecoveryEvery: time.Hour,
+		StaleAfter:    time.Hour,
+		JobTimeout:    time.Hour,
+	})
+	if !svc.enqueueAsyncAnswerJob("job-fill", "") {
+		t.Fatalf("first enqueue should succeed")
+	}
+	if svc.enqueueAsyncAnswerJob("job-overflow", "") {
+		t.Fatalf("second enqueue should return false when queue is full")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	svc.StartAsyncAnswerRuntime(ctx)
+
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case got := <-claimed:
+			if got == "job-overflow" {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for DB fallback claim after queue overflow")
+		}
 	}
 }

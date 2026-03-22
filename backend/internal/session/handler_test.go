@@ -60,6 +60,7 @@ func newHandlerForTest(t *testing.T, store Store) *Handler {
 	return NewHandler(NewService(Deps{Store: store}, Settings{
 		ExpiryHours:            24,
 		InterviewBudgetSeconds: 2400,
+		DBTimeout:              5 * time.Second,
 	}), auth, time.Hour)
 }
 
@@ -81,6 +82,23 @@ func decodeJSONBody(t *testing.T, rr *httptest.ResponseRecorder, dst any) {
 	t.Helper()
 	if err := json.Unmarshal(rr.Body.Bytes(), dst); err != nil {
 		t.Fatalf("json.Unmarshal() error = %v; body=%s", err, rr.Body.String())
+	}
+}
+
+func assertContextDeadlineWithin(t *testing.T, ctx context.Context, max time.Duration) {
+	t.Helper()
+
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("expected context deadline")
+	}
+
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		t.Fatalf("remaining deadline = %v, want > 0", remaining)
+	}
+	if remaining > max+time.Second {
+		t.Fatalf("remaining deadline = %v, want <= %v", remaining, max+time.Second)
 	}
 }
 
@@ -114,6 +132,54 @@ func TestHandleValidateCoupon_MapsCouponInvalid(t *testing.T) {
 	}
 	if got.Code != "COUPON_INVALID" {
 		t.Fatalf("code = %q, want COUPON_INVALID", got.Code)
+	}
+}
+
+func TestServiceValidateCoupon_UsesDBDeadline(t *testing.T) {
+	t.Parallel()
+
+	const dbTimeout = 2 * time.Second
+	svc := NewService(Deps{
+		Store: &fakeStore{
+			claimCouponAndCreateSessionFn: func(ctx context.Context, _ string, sessionCode, _ string, _ time.Time, _ int) (*Session, error) {
+				assertContextDeadlineWithin(t, ctx, dbTimeout)
+				return &Session{SessionCode: sessionCode}, nil
+			},
+		},
+	}, Settings{
+		ExpiryHours:            24,
+		InterviewBudgetSeconds: 2400,
+		DBTimeout:              dbTimeout,
+	})
+
+	if _, err := svc.ValidateCoupon(context.Background(), "BETA-0001"); err != nil {
+		t.Fatalf("ValidateCoupon() error = %v", err)
+	}
+}
+
+func TestServiceVerifySession_UsesDBDeadline(t *testing.T) {
+	t.Parallel()
+
+	const dbTimeout = 2 * time.Second
+	svc := NewService(Deps{
+		Store: &fakeStore{
+			getSessionByCodeFn: func(ctx context.Context, sessionCode string) (*Session, error) {
+				assertContextDeadlineWithin(t, ctx, dbTimeout)
+				return &Session{
+					SessionCode: sessionCode,
+					PinHash:     hashPIN(t, "482917"),
+					ExpiresAt:   time.Now().Add(time.Hour),
+				}, nil
+			},
+		},
+	}, Settings{
+		ExpiryHours:            24,
+		InterviewBudgetSeconds: 2400,
+		DBTimeout:              dbTimeout,
+	})
+
+	if _, err := svc.VerifySession(context.Background(), "AP-AAAA-BBBB", "482917"); err != nil {
+		t.Fatalf("VerifySession() error = %v", err)
 	}
 }
 

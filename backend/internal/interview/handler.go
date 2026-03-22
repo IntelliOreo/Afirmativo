@@ -71,7 +71,7 @@ func (h *Handler) HandleStart(w http.ResponseWriter, r *http.Request) {
 
 	language, ok := normalizeRequestLanguage(req.Language)
 	if !ok {
-		shared.WriteError(w, shared.ErrBadRequest, "language must be es or en", "BAD_REQUEST")
+		shared.WriteError(w, shared.ErrBadRequest, "Language must be es or en", "BAD_REQUEST")
 		return
 	}
 	if !shared.RequireSessionCodeMatch(w, r, req.SessionCode) {
@@ -207,15 +207,15 @@ func (h *Handler) HandleAnswerAsync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if strings.TrimSpace(req.SessionCode) == "" {
-		shared.WriteError(w, shared.ErrBadRequest, "session_code is required", "BAD_REQUEST")
+		shared.WriteError(w, shared.ErrBadRequest, "Session code is required", "BAD_REQUEST")
 		return
 	}
 	if strings.TrimSpace(req.TurnID) == "" {
-		shared.WriteError(w, shared.ErrBadRequest, "turn_id is required", "BAD_REQUEST")
+		shared.WriteError(w, shared.ErrBadRequest, "Turn ID is required", "BAD_REQUEST")
 		return
 	}
 	if strings.TrimSpace(req.ClientRequestID) == "" {
-		shared.WriteError(w, shared.ErrBadRequest, "client_request_id is required", "BAD_REQUEST")
+		shared.WriteError(w, shared.ErrBadRequest, "Client request ID is required", "BAD_REQUEST")
 		return
 	}
 	if !shared.RequireSessionCodeMatch(w, r, req.SessionCode) {
@@ -251,7 +251,7 @@ func (h *Handler) HandleAnswerAsync(w http.ResponseWriter, r *http.Request) {
 				"client_request_id", req.ClientRequestID,
 				"turn_id", req.TurnID,
 			)
-			shared.WriteError(w, shared.ErrConflict, "clientRequestId cannot be reused with a different payload", "IDEMPOTENCY_CONFLICT")
+			shared.WriteError(w, shared.ErrConflict, "Client request ID cannot be reused with a different payload", "IDEMPOTENCY_CONFLICT")
 		case errors.Is(err, session.ErrSessionExpired):
 			shared.WriteError(w, shared.ErrGone, "Session expired", "SESSION_EXPIRED")
 		default:
@@ -285,11 +285,11 @@ func (h *Handler) HandleAnswerJobStatus(w http.ResponseWriter, r *http.Request) 
 	jobID := strings.TrimSpace(r.PathValue("jobId"))
 	sessionCode := strings.TrimSpace(r.URL.Query().Get("session_code"))
 	if jobID == "" {
-		shared.WriteError(w, shared.ErrBadRequest, "jobId is required", "BAD_REQUEST")
+		shared.WriteError(w, shared.ErrBadRequest, "Job ID is required", "BAD_REQUEST")
 		return
 	}
 	if sessionCode == "" {
-		shared.WriteError(w, shared.ErrBadRequest, "session_code is required", "BAD_REQUEST")
+		shared.WriteError(w, shared.ErrBadRequest, "Session code is required", "BAD_REQUEST")
 		return
 	}
 	if !shared.RequireSessionCodeMatch(w, r, sessionCode) {

@@ -16,16 +16,17 @@ var (
 type ReportStatus string
 
 const (
-	ReportStatusQueued     ReportStatus = "queued"
-	ReportStatusRunning    ReportStatus = "running"
-	ReportStatusReady      ReportStatus = "ready"
-	ReportStatusFailed     ReportStatus = "failed"
+	ReportStatusQueued  ReportStatus = "queued"
+	ReportStatusRunning ReportStatus = "running"
+	ReportStatusReady   ReportStatus = "ready"
+	ReportStatusFailed  ReportStatus = "failed"
 )
 
 // Report represents a completed assessment report.
 type Report struct {
 	SessionCode             string
 	Status                  ReportStatus
+	LastRequestID           string
 	ContentEn               string
 	ContentEs               string
 	AreasOfClarity          []string

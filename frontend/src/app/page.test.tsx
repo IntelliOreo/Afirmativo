@@ -5,6 +5,8 @@ import LandingPage from "./page";
 
 const pushMock = vi.fn();
 const verifySessionMock = vi.fn();
+const setLangMock = vi.fn();
+let mockLang: "en" | "es" = "en";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({
@@ -28,8 +30,8 @@ vi.mock("@/lib/sessionService", () => ({
 
 vi.mock("@/lib/useLanguage", () => ({
   useLanguage: () => ({
-    lang: "en",
-    setLang: vi.fn(),
+    lang: mockLang,
+    setLang: setLangMock,
   }),
 }));
 
@@ -37,6 +39,8 @@ describe("LandingPage", () => {
   beforeEach(() => {
     pushMock.mockReset();
     verifySessionMock.mockReset();
+    setLangMock.mockReset();
+    mockLang = "en";
   });
 
   it("sends a verified returning user straight to the interview page", async () => {
@@ -73,5 +77,36 @@ describe("LandingPage", () => {
     await waitFor(() => {
       expect(screen.getByText("Incorrect PIN. Please try again.")).toBeInTheDocument();
     });
+  });
+
+  it("renders both testimonials on the landing page without the removed review banner", () => {
+    render(<LandingPage />);
+
+    expect(screen.queryByText("Based on real reviews")).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "“Practicar esto de verdad ha hecho una gran diferencia. Explicar lo que pasó ahora me sale mucho más claro y natural. Antes era un punto débil, pero ha mejorado bastante.”",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "“Gracias, ya llevo más de diez sesiones practicando y, de verdad, me ha ayudado muchísimo a bajar la ansiedad.”",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("G.")).toBeInTheDocument();
+    expect(screen.getByText("J.")).toBeInTheDocument();
+  });
+
+  it("keeps the testimonial quotes verbatim in Spanish mode", () => {
+    mockLang = "es";
+
+    render(<LandingPage />);
+
+    expect(screen.queryByText("Basado en resenas reales")).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "“Practicar esto de verdad ha hecho una gran diferencia. Explicar lo que pasó ahora me sale mucho más claro y natural. Antes era un punto débil, pero ha mejorado bastante.”",
+      ),
+    ).toBeInTheDocument();
   });
 });

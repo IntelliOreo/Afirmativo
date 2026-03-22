@@ -33,6 +33,50 @@ type Coupon struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type InterviewAnswerJob struct {
+	ID                     pgtype.UUID        `json:"id"`
+	SessionCode            string             `json:"session_code"`
+	ClientRequestID        string             `json:"client_request_id"`
+	LastRequestID          pgtype.Text        `json:"last_request_id"`
+	TurnID                 string             `json:"turn_id"`
+	QuestionText           pgtype.Text        `json:"question_text"`
+	AnswerText             string             `json:"answer_text"`
+	Status                 string             `json:"status"`
+	ResultPayload          []byte             `json:"result_payload"`
+	ErrorCode              pgtype.Text        `json:"error_code"`
+	ErrorMessage           pgtype.Text        `json:"error_message"`
+	Attempts               int32              `json:"attempts"`
+	StartedAt              pgtype.Timestamptz `json:"started_at"`
+	CompletedAt            pgtype.Timestamptz `json:"completed_at"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
+	FailedReasonsTruncated string             `json:"failed_reasons_truncated"`
+}
+
+type InterviewEvent struct {
+	ID          pgtype.UUID        `json:"id"`
+	SessionCode string             `json:"session_code"`
+	EventType   string             `json:"event_type"`
+	AnswerText  pgtype.Text        `json:"answer_text"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type Payment struct {
+	ID                pgtype.UUID        `json:"id"`
+	CheckoutSessionID pgtype.Text        `json:"checkout_session_id"`
+	SessionCode       pgtype.Text        `json:"session_code"`
+	AmountCents       int32              `json:"amount_cents"`
+	Currency          string             `json:"currency"`
+	Status            string             `json:"status"`
+	RevealPin         pgtype.Text        `json:"reveal_pin"`
+	RevealExpiresAt   pgtype.Timestamptz `json:"reveal_expires_at"`
+	RevealConsumedAt  pgtype.Timestamptz `json:"reveal_consumed_at"`
+	FailureCode       pgtype.Text        `json:"failure_code"`
+	FailureDetail     pgtype.Text        `json:"failure_detail"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+}
+
 type QuestionArea struct {
 	ID                   pgtype.UUID        `json:"id"`
 	SessionCode          string             `json:"session_code"`
@@ -51,22 +95,27 @@ type Report struct {
 	ContentEn        pgtype.Text        `json:"content_en"`
 	ContentEs        pgtype.Text        `json:"content_es"`
 	Strengths        []byte             `json:"strengths"`
-	StrengthsEs      []byte             `json:"strengths_es"`
 	Weaknesses       []byte             `json:"weaknesses"`
-	WeaknessesEs     []byte             `json:"weaknesses_es"`
 	Recommendation   pgtype.Text        `json:"recommendation"`
-	RecommendationEs pgtype.Text        `json:"recommendation_es"`
 	QuestionCount    int32              `json:"question_count"`
 	DurationMinutes  int32              `json:"duration_minutes"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	StrengthsEs      []byte             `json:"strengths_es"`
+	WeaknessesEs     []byte             `json:"weaknesses_es"`
+	RecommendationEs pgtype.Text        `json:"recommendation_es"`
+	ErrorCode        pgtype.Text        `json:"error_code"`
+	ErrorMessage     pgtype.Text        `json:"error_message"`
+	Attempts         int32              `json:"attempts"`
+	StartedAt        pgtype.Timestamptz `json:"started_at"`
+	CompletedAt      pgtype.Timestamptz `json:"completed_at"`
+	LastRequestID    pgtype.Text        `json:"last_request_id"`
 }
 
 type Session struct {
 	SessionCode               string             `json:"session_code"`
 	PinHash                   string             `json:"pin_hash"`
 	Track                     pgtype.Text        `json:"track"`
-	PreferredLanguage         pgtype.Text        `json:"preferred_language"`
 	Status                    string             `json:"status"`
 	Role                      string             `json:"role"`
 	EndedAt                   pgtype.Timestamptz `json:"ended_at"`
@@ -81,4 +130,14 @@ type Session struct {
 	CurrentInterviewStartedAt pgtype.Timestamptz `json:"current_interview_started_at"`
 	LastApiCallAt             pgtype.Timestamptz `json:"last_api_call_at"`
 	ConversationHistory       []byte             `json:"conversation_history"`
+	PreferredLanguage         pgtype.Text        `json:"preferred_language"`
+	FlowStep                  string             `json:"flow_step"`
+	ExpectedTurnID            pgtype.Text        `json:"expected_turn_id"`
+	DisplayQuestionNumber     int32              `json:"display_question_number"`
+	ActiveQuestionTextEs      pgtype.Text        `json:"active_question_text_es"`
+	ActiveQuestionTextEn      pgtype.Text        `json:"active_question_text_en"`
+	ActiveQuestionArea        pgtype.Text        `json:"active_question_area"`
+	ActiveQuestionKind        pgtype.Text        `json:"active_question_kind"`
+	ActiveQuestionIssuedAt    pgtype.Timestamptz `json:"active_question_issued_at"`
+	ActiveAnswerDeadlineAt    pgtype.Timestamptz `json:"active_answer_deadline_at"`
 }

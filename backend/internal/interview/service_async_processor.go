@@ -8,8 +8,9 @@ import (
 )
 
 type claimedAsyncAnswerJob struct {
-	job       *AnswerJob
-	requestID string
+	job         *AnswerJob
+	requestID   string
+	claimSource string
 }
 
 type asyncAnswerTerminalOutcome struct {
@@ -19,15 +20,13 @@ type asyncAnswerTerminalOutcome struct {
 }
 
 // maxAsyncAnswerJobAttempts is the ceiling before a job is marked as permanently failed.
-const maxAsyncAnswerJobAttempts = 5
+const (
+	maxAsyncAnswerJobAttempts      = 5
+	asyncAnswerClaimSourceChannel  = "channel_hint"
+	asyncAnswerClaimSourceFallback = "db_fallback"
+)
 
-func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
-	claimed, ok := s.claimAsyncAnswerJob(ctx, jobID)
-	if !ok {
-		return
-	}
-	defer s.asyncAnswerRequestIDs.Delete(claimed.job.ID)
-
+func (s *Service) processClaimedAsyncAnswerJob(ctx context.Context, claimed *claimedAsyncAnswerJob) {
 	// If the job has been retried too many times, mark it as permanently failed.
 	if claimed.job.Attempts > maxAsyncAnswerJobAttempts {
 		slog.Error("async answer job exceeded max attempts",
@@ -71,30 +70,65 @@ func (s *Service) processAnswerJob(ctx context.Context, jobID string) {
 	s.finalizeAsyncAnswerJobSuccess(ctx, claimed, answerResult)
 }
 
-func (s *Service) claimAsyncAnswerJob(ctx context.Context, jobID string) (*claimedAsyncAnswerJob, bool) {
+func (s *Service) claimAsyncAnswerJob(ctx context.Context, jobID, claimSource string) (*claimedAsyncAnswerJob, bool) {
+	if ctx.Err() != nil {
+		return nil, false
+	}
+
 	claimCtx, claimCancel := context.WithTimeout(ctx, s.dbTimeout)
 	job, err := s.jobStore.ClaimQueuedAnswerJob(claimCtx, jobID)
 	claimCancel()
-	requestID := s.asyncAnswerRequestID(jobID)
 	if err != nil {
-		slog.Error("failed to claim async answer job", "job_id", jobID, "request_id", requestID, "error", err)
+		slog.Error("failed to claim async answer job", "job_id", jobID, "error", err)
 		return nil, false
 	}
 	if job == nil {
-		slog.Debug("async answer job not claimable", "job_id", jobID, "request_id", requestID)
+		slog.Debug("async answer job not claimable", "job_id", jobID)
 		return nil, false
 	}
+	requestID := job.LastRequestID
 
 	slog.Info("async answer job claimed",
 		"request_id", requestID,
 		"session_code", job.SessionCode,
 		"client_request_id", job.ClientRequestID,
 		"job_id", job.ID,
+		"claim_source", claimSource,
 		"status", job.Status,
 		"attempts", job.Attempts,
 	)
 
-	return &claimedAsyncAnswerJob{job: job, requestID: requestID}, true
+	return &claimedAsyncAnswerJob{job: job, requestID: requestID, claimSource: claimSource}, true
+}
+
+func (s *Service) claimNextAsyncAnswerJob(ctx context.Context) (*claimedAsyncAnswerJob, bool) {
+	if ctx.Err() != nil {
+		return nil, false
+	}
+
+	claimCtx, claimCancel := context.WithTimeout(ctx, s.dbTimeout)
+	job, err := s.jobStore.ClaimNextQueuedAnswerJob(claimCtx)
+	claimCancel()
+	if err != nil {
+		slog.Error("failed to claim next async answer job", "claim_source", asyncAnswerClaimSourceFallback, "error", err)
+		return nil, false
+	}
+	if job == nil {
+		return nil, false
+	}
+
+	requestID := job.LastRequestID
+	slog.Info("async answer job claimed",
+		"request_id", requestID,
+		"session_code", job.SessionCode,
+		"client_request_id", job.ClientRequestID,
+		"job_id", job.ID,
+		"claim_source", asyncAnswerClaimSourceFallback,
+		"status", job.Status,
+		"attempts", job.Attempts,
+	)
+
+	return &claimedAsyncAnswerJob{job: job, requestID: requestID, claimSource: asyncAnswerClaimSourceFallback}, true
 }
 
 func classifyAsyncAnswerTerminalOutcome(err error) asyncAnswerTerminalOutcome {

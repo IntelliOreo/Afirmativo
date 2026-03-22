@@ -60,10 +60,10 @@ const (
 )
 
 var (
-	ErrTurnConflict        = errors.New("turn conflict")
-	ErrInvalidFlow         = errors.New("invalid flow state")
-	ErrAsyncJobNotFound    = errors.New("async answer job not found")
-	ErrIdempotencyConflict = errors.New("idempotency key reused with different payload")
+	ErrTurnConflict          = errors.New("turn conflict")
+	ErrInvalidFlow           = errors.New("invalid flow state")
+	ErrAsyncJobNotFound      = errors.New("async answer job not found")
+	ErrIdempotencyConflict   = errors.New("idempotency key reused with different payload")
 	ErrAIRetryExhausted      = errors.New("ai retry exhausted")
 	ErrSessionCompleteFailed = errors.New("session complete failed")
 )
@@ -381,6 +381,7 @@ type AnswerJob struct {
 	ID              string
 	SessionCode     string
 	ClientRequestID string
+	LastRequestID   string
 	TurnID          string
 	QuestionText    string
 	AnswerText      string

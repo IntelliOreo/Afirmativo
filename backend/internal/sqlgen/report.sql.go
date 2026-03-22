@@ -12,24 +12,34 @@ import (
 )
 
 const createReport = `-- name: CreateReport :one
-INSERT INTO reports (session_code, status, content_en, content_es, strengths, strengths_es, weaknesses, weaknesses_es, recommendation, recommendation_es, question_count, duration_minutes)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-RETURNING id, session_code, status, content_en, content_es, strengths, strengths_es, weaknesses, weaknesses_es, recommendation, recommendation_es, question_count, duration_minutes, created_at, updated_at
+INSERT INTO reports (
+    session_code, status, content_en, content_es, strengths, strengths_es, weaknesses, weaknesses_es,
+    recommendation, recommendation_es, question_count, duration_minutes, error_code, error_message,
+    attempts, started_at, completed_at, last_request_id
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+RETURNING id, session_code, status, content_en, content_es, strengths, weaknesses, recommendation, question_count, duration_minutes, created_at, updated_at, strengths_es, weaknesses_es, recommendation_es, error_code, error_message, attempts, started_at, completed_at, last_request_id
 `
 
 type CreateReportParams struct {
-	SessionCode      string      `json:"session_code"`
-	Status           string      `json:"status"`
-	ContentEn        pgtype.Text `json:"content_en"`
-	ContentEs        pgtype.Text `json:"content_es"`
-	Strengths        []byte      `json:"strengths"`
-	StrengthsEs      []byte      `json:"strengths_es"`
-	Weaknesses       []byte      `json:"weaknesses"`
-	WeaknessesEs     []byte      `json:"weaknesses_es"`
-	Recommendation   pgtype.Text `json:"recommendation"`
-	RecommendationEs pgtype.Text `json:"recommendation_es"`
-	QuestionCount    int32       `json:"question_count"`
-	DurationMinutes  int32       `json:"duration_minutes"`
+	SessionCode      string             `json:"session_code"`
+	Status           string             `json:"status"`
+	ContentEn        pgtype.Text        `json:"content_en"`
+	ContentEs        pgtype.Text        `json:"content_es"`
+	Strengths        []byte             `json:"strengths"`
+	StrengthsEs      []byte             `json:"strengths_es"`
+	Weaknesses       []byte             `json:"weaknesses"`
+	WeaknessesEs     []byte             `json:"weaknesses_es"`
+	Recommendation   pgtype.Text        `json:"recommendation"`
+	RecommendationEs pgtype.Text        `json:"recommendation_es"`
+	QuestionCount    int32              `json:"question_count"`
+	DurationMinutes  int32              `json:"duration_minutes"`
+	ErrorCode        pgtype.Text        `json:"error_code"`
+	ErrorMessage     pgtype.Text        `json:"error_message"`
+	Attempts         int32              `json:"attempts"`
+	StartedAt        pgtype.Timestamptz `json:"started_at"`
+	CompletedAt      pgtype.Timestamptz `json:"completed_at"`
+	LastRequestID    pgtype.Text        `json:"last_request_id"`
 }
 
 func (q *Queries) CreateReport(ctx context.Context, arg CreateReportParams) (Report, error) {
@@ -46,6 +56,12 @@ func (q *Queries) CreateReport(ctx context.Context, arg CreateReportParams) (Rep
 		arg.RecommendationEs,
 		arg.QuestionCount,
 		arg.DurationMinutes,
+		arg.ErrorCode,
+		arg.ErrorMessage,
+		arg.Attempts,
+		arg.StartedAt,
+		arg.CompletedAt,
+		arg.LastRequestID,
 	)
 	var i Report
 	err := row.Scan(
@@ -55,21 +71,29 @@ func (q *Queries) CreateReport(ctx context.Context, arg CreateReportParams) (Rep
 		&i.ContentEn,
 		&i.ContentEs,
 		&i.Strengths,
-		&i.StrengthsEs,
 		&i.Weaknesses,
-		&i.WeaknessesEs,
 		&i.Recommendation,
-		&i.RecommendationEs,
 		&i.QuestionCount,
 		&i.DurationMinutes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.StrengthsEs,
+		&i.WeaknessesEs,
+		&i.RecommendationEs,
+		&i.ErrorCode,
+		&i.ErrorMessage,
+		&i.Attempts,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.LastRequestID,
 	)
 	return i, err
 }
 
 const getReportBySession = `-- name: GetReportBySession :one
-SELECT id, session_code, status, content_en, content_es, strengths, strengths_es, weaknesses, weaknesses_es, recommendation, recommendation_es, question_count, duration_minutes, created_at, updated_at FROM reports WHERE session_code = $1
+SELECT id, session_code, status, content_en, content_es, strengths, weaknesses, recommendation, question_count, duration_minutes, created_at, updated_at, strengths_es, weaknesses_es, recommendation_es, error_code, error_message, attempts, started_at, completed_at, last_request_id
+FROM reports
+WHERE session_code = $1
 `
 
 func (q *Queries) GetReportBySession(ctx context.Context, sessionCode string) (Report, error) {
@@ -82,65 +106,21 @@ func (q *Queries) GetReportBySession(ctx context.Context, sessionCode string) (R
 		&i.ContentEn,
 		&i.ContentEs,
 		&i.Strengths,
-		&i.StrengthsEs,
 		&i.Weaknesses,
-		&i.WeaknessesEs,
 		&i.Recommendation,
-		&i.RecommendationEs,
 		&i.QuestionCount,
 		&i.DurationMinutes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.StrengthsEs,
+		&i.WeaknessesEs,
+		&i.RecommendationEs,
+		&i.ErrorCode,
+		&i.ErrorMessage,
+		&i.Attempts,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.LastRequestID,
 	)
 	return i, err
-}
-
-const updateReport = `-- name: UpdateReport :exec
-UPDATE reports
-SET status = $2,
-    content_en = $3,
-    content_es = $4,
-    strengths = $5,
-    strengths_es = $6,
-    weaknesses = $7,
-    weaknesses_es = $8,
-    recommendation = $9,
-    recommendation_es = $10,
-    question_count = $11,
-    duration_minutes = $12,
-    updated_at = now()
-WHERE session_code = $1
-`
-
-type UpdateReportParams struct {
-	SessionCode      string      `json:"session_code"`
-	Status           string      `json:"status"`
-	ContentEn        pgtype.Text `json:"content_en"`
-	ContentEs        pgtype.Text `json:"content_es"`
-	Strengths        []byte      `json:"strengths"`
-	StrengthsEs      []byte      `json:"strengths_es"`
-	Weaknesses       []byte      `json:"weaknesses"`
-	WeaknessesEs     []byte      `json:"weaknesses_es"`
-	Recommendation   pgtype.Text `json:"recommendation"`
-	RecommendationEs pgtype.Text `json:"recommendation_es"`
-	QuestionCount    int32       `json:"question_count"`
-	DurationMinutes  int32       `json:"duration_minutes"`
-}
-
-func (q *Queries) UpdateReport(ctx context.Context, arg UpdateReportParams) error {
-	_, err := q.db.Exec(ctx, updateReport,
-		arg.SessionCode,
-		arg.Status,
-		arg.ContentEn,
-		arg.ContentEs,
-		arg.Strengths,
-		arg.StrengthsEs,
-		arg.Weaknesses,
-		arg.WeaknessesEs,
-		arg.Recommendation,
-		arg.RecommendationEs,
-		arg.QuestionCount,
-		arg.DurationMinutes,
-	)
-	return err
 }

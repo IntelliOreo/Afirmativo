@@ -15,9 +15,12 @@ import (
 )
 
 const (
-	sessionCompleted       = "completed"
-	reportAIMaxAttempts    = 3
-	maxReportJobAttempts   = 5
+	sessionCompleted            = "completed"
+	reportAIMaxAttempts         = 3
+	maxReportJobAttempts        = 5
+	asyncReportIdleClaimEvery   = 2 * time.Second
+	reportClaimSourceChannel    = "channel_hint"
+	reportClaimSourceDBFallback = "db_fallback"
 )
 
 // reportAIRetryBackoffs matches the interview pipeline's AI retry backoffs.
@@ -28,6 +31,10 @@ type reportGenerationInput struct {
 	openFloorTranscript string
 	answerCount         int
 	durationMinutes     int
+}
+
+type claimedQueuedReport struct {
+	report *Report
 }
 
 type reportAIRetryExhaustedError struct {
@@ -58,15 +65,13 @@ type Service struct {
 	dbTimeout   time.Duration
 	nowFn       func() time.Time
 
-	asyncWorkers          int
-	asyncRecoveryBatch    int
-	asyncRecoveryEvery    time.Duration
-	asyncStaleAfter       time.Duration
-	asyncJobTimeout       time.Duration
-	asyncQueue            chan string
-	asyncRuntimeOnce      sync.Once
-	asyncReportRequestIDs sync.Map
-	workerWg              sync.WaitGroup
+	asyncWorkers       int
+	asyncRecoveryEvery time.Duration
+	asyncStaleAfter    time.Duration
+	asyncJobTimeout    time.Duration
+	asyncQueue         chan string
+	asyncRuntimeOnce   sync.Once
+	workerWg           sync.WaitGroup
 }
 
 type Deps struct {
@@ -93,7 +98,6 @@ func NewService(deps Deps, settings Settings) *Service {
 		dbTimeout:          settings.DBTimeout,
 		nowFn:              time.Now,
 		asyncWorkers:       settings.AsyncRuntime.Workers,
-		asyncRecoveryBatch: settings.AsyncRuntime.RecoveryBatch,
 		asyncRecoveryEvery: settings.AsyncRuntime.RecoveryEvery,
 		asyncStaleAfter:    settings.AsyncRuntime.StaleAfter,
 		asyncJobTimeout:    settings.AsyncRuntime.JobTimeout,
@@ -115,7 +119,7 @@ func (s *Service) StartAsyncRuntime(ctx context.Context) {
 		slog.Info("starting async report runtime",
 			"workers", s.asyncWorkers,
 			"queue_size", cap(s.asyncQueue),
-			"recovery_batch", s.asyncRecoveryBatch,
+			"idle_claim_every", asyncReportIdleClaimEvery,
 			"recovery_every", s.asyncRecoveryEvery,
 			"stale_after", s.asyncStaleAfter,
 			"job_timeout", s.asyncJobTimeout,
@@ -141,6 +145,9 @@ func (s *Service) runAsyncWorker(ctx context.Context, workerID int) {
 	slog.Debug("async report worker started", "worker_id", workerID)
 	defer slog.Debug("async report worker stopped", "worker_id", workerID)
 
+	idleTicker := time.NewTicker(asyncReportIdleClaimEvery)
+	defer idleTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -148,6 +155,10 @@ func (s *Service) runAsyncWorker(ctx context.Context, workerID int) {
 		case sessionCode := <-s.asyncQueue:
 			processCtx, cancel := context.WithTimeout(ctx, s.asyncJobTimeout)
 			s.processQueuedReport(processCtx, sessionCode)
+			cancel()
+		case <-idleTicker.C:
+			processCtx, cancel := context.WithTimeout(ctx, s.asyncJobTimeout)
+			s.processNextQueuedReport(processCtx)
 			cancel()
 		}
 	}
@@ -179,49 +190,34 @@ func (s *Service) recoverAsyncReports(ctx context.Context) {
 		return
 	}
 
-	listCtx, listCancel := context.WithTimeout(ctx, s.dbTimeout)
-	queuedSessionCodes, err := s.store.ListQueuedReportSessionCodes(listCtx, s.asyncRecoveryBatch)
-	listCancel()
-	if err != nil {
-		slog.Error("failed to list queued reports", "error", err)
-		return
-	}
-
-	enqueued := 0
-	for _, sessionCode := range queuedSessionCodes {
-		if s.enqueueReport(sessionCode) {
-			enqueued++
-		}
-	}
-
-	if requeued > 0 || enqueued > 0 {
+	if requeued > 0 {
 		slog.Info("async report recovery cycle completed",
 			"requeued_stale_running_reports", requeued,
-			"queued_reports_listed", len(queuedSessionCodes),
-			"queued_reports_enqueued", enqueued,
 		)
 	}
 }
 
-func (s *Service) enqueueReport(sessionCode string) bool {
+func (s *Service) enqueueReport(sessionCode, requestID string) bool {
 	trimmed := strings.TrimSpace(sessionCode)
 	if trimmed == "" || s.asyncQueue == nil {
 		return false
 	}
-	requestID := s.asyncReportRequestID(trimmed)
 
 	select {
 	case s.asyncQueue <- trimmed:
 		slog.Debug("async report queued for worker pickup", "session_code", trimmed, "request_id", requestID)
 		return true
 	default:
+		// Leave status as queued in DB; idle DB fallback will pick it up later.
 		slog.Warn("async report queue is full; report remains queued", "session_code", trimmed, "request_id", requestID)
 		return false
 	}
 }
 
 func (s *Service) GetReport(ctx context.Context, sessionCode string) (*Report, error) {
-	existing, err := s.store.GetReportBySession(ctx, sessionCode)
+	dbCtx, dbCancel := context.WithTimeout(ctx, s.dbTimeout)
+	existing, err := s.store.GetReportBySession(dbCtx, sessionCode)
+	dbCancel()
 	if err != nil {
 		return nil, fmt.Errorf("check existing report: %w", err)
 	}
@@ -236,25 +232,29 @@ func (s *Service) GetReport(ctx context.Context, sessionCode string) (*Report, e
 }
 
 func (s *Service) GenerateReportAsync(ctx context.Context, sessionCode string) (*Report, error) {
-	if requestID := shared.RequestIDFromContext(ctx); requestID != "" {
-		s.asyncReportRequestIDs.Store(strings.TrimSpace(sessionCode), requestID)
-	}
+	requestID := shared.RequestIDFromContext(ctx)
 	if _, err := s.getCompletedSession(ctx, sessionCode); err != nil {
 		return nil, err
 	}
 
-	existing, err := s.store.GetReportBySession(ctx, sessionCode)
+	dbCtx, dbCancel := context.WithTimeout(ctx, s.dbTimeout)
+	existing, err := s.store.GetReportBySession(dbCtx, sessionCode)
+	dbCancel()
 	if err != nil {
 		return nil, fmt.Errorf("check existing report: %w", err)
 	}
 
 	if existing != nil {
 		if string(existing.Status) == "generating" {
-			if err := s.store.SetReportQueued(ctx, sessionCode, false); err != nil {
+			dbCtx, dbCancel := context.WithTimeout(ctx, s.dbTimeout)
+			err := s.store.SetReportQueued(dbCtx, sessionCode, false, requestID)
+			dbCancel()
+			if err != nil {
 				return nil, fmt.Errorf("queue legacy generating report: %w", err)
 			}
-			s.enqueueReport(sessionCode)
+			s.enqueueReport(sessionCode, requestID)
 			existing.Status = ReportStatusQueued
+			existing.LastRequestID = requestID
 			return existing, nil
 		}
 
@@ -262,14 +262,25 @@ func (s *Service) GenerateReportAsync(ctx context.Context, sessionCode string) (
 		case ReportStatusReady:
 			return existing, nil
 		case ReportStatusQueued, ReportStatusRunning:
-			s.enqueueReport(sessionCode)
+			dbCtx, dbCancel := context.WithTimeout(ctx, s.dbTimeout)
+			err := s.store.SetReportLastRequestID(dbCtx, sessionCode, requestID)
+			dbCancel()
+			if err != nil {
+				return nil, fmt.Errorf("update report request correlation: %w", err)
+			}
+			s.enqueueReport(sessionCode, requestID)
+			existing.LastRequestID = requestID
 			return existing, nil
 		case ReportStatusFailed:
-			if err := s.store.SetReportQueued(ctx, sessionCode, true); err != nil {
+			dbCtx, dbCancel := context.WithTimeout(ctx, s.dbTimeout)
+			err := s.store.SetReportQueued(dbCtx, sessionCode, true, requestID)
+			dbCancel()
+			if err != nil {
 				return nil, fmt.Errorf("queue failed report: %w", err)
 			}
-			s.enqueueReport(sessionCode)
+			s.enqueueReport(sessionCode, requestID)
 			existing.Status = ReportStatusQueued
+			existing.LastRequestID = requestID
 			existing.ErrorCode = ""
 			existing.ErrorMessage = ""
 			existing.CompletedAt = nil
@@ -280,44 +291,109 @@ func (s *Service) GenerateReportAsync(ctx context.Context, sessionCode string) (
 	}
 
 	placeholder := &Report{
-		SessionCode: sessionCode,
-		Status:      ReportStatusQueued,
+		SessionCode:   sessionCode,
+		Status:        ReportStatusQueued,
+		LastRequestID: requestID,
 	}
-	if err := s.store.CreateReport(ctx, placeholder); err != nil {
-		existing, err2 := s.store.GetReportBySession(ctx, sessionCode)
+	dbCtx, dbCancel = context.WithTimeout(ctx, s.dbTimeout)
+	err = s.store.CreateReport(dbCtx, placeholder)
+	dbCancel()
+	if err != nil {
+		dbCtx, dbCancel := context.WithTimeout(ctx, s.dbTimeout)
+		existing, err2 := s.store.GetReportBySession(dbCtx, sessionCode)
+		dbCancel()
 		if err2 != nil {
 			return nil, fmt.Errorf("create report: %w (also: %w)", err, err2)
 		}
 		if existing != nil {
-			s.enqueueReport(sessionCode)
+			dbCtx, dbCancel := context.WithTimeout(ctx, s.dbTimeout)
+			err = s.store.SetReportLastRequestID(dbCtx, sessionCode, requestID)
+			dbCancel()
+			if err != nil {
+				return nil, fmt.Errorf("update report request correlation after create conflict: %w", err)
+			}
+			existing.LastRequestID = requestID
+			s.enqueueReport(sessionCode, requestID)
 			return existing, nil
 		}
 		return nil, fmt.Errorf("create report: %w", err)
 	}
 
-	s.enqueueReport(sessionCode)
+	s.enqueueReport(sessionCode, requestID)
 	return placeholder, nil
 }
 
 func (s *Service) processQueuedReport(ctx context.Context, sessionCode string) {
+	claimed, ok := s.claimQueuedReportByHint(ctx, sessionCode)
+	if !ok {
+		return
+	}
+	s.processClaimedReport(ctx, claimed)
+}
+
+func (s *Service) processNextQueuedReport(ctx context.Context) {
+	claimed, ok := s.claimNextQueuedReport(ctx)
+	if !ok {
+		return
+	}
+	s.processClaimedReport(ctx, claimed)
+}
+
+func (s *Service) claimQueuedReportByHint(ctx context.Context, sessionCode string) (*claimedQueuedReport, bool) {
+	if ctx.Err() != nil {
+		return nil, false
+	}
+
 	claimCtx, claimCancel := context.WithTimeout(ctx, s.dbTimeout)
 	reportRecord, err := s.store.ClaimQueuedReport(claimCtx, sessionCode)
 	claimCancel()
-	requestID := s.asyncReportRequestID(sessionCode)
 	if err != nil {
-		slog.Error("failed to claim queued report", "session_code", sessionCode, "request_id", requestID, "error", err)
-		return
+		slog.Error("failed to claim queued report", "session_code", sessionCode, "error", err)
+		return nil, false
 	}
 	if reportRecord == nil {
-		return
+		return nil, false
 	}
-	defer s.asyncReportRequestIDs.Delete(reportRecord.SessionCode)
 
 	slog.Info("async report claimed",
-		"request_id", requestID,
+		"request_id", reportRecord.LastRequestID,
 		"session_code", reportRecord.SessionCode,
+		"claim_source", reportClaimSourceChannel,
 		"attempts", reportRecord.Attempts,
 	)
+
+	return &claimedQueuedReport{report: reportRecord}, true
+}
+
+func (s *Service) claimNextQueuedReport(ctx context.Context) (*claimedQueuedReport, bool) {
+	if ctx.Err() != nil {
+		return nil, false
+	}
+
+	claimCtx, claimCancel := context.WithTimeout(ctx, s.dbTimeout)
+	reportRecord, err := s.store.ClaimNextQueuedReport(claimCtx)
+	claimCancel()
+	if err != nil {
+		slog.Error("failed to claim next queued report", "claim_source", reportClaimSourceDBFallback, "error", err)
+		return nil, false
+	}
+	if reportRecord == nil {
+		return nil, false
+	}
+
+	slog.Info("async report claimed",
+		"request_id", reportRecord.LastRequestID,
+		"session_code", reportRecord.SessionCode,
+		"claim_source", reportClaimSourceDBFallback,
+		"attempts", reportRecord.Attempts,
+	)
+
+	return &claimedQueuedReport{report: reportRecord}, true
+}
+
+func (s *Service) processClaimedReport(ctx context.Context, claimed *claimedQueuedReport) {
+	reportRecord := claimed.report
+	requestID := reportRecord.LastRequestID
 
 	if reportRecord.Attempts > maxReportJobAttempts {
 		slog.Error("async report exceeded max attempts",
@@ -325,25 +401,25 @@ func (s *Service) processQueuedReport(ctx context.Context, sessionCode string) {
 			"session_code", reportRecord.SessionCode,
 			"attempts", reportRecord.Attempts,
 		)
-		s.markReportFailed(ctx, reportRecord.SessionCode, fmt.Errorf("report generation failed after %d attempts", reportRecord.Attempts))
+		s.markReportFailed(ctx, reportRecord, fmt.Errorf("report generation failed after %d attempts", reportRecord.Attempts))
 		return
 	}
 
 	sess, err := s.getCompletedSession(ctx, reportRecord.SessionCode)
 	if err != nil {
-		s.markReportFailed(ctx, reportRecord.SessionCode, err)
+		s.markReportFailed(ctx, reportRecord, err)
 		return
 	}
 
 	input, err := s.buildReportInput(ctx, reportRecord.SessionCode, sess)
 	if err != nil {
-		s.markReportFailed(ctx, reportRecord.SessionCode, err)
+		s.markReportFailed(ctx, reportRecord, err)
 		return
 	}
 
 	reportResult, err := s.generateReportWithRetry(ctx, reportRecord.SessionCode, input)
 	if err != nil {
-		s.markReportFailed(ctx, reportRecord.SessionCode, err)
+		s.markReportFailed(ctx, reportRecord, err)
 		return
 	}
 
@@ -351,30 +427,31 @@ func (s *Service) processQueuedReport(ctx context.Context, sessionCode string) {
 	if err := s.store.MarkReportReady(successCtx, reportResult); err != nil {
 		successCancel()
 		slog.Error("failed to mark report ready", "session_code", reportRecord.SessionCode, "request_id", requestID, "error", err)
-		s.markReportFailed(ctx, reportRecord.SessionCode, fmt.Errorf("persist ready failed: %w", err))
+		s.markReportFailed(ctx, reportRecord, fmt.Errorf("persist ready failed: %w", err))
 		return
 	}
 	successCancel()
 	slog.Info("async report marked ready", "session_code", reportRecord.SessionCode, "request_id", requestID)
 }
 
-func (s *Service) markReportFailed(ctx context.Context, sessionCode string, err error) {
+func (s *Service) markReportFailed(ctx context.Context, reportRecord *Report, err error) {
+	requestID := reportRecord.LastRequestID
 	if errors.Is(err, context.Canceled) {
 		slog.Info("async report canceled before terminal persistence; leaving report for recovery",
-			"session_code", sessionCode,
-			"request_id", s.asyncReportRequestID(sessionCode),
+			"session_code", reportRecord.SessionCode,
+			"request_id", requestID,
 		)
 		return
 	}
 
 	errorCode, errorMessage := reportFailureDetails(err)
 	failCtx, failCancel := context.WithTimeout(context.Background(), s.dbTimeout)
-	markErr := s.store.MarkReportFailed(failCtx, sessionCode, errorCode, errorMessage)
+	markErr := s.store.MarkReportFailed(failCtx, reportRecord.SessionCode, errorCode, errorMessage)
 	failCancel()
 	if markErr != nil {
 		slog.Error("failed to mark report failed",
-			"session_code", sessionCode,
-			"request_id", s.asyncReportRequestID(sessionCode),
+			"session_code", reportRecord.SessionCode,
+			"request_id", requestID,
 			"error_code", errorCode,
 			"error", markErr,
 		)
@@ -382,20 +459,11 @@ func (s *Service) markReportFailed(ctx context.Context, sessionCode string, err 
 	}
 
 	slog.Warn("async report marked failed",
-		"session_code", sessionCode,
-		"request_id", s.asyncReportRequestID(sessionCode),
+		"session_code", reportRecord.SessionCode,
+		"request_id", requestID,
 		"error_code", errorCode,
 		"error", err,
 	)
-}
-
-func (s *Service) asyncReportRequestID(sessionCode string) string {
-	value, ok := s.asyncReportRequestIDs.Load(strings.TrimSpace(sessionCode))
-	if !ok {
-		return ""
-	}
-	requestID, _ := value.(string)
-	return strings.TrimSpace(requestID)
 }
 
 func reportFailureDetails(err error) (string, string) {
@@ -426,7 +494,9 @@ func reportFailureDetails(err error) (string, string) {
 }
 
 func (s *Service) getCompletedSession(ctx context.Context, sessionCode string) (*SessionInfo, error) {
-	sess, err := s.sessions.GetSessionByCode(ctx, sessionCode)
+	dbCtx, dbCancel := context.WithTimeout(ctx, s.dbTimeout)
+	sess, err := s.sessions.GetSessionByCode(dbCtx, sessionCode)
+	dbCancel()
 	if err != nil {
 		if errors.Is(err, shared.ErrNotFound) {
 			return nil, ErrSessionNotFound
@@ -440,17 +510,23 @@ func (s *Service) getCompletedSession(ctx context.Context, sessionCode string) (
 }
 
 func (s *Service) buildReportInput(ctx context.Context, sessionCode string, sess *SessionInfo) (*reportGenerationInput, error) {
-	areas, err := s.interviews.GetAreasBySession(ctx, sessionCode)
+	dbCtx, dbCancel := context.WithTimeout(ctx, s.dbTimeout)
+	areas, err := s.interviews.GetAreasBySession(dbCtx, sessionCode)
+	dbCancel()
 	if err != nil {
 		return nil, fmt.Errorf("get areas: %w", err)
 	}
 
-	answers, err := s.interviews.GetAnswersBySession(ctx, sessionCode)
+	dbCtx, dbCancel = context.WithTimeout(ctx, s.dbTimeout)
+	answers, err := s.interviews.GetAnswersBySession(dbCtx, sessionCode)
+	dbCancel()
 	if err != nil {
 		return nil, fmt.Errorf("get answers: %w", err)
 	}
 
-	answerCount, err := s.interviews.GetAnswerCount(ctx, sessionCode)
+	dbCtx, dbCancel = context.WithTimeout(ctx, s.dbTimeout)
+	answerCount, err := s.interviews.GetAnswerCount(dbCtx, sessionCode)
+	dbCancel()
 	if err != nil {
 		return nil, fmt.Errorf("get answer count: %w", err)
 	}

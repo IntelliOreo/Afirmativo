@@ -58,6 +58,7 @@ function PayPageContent() {
     try {
       const { ok, status, data } = await api<{ url?: string; error?: string; code?: string }>("/api/payment/checkout", {
         method: "POST",
+        body: { lang },
       });
 
       if (ok && data?.url) {

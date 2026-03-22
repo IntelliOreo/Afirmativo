@@ -80,7 +80,7 @@ func (h *Handler) HandleMintToken(w http.ResponseWriter, r *http.Request) {
 			"requested_ttl_seconds", req.TTLSeconds,
 			"default_ttl_seconds", h.defaultTTLSeconds,
 		)
-		shared.WriteError(w, shared.ErrBadRequest, "ttlSeconds must be between 1 and 3600", "BAD_REQUEST")
+		shared.WriteError(w, shared.ErrBadRequest, "TTL seconds must be between 1 and 3600", "BAD_REQUEST")
 		return
 	}
 

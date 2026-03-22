@@ -15,13 +15,16 @@ type Store interface {
 	CreateReport(ctx context.Context, r *Report) error
 
 	// SetReportQueued resets one report to the queued state.
-	SetReportQueued(ctx context.Context, sessionCode string, resetAttempts bool) error
+	SetReportQueued(ctx context.Context, sessionCode string, resetAttempts bool, lastRequestID string) error
+
+	// SetReportLastRequestID updates request correlation without changing report status.
+	SetReportLastRequestID(ctx context.Context, sessionCode, lastRequestID string) error
 
 	// ClaimQueuedReport moves a queued report to running atomically.
 	ClaimQueuedReport(ctx context.Context, sessionCode string) (*Report, error)
 
-	// ListQueuedReportSessionCodes returns queued reports for worker pickup.
-	ListQueuedReportSessionCodes(ctx context.Context, limit int) ([]string, error)
+	// ClaimNextQueuedReport atomically claims the next queued report. Returns nil,nil when no queued report exists.
+	ClaimNextQueuedReport(ctx context.Context) (*Report, error)
 
 	// RequeueStaleRunningReports moves stale running reports back to queued.
 	RequeueStaleRunningReports(ctx context.Context, staleBefore time.Time) (int64, error)
@@ -37,10 +40,10 @@ type Store interface {
 // Implemented by the interview package's postgres store, injected from main.go.
 type InterviewDataProvider interface {
 	// GetAreasBySession returns all question_area rows for a session.
-		GetAreasBySession(ctx context.Context, sessionCode string) ([]InterviewAreaSnapshot, error)
+	GetAreasBySession(ctx context.Context, sessionCode string) ([]InterviewAreaSnapshot, error)
 
 	// GetAnswersBySession returns all answers for a session ordered by created_at.
-		GetAnswersBySession(ctx context.Context, sessionCode string) ([]InterviewAnswerSnapshot, error)
+	GetAnswersBySession(ctx context.Context, sessionCode string) ([]InterviewAnswerSnapshot, error)
 
 	// GetAnswerCount returns the number of answers for a session.
 	GetAnswerCount(ctx context.Context, sessionCode string) (int, error)

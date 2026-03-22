@@ -12,7 +12,7 @@ type fakeInterviewStore struct {
 	upsertAnswerJobFn               func(ctx context.Context, params UpsertAnswerJobParams) (*AnswerJob, error)
 	getAnswerJobFn                  func(ctx context.Context, sessionCode, jobID string) (*AnswerJob, error)
 	claimQueuedAnswerJobFn          func(ctx context.Context, jobID string) (*AnswerJob, error)
-	listQueuedAnswerJobIDsFn        func(ctx context.Context, limit int) ([]string, error)
+	claimNextQueuedAnswerJobFn      func(ctx context.Context) (*AnswerJob, error)
 	requeueStaleRunningAnswerJobsFn func(ctx context.Context, staleBefore time.Time) (int64, error)
 	processCriterionTurnFn          func(ctx context.Context, params ProcessCriterionTurnParams) (*ProcessCriterionTurnResult, error)
 	markAreaNotAssessedFn           func(ctx context.Context, sessionCode, area string) error
@@ -97,9 +97,9 @@ func (f *fakeInterviewStore) ClaimQueuedAnswerJob(ctx context.Context, jobID str
 	return nil, nil
 }
 
-func (f *fakeInterviewStore) ListQueuedAnswerJobIDs(ctx context.Context, limit int) ([]string, error) {
-	if f.listQueuedAnswerJobIDsFn != nil {
-		return f.listQueuedAnswerJobIDsFn(ctx, limit)
+func (f *fakeInterviewStore) ClaimNextQueuedAnswerJob(ctx context.Context) (*AnswerJob, error) {
+	if f.claimNextQueuedAnswerJobFn != nil {
+		return f.claimNextQueuedAnswerJobFn(ctx)
 	}
 	return nil, nil
 }
@@ -144,7 +144,6 @@ func defaultInterviewSettings(asyncRuntime ...config.AsyncRuntimeConfig) Setting
 	runtime := config.AsyncRuntimeConfig{
 		Workers:       4,
 		QueueSize:     256,
-		RecoveryBatch: 100,
 		RecoveryEvery: 10 * time.Second,
 		StaleAfter:    3 * time.Minute,
 		JobTimeout:    3 * time.Minute,

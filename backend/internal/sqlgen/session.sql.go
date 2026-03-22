@@ -49,10 +49,34 @@ func (q *Queries) CompleteSession(ctx context.Context, sessionCode string) error
 	return err
 }
 
+const createPaidSession = `-- name: CreatePaidSession :exec
+INSERT INTO sessions (session_code, pin_hash, payment_id, status, expires_at, interview_budget_seconds)
+VALUES ($1, $2, $3, 'created', $4, $5)
+`
+
+type CreatePaidSessionParams struct {
+	SessionCode            string             `json:"session_code"`
+	PinHash                string             `json:"pin_hash"`
+	PaymentID              pgtype.Text        `json:"payment_id"`
+	ExpiresAt              pgtype.Timestamptz `json:"expires_at"`
+	InterviewBudgetSeconds int32              `json:"interview_budget_seconds"`
+}
+
+func (q *Queries) CreatePaidSession(ctx context.Context, arg CreatePaidSessionParams) error {
+	_, err := q.db.Exec(ctx, createPaidSession,
+		arg.SessionCode,
+		arg.PinHash,
+		arg.PaymentID,
+		arg.ExpiresAt,
+		arg.InterviewBudgetSeconds,
+	)
+	return err
+}
+
 const createSession = `-- name: CreateSession :one
 INSERT INTO sessions (session_code, pin_hash, coupon_code, status, expires_at, interview_budget_seconds)
 VALUES ($1, $2, $3, 'created', $4, $5)
-RETURNING session_code, pin_hash, track, preferred_language, status, role, ended_at, payment_id, coupon_code, expires_at, created_at, interview_budget_seconds, interview_lapsed_seconds, interview_lapsed_updated_at, interview_started_at, current_interview_started_at, last_api_call_at, conversation_history
+RETURNING session_code, pin_hash, track, status, role, ended_at, payment_id, coupon_code, expires_at, created_at, interview_budget_seconds, interview_lapsed_seconds, interview_lapsed_updated_at, interview_started_at, current_interview_started_at, last_api_call_at, conversation_history, preferred_language, flow_step, expected_turn_id, display_question_number, active_question_text_es, active_question_text_en, active_question_area, active_question_kind, active_question_issued_at, active_answer_deadline_at
 `
 
 type CreateSessionParams struct {
@@ -76,7 +100,6 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		&i.SessionCode,
 		&i.PinHash,
 		&i.Track,
-		&i.PreferredLanguage,
 		&i.Status,
 		&i.Role,
 		&i.EndedAt,
@@ -91,12 +114,22 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		&i.CurrentInterviewStartedAt,
 		&i.LastApiCallAt,
 		&i.ConversationHistory,
+		&i.PreferredLanguage,
+		&i.FlowStep,
+		&i.ExpectedTurnID,
+		&i.DisplayQuestionNumber,
+		&i.ActiveQuestionTextEs,
+		&i.ActiveQuestionTextEn,
+		&i.ActiveQuestionArea,
+		&i.ActiveQuestionKind,
+		&i.ActiveQuestionIssuedAt,
+		&i.ActiveAnswerDeadlineAt,
 	)
 	return i, err
 }
 
 const getSessionByCode = `-- name: GetSessionByCode :one
-SELECT session_code, pin_hash, track, preferred_language, status, role, ended_at, payment_id, coupon_code, expires_at, created_at, interview_budget_seconds, interview_lapsed_seconds, interview_lapsed_updated_at, interview_started_at, current_interview_started_at, last_api_call_at, conversation_history FROM sessions WHERE session_code = $1
+SELECT session_code, pin_hash, track, status, role, ended_at, payment_id, coupon_code, expires_at, created_at, interview_budget_seconds, interview_lapsed_seconds, interview_lapsed_updated_at, interview_started_at, current_interview_started_at, last_api_call_at, conversation_history, preferred_language, flow_step, expected_turn_id, display_question_number, active_question_text_es, active_question_text_en, active_question_area, active_question_kind, active_question_issued_at, active_answer_deadline_at FROM sessions WHERE session_code = $1
 `
 
 func (q *Queries) GetSessionByCode(ctx context.Context, sessionCode string) (Session, error) {
@@ -106,7 +139,6 @@ func (q *Queries) GetSessionByCode(ctx context.Context, sessionCode string) (Ses
 		&i.SessionCode,
 		&i.PinHash,
 		&i.Track,
-		&i.PreferredLanguage,
 		&i.Status,
 		&i.Role,
 		&i.EndedAt,
@@ -121,6 +153,16 @@ func (q *Queries) GetSessionByCode(ctx context.Context, sessionCode string) (Ses
 		&i.CurrentInterviewStartedAt,
 		&i.LastApiCallAt,
 		&i.ConversationHistory,
+		&i.PreferredLanguage,
+		&i.FlowStep,
+		&i.ExpectedTurnID,
+		&i.DisplayQuestionNumber,
+		&i.ActiveQuestionTextEs,
+		&i.ActiveQuestionTextEn,
+		&i.ActiveQuestionArea,
+		&i.ActiveQuestionKind,
+		&i.ActiveQuestionIssuedAt,
+		&i.ActiveAnswerDeadlineAt,
 	)
 	return i, err
 }
@@ -133,16 +175,17 @@ SET status = 'interviewing',
     preferred_language = COALESCE(preferred_language, $2)
 WHERE session_code = $1
   AND status IN ('created', 'active', 'interviewing')
-RETURNING session_code, pin_hash, track, preferred_language, status, role, ended_at, payment_id, coupon_code, expires_at, created_at, interview_budget_seconds, interview_lapsed_seconds, interview_lapsed_updated_at, interview_started_at, current_interview_started_at, last_api_call_at, conversation_history
+RETURNING session_code, pin_hash, track, status, role, ended_at, payment_id, coupon_code, expires_at, created_at, interview_budget_seconds, interview_lapsed_seconds, interview_lapsed_updated_at, interview_started_at, current_interview_started_at, last_api_call_at, conversation_history, preferred_language, flow_step, expected_turn_id, display_question_number, active_question_text_es, active_question_text_en, active_question_area, active_question_kind, active_question_issued_at, active_answer_deadline_at
 `
 
-// Idempotent session start for reconnects. Sets interview_started_at on first call,
-// resets current_interview_started_at on every call. Accepts created, active, or interviewing.
 type StartSessionParams struct {
 	SessionCode       string      `json:"session_code"`
 	PreferredLanguage pgtype.Text `json:"preferred_language"`
 }
 
+// Idempotent session start for reconnects. Sets interview_started_at on first call,
+// resets current_interview_started_at on every call. Accepts created, active, or interviewing.
+// preferred_language is only set once (on first start), then remains locked.
 func (q *Queries) StartSession(ctx context.Context, arg StartSessionParams) (Session, error) {
 	row := q.db.QueryRow(ctx, startSession, arg.SessionCode, arg.PreferredLanguage)
 	var i Session
@@ -150,7 +193,6 @@ func (q *Queries) StartSession(ctx context.Context, arg StartSessionParams) (Ses
 		&i.SessionCode,
 		&i.PinHash,
 		&i.Track,
-		&i.PreferredLanguage,
 		&i.Status,
 		&i.Role,
 		&i.EndedAt,
@@ -165,6 +207,16 @@ func (q *Queries) StartSession(ctx context.Context, arg StartSessionParams) (Ses
 		&i.CurrentInterviewStartedAt,
 		&i.LastApiCallAt,
 		&i.ConversationHistory,
+		&i.PreferredLanguage,
+		&i.FlowStep,
+		&i.ExpectedTurnID,
+		&i.DisplayQuestionNumber,
+		&i.ActiveQuestionTextEs,
+		&i.ActiveQuestionTextEn,
+		&i.ActiveQuestionArea,
+		&i.ActiveQuestionKind,
+		&i.ActiveQuestionIssuedAt,
+		&i.ActiveAnswerDeadlineAt,
 	)
 	return i, err
 }

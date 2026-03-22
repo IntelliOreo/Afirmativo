@@ -13,7 +13,11 @@ import { withLang } from "@/lib/language";
 import { verifySession } from "@/lib/sessionService";
 import { useLanguage } from "@/lib/useLanguage";
 import { getCommonMessages } from "@/messages/commonMessages";
-import { getLandingMessages, getLandingVerifyErrorMessage } from "@/messages/landingMessages";
+import {
+  getLandingMessages,
+  getLandingVerifyErrorMessage,
+  LANDING_TESTIMONIALS,
+} from "@/messages/landingMessages";
 
 export default function LandingPage() {
   const router = useRouter();
@@ -24,6 +28,7 @@ export default function LandingPage() {
   const [isVerifying, setIsVerifying] = useState(false);
   const t = getLandingMessages(lang);
   const common = getCommonMessages(lang);
+  const testimonials = LANDING_TESTIMONIALS;
 
   async function handleVerifySession() {
     if (!sessionCodeInput.trim() || !pinInput.trim()) return;
@@ -79,6 +84,24 @@ export default function LandingPage() {
               </Link>
             </p>
           )}
+
+          <div className="mb-10 grid gap-4 sm:grid-cols-2">
+            {testimonials.map((testimonial) => (
+              <Card
+                key={testimonial.author}
+                className="h-full border-primary-light bg-white"
+              >
+                <div className="flex h-full flex-col gap-4">
+                  <blockquote className="flex-1 text-base sm:text-lg text-primary-darkest">
+                    {testimonial.quote}
+                  </blockquote>
+                  <p className="text-sm font-semibold uppercase tracking-[0.14em] text-primary-dark">
+                    {testimonial.author}
+                  </p>
+                </div>
+              </Card>
+            ))}
+          </div>
 
           {/* Resume session */}
           <div className="border-t border-base-lighter pt-8">

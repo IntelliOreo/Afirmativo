@@ -267,7 +267,7 @@ func RequireSessionCodeMatch(w http.ResponseWriter, r *http.Request, sessionCode
 			"path", r.URL.Path,
 			"auth_session_code", claims.SessionCode,
 		)
-		WriteError(w, ErrBadRequest, "session_code is required", "BAD_REQUEST")
+		WriteError(w, ErrBadRequest, "Session code is required", "BAD_REQUEST")
 		return false
 	}
 	if strings.TrimSpace(sessionCode) != strings.TrimSpace(claims.SessionCode) {

@@ -132,54 +132,32 @@ func (h *Handler) HandleVerifySession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	verifyAttemptKey := sessionVerifyAttemptKey(r, req.SessionCode)
-	if h.verifyAttemptLimiter != nil {
-		allowed, retryAfter := h.verifyAttemptLimiter.Allow(verifyAttemptKey, time.Now().UTC())
-		if !allowed {
-			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
-			shared.WriteError(w, shared.ErrRateLimited, "Too many attempts. Try again later.", "VERIFY_RATE_LIMITED")
-			return
-		}
+	if !h.allowVerifyAttempt(w, verifyAttemptKey) {
+		return
 	}
 
 	sess, err := h.svc.VerifySession(r.Context(), req.SessionCode, req.PIN)
 	if err != nil {
-		if h.auth != nil {
-			h.auth.ClearCookie(w)
-			slog.Debug("cleared auth cookie after failed verify", "session_code", req.SessionCode)
-		}
-
-		if h.verifyAttemptLimiter != nil {
+		if !h.handleVerifyFailure(w, req.SessionCode, verifyAttemptKey, err) {
 			switch {
-			case errors.Is(err, ErrPINIncorrect), errors.Is(err, shared.ErrNotFound):
-				locked, retryAfter := h.verifyAttemptLimiter.RegisterFailure(verifyAttemptKey, time.Now().UTC())
-				if locked {
-					w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
-					shared.WriteError(w, shared.ErrRateLimited, "Too many attempts. Try again later.", "VERIFY_RATE_LIMITED")
-					return
-				}
+			case errors.Is(err, shared.ErrNotFound):
+				slog.Debug("session verify failed: session not found", "session_code", req.SessionCode)
+				shared.WriteError(w, shared.ErrNotFound, "Session not found", "SESSION_NOT_FOUND")
+			case errors.Is(err, ErrPINIncorrect):
+				slog.Debug("session verify failed: incorrect PIN", "session_code", req.SessionCode)
+				shared.WriteError(w, shared.ErrUnauthorized, "PIN incorrect", "PIN_INCORRECT")
+			case errors.Is(err, ErrSessionExpired):
+				slog.Debug("session verify failed: session expired", "session_code", req.SessionCode)
+				shared.WriteError(w, shared.ErrGone, "Session expired", "SESSION_EXPIRED")
+			default:
+				slog.Error("session verify failed", "error", err)
+				shared.WriteError(w, shared.ErrInternal, "Internal server error", "INTERNAL_ERROR")
 			}
-		}
-
-		switch {
-		case errors.Is(err, shared.ErrNotFound):
-			slog.Debug("session verify failed: session not found", "session_code", req.SessionCode)
-			shared.WriteError(w, shared.ErrNotFound, "Session not found", "SESSION_NOT_FOUND")
-		case errors.Is(err, ErrPINIncorrect):
-			slog.Debug("session verify failed: incorrect PIN", "session_code", req.SessionCode)
-			shared.WriteError(w, shared.ErrUnauthorized, "PIN incorrect", "PIN_INCORRECT")
-		case errors.Is(err, ErrSessionExpired):
-			slog.Debug("session verify failed: session expired", "session_code", req.SessionCode)
-			shared.WriteError(w, shared.ErrGone, "Session expired", "SESSION_EXPIRED")
-		default:
-			slog.Error("session verify failed", "error", err)
-			shared.WriteError(w, shared.ErrInternal, "Internal server error", "INTERNAL_ERROR")
 		}
 		return
 	}
 
-	if h.verifyAttemptLimiter != nil {
-		h.verifyAttemptLimiter.Reset(verifyAttemptKey)
-	}
+	h.resetVerifyAttempt(verifyAttemptKey)
 
 	if h.auth == nil {
 		slog.Error("session auth manager not configured")
@@ -220,6 +198,53 @@ func (h *Handler) HandleVerifySession(w http.ResponseWriter, r *http.Request) {
 			ExpiresAt:              sess.ExpiresAt,
 		},
 	})
+}
+
+func (h *Handler) allowVerifyAttempt(w http.ResponseWriter, verifyAttemptKey string) bool {
+	if h.verifyAttemptLimiter == nil {
+		return true
+	}
+
+	allowed, retryAfter := h.verifyAttemptLimiter.Allow(verifyAttemptKey, time.Now().UTC())
+	if !allowed {
+		h.writeVerifyRateLimited(w, retryAfter)
+		return false
+	}
+	return true
+}
+
+func (h *Handler) handleVerifyFailure(w http.ResponseWriter, sessionCode, verifyAttemptKey string, err error) bool {
+	if h.auth != nil {
+		h.auth.ClearCookie(w)
+		slog.Debug("cleared auth cookie after failed verify", "session_code", sessionCode)
+	}
+
+	if h.verifyAttemptLimiter == nil {
+		return false
+	}
+
+	switch {
+	case errors.Is(err, ErrPINIncorrect), errors.Is(err, shared.ErrNotFound):
+		locked, retryAfter := h.verifyAttemptLimiter.RegisterFailure(verifyAttemptKey, time.Now().UTC())
+		if locked {
+			h.writeVerifyRateLimited(w, retryAfter)
+			return true
+		}
+	}
+
+	return false
+}
+
+func (h *Handler) resetVerifyAttempt(verifyAttemptKey string) {
+	if h.verifyAttemptLimiter == nil {
+		return
+	}
+	h.verifyAttemptLimiter.Reset(verifyAttemptKey)
+}
+
+func (h *Handler) writeVerifyRateLimited(w http.ResponseWriter, retryAfter int) {
+	w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+	shared.WriteError(w, shared.ErrRateLimited, "Too many attempts. Try again later.", "VERIFY_RATE_LIMITED")
 }
 
 // HandleCheckAccess confirms that the authenticated cookie grants access

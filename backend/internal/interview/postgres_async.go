@@ -17,18 +17,22 @@ func (s *PostgresStore) UpsertAnswerJob(ctx context.Context, params UpsertAnswer
 		`INSERT INTO interview_answer_jobs (
 		     session_code,
 		     client_request_id,
+		     last_request_id,
 		     turn_id,
 		     question_text,
 		     answer_text,
 		     status
 		 )
-		 VALUES ($1, $2, $3, $4, $5, 'queued')
+		 VALUES ($1, $2, $3, $4, $5, $6, 'queued')
 		 ON CONFLICT (session_code, client_request_id)
-		 DO UPDATE SET updated_at = now()
-		 RETURNING id, session_code, client_request_id, turn_id, question_text, answer_text, status,
+		 DO UPDATE SET
+		     last_request_id = COALESCE(EXCLUDED.last_request_id, interview_answer_jobs.last_request_id),
+		     updated_at = now()
+		 RETURNING id, session_code, client_request_id, last_request_id, turn_id, question_text, answer_text, status,
 		           result_payload, error_code, error_message, attempts, started_at, completed_at, created_at, updated_at`,
 		params.SessionCode,
 		params.ClientRequestID,
+		nullIfEmpty(params.LastRequestID),
 		params.TurnID,
 		nullIfEmpty(params.QuestionText),
 		params.AnswerText,
@@ -52,7 +56,7 @@ func (s *PostgresStore) ClaimQueuedAnswerJob(ctx context.Context, jobID string) 
 		     updated_at = now()
 		 WHERE id = $1::uuid
 		   AND status = 'queued'
-		 RETURNING id, session_code, client_request_id, turn_id, question_text, answer_text, status,
+		 RETURNING id, session_code, client_request_id, last_request_id, turn_id, question_text, answer_text, status,
 		           result_payload, error_code, error_message, attempts, started_at, completed_at, created_at, updated_at`,
 		jobID,
 	)
@@ -67,37 +71,37 @@ func (s *PostgresStore) ClaimQueuedAnswerJob(ctx context.Context, jobID string) 
 	return job, nil
 }
 
-// ListQueuedAnswerJobIDs returns oldest queued async answer job IDs.
-func (s *PostgresStore) ListQueuedAnswerJobIDs(ctx context.Context, limit int) ([]string, error) {
-	if limit <= 0 {
-		return []string{}, nil
-	}
-
-	rows, err := s.pool.Query(ctx,
-		`SELECT id::text
-		   FROM interview_answer_jobs
-		  WHERE status = 'queued'
-		  ORDER BY created_at ASC
-		  LIMIT $1`,
-		limit,
+// ClaimNextQueuedAnswerJob moves the oldest queued job to running atomically.
+// Returns nil,nil when no queued job exists.
+func (s *PostgresStore) ClaimNextQueuedAnswerJob(ctx context.Context) (*AnswerJob, error) {
+	row := s.pool.QueryRow(ctx,
+		`WITH next_job AS (
+		     SELECT id
+		       FROM interview_answer_jobs
+		      WHERE status = 'queued'
+		      ORDER BY created_at ASC
+		      LIMIT 1
+		      FOR UPDATE SKIP LOCKED
+		 )
+		 UPDATE interview_answer_jobs
+		    SET status = 'running',
+		        attempts = attempts + 1,
+		        started_at = COALESCE(started_at, now()),
+		        updated_at = now()
+		   FROM next_job
+		  WHERE interview_answer_jobs.id = next_job.id
+		 RETURNING interview_answer_jobs.id, session_code, client_request_id, last_request_id, turn_id, question_text, answer_text, status,
+		           result_payload, error_code, error_message, attempts, started_at, completed_at, created_at, updated_at`,
 	)
-	if err != nil {
-		return nil, fmt.Errorf("list queued answer jobs: %w", err)
-	}
-	defer rows.Close()
 
-	ids := make([]string, 0, limit)
-	for rows.Next() {
-		var id string
-		if scanErr := rows.Scan(&id); scanErr != nil {
-			return nil, fmt.Errorf("scan queued answer job id: %w", scanErr)
+	job, err := scanAnswerJob(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
 		}
-		ids = append(ids, id)
+		return nil, fmt.Errorf("claim next answer job: %w", err)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate queued answer jobs: %w", err)
-	}
-	return ids, nil
+	return job, nil
 }
 
 // RequeueStaleRunningAnswerJobs marks stale running jobs as queued for retry.
@@ -122,7 +126,7 @@ func (s *PostgresStore) RequeueStaleRunningAnswerJobs(ctx context.Context, stale
 // GetAnswerJob returns a polling job by session and job ID.
 func (s *PostgresStore) GetAnswerJob(ctx context.Context, sessionCode, jobID string) (*AnswerJob, error) {
 	row := s.pool.QueryRow(ctx,
-		`SELECT id, session_code, client_request_id, turn_id, question_text, answer_text, status,
+		`SELECT id, session_code, client_request_id, last_request_id, turn_id, question_text, answer_text, status,
 		        result_payload, error_code, error_message, attempts, started_at, completed_at, created_at, updated_at
 		   FROM interview_answer_jobs
 		  WHERE session_code = $1
@@ -242,6 +246,7 @@ func scanAnswerJob(row pgx.Row) (*AnswerJob, error) {
 	var id pgtype.UUID
 	var sessionCode string
 	var clientRequestID string
+	var lastRequestID pgtype.Text
 	var turnID string
 	var questionText pgtype.Text
 	var answerText string
@@ -259,6 +264,7 @@ func scanAnswerJob(row pgx.Row) (*AnswerJob, error) {
 		&id,
 		&sessionCode,
 		&clientRequestID,
+		&lastRequestID,
 		&turnID,
 		&questionText,
 		&answerText,
@@ -279,6 +285,7 @@ func scanAnswerJob(row pgx.Row) (*AnswerJob, error) {
 		ID:              uuidToString(id),
 		SessionCode:     sessionCode,
 		ClientRequestID: clientRequestID,
+		LastRequestID:   lastRequestID.String,
 		TurnID:          turnID,
 		AnswerText:      answerText,
 		Status:          AsyncAnswerJobStatus(status),

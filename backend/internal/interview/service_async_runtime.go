@@ -12,13 +12,15 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+const asyncAnswerIdleClaimEvery = 2 * time.Second
+
 // StartAsyncAnswerRuntime launches bounded workers and periodic recovery.
 func (s *Service) StartAsyncAnswerRuntime(ctx context.Context) {
 	s.asyncRuntimeStartOnce.Do(func() {
 		slog.Info("starting async answer runtime",
 			"workers", s.asyncAnswerWorkers,
 			"queue_size", cap(s.asyncAnswerQueue),
-			"recovery_batch", s.asyncAnswerRecoveryBatch,
+			"idle_claim_every", asyncAnswerIdleClaimEvery,
 			"recovery_every", s.asyncAnswerRecoveryEvery,
 			"stale_after", s.asyncAnswerStaleAfter,
 			"job_timeout", s.asyncAnswerJobTimeout,
@@ -45,22 +47,25 @@ func (s *Service) runAsyncAnswerWorker(ctx context.Context, workerID int) {
 	defer slog.Debug("async answer worker stopped", "worker_id", workerID)
 
 	tracer := otel.Tracer("afirmativo-async")
+	idleTicker := time.NewTicker(asyncAnswerIdleClaimEvery)
+	defer idleTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case jobID := <-s.asyncAnswerQueue:
-			processCtx, cancel := context.WithTimeout(ctx, s.asyncAnswerJobTimeout)
-			processCtx, span := tracer.Start(processCtx, "async.answer_job",
-				trace.WithNewRoot(),
-			)
-			span.SetAttributes(
-				attribute.String("job.id", jobID),
-				attribute.Int("worker.id", workerID),
-			)
-			s.processAnswerJob(processCtx, jobID)
-			span.End()
-			cancel()
+			claimed, ok := s.claimAsyncAnswerJob(ctx, jobID, asyncAnswerClaimSourceChannel)
+			if !ok {
+				continue
+			}
+			s.processClaimedAsyncAnswerJobWithTrace(ctx, tracer, workerID, claimed)
+		case <-idleTicker.C:
+			claimed, ok := s.claimNextAsyncAnswerJob(ctx)
+			if !ok {
+				continue
+			}
+			s.processClaimedAsyncAnswerJobWithTrace(ctx, tracer, workerID, claimed)
 		}
 	}
 }
@@ -91,36 +96,18 @@ func (s *Service) recoverAsyncAnswerJobs(ctx context.Context) {
 		return
 	}
 
-	listCtx, listCancel := context.WithTimeout(ctx, s.dbTimeout)
-	queuedIDs, err := s.jobStore.ListQueuedAnswerJobIDs(listCtx, s.asyncAnswerRecoveryBatch)
-	listCancel()
-	if err != nil {
-		slog.Error("failed to list queued async answer jobs", "error", err)
-		return
-	}
-
-	enqueued := 0
-	for _, jobID := range queuedIDs {
-		if s.enqueueAsyncAnswerJob(jobID) {
-			enqueued++
-		}
-	}
-
-	if requeued > 0 || enqueued > 0 {
+	if requeued > 0 {
 		slog.Info("async answer recovery cycle completed",
 			"requeued_stale_running_jobs", requeued,
-			"queued_jobs_listed", len(queuedIDs),
-			"queued_jobs_enqueued", enqueued,
 		)
 	}
 }
 
-func (s *Service) enqueueAsyncAnswerJob(jobID string) bool {
+func (s *Service) enqueueAsyncAnswerJob(jobID, requestID string) bool {
 	id := strings.TrimSpace(jobID)
 	if id == "" {
 		return false
 	}
-	requestID := s.asyncAnswerRequestID(id)
 	if s.asyncAnswerQueue == nil {
 		slog.Warn("async answer queue is not configured; job remains queued", "job_id", id, "request_id", requestID)
 		return false
@@ -131,8 +118,32 @@ func (s *Service) enqueueAsyncAnswerJob(jobID string) bool {
 		slog.Debug("async answer job queued for worker pickup", "job_id", id, "request_id", requestID)
 		return true
 	default:
-		// Leave status as queued in DB; recovery loop will retry enqueue.
+		// Leave status as queued in DB; idle DB fallback will pick it up later.
 		slog.Warn("async answer queue is full; job remains queued", "job_id", id, "request_id", requestID)
 		return false
 	}
+}
+
+func (s *Service) processClaimedAsyncAnswerJobWithTrace(
+	ctx context.Context,
+	tracer trace.Tracer,
+	workerID int,
+	claimed *claimedAsyncAnswerJob,
+) {
+	if claimed == nil || ctx.Err() != nil {
+		return
+	}
+
+	processCtx, cancel := context.WithTimeout(ctx, s.asyncAnswerJobTimeout)
+	defer cancel()
+
+	processCtx, span := tracer.Start(processCtx, "async.answer_job", trace.WithNewRoot())
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("job.id", claimed.job.ID),
+		attribute.Int("worker.id", workerID),
+		attribute.String("claim.source", claimed.claimSource),
+	)
+
+	s.processClaimedAsyncAnswerJob(processCtx, claimed)
 }

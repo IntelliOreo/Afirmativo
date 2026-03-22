@@ -59,15 +59,17 @@ func main() {
 		logHandler = slog.NewTextHandler(os.Stdout, logOpts)
 	}
 	slog.SetDefault(slog.New(logHandler))
+	instanceMeta := shared.CurrentInstanceMetadata()
 
 	cfg.LogLoaded()
 
 	// Initialize OpenTelemetry (noop when disabled).
 	ctx := context.Background()
 	otelShutdown, err := shared.InitOTel(ctx, shared.OTelConfig{
-		Enabled:      cfg.OTel.Enabled,
-		GCPProjectID: cfg.OTel.GCPProjectID,
-		ServiceName:  "afirmativo-backend",
+		Enabled:           cfg.OTel.Enabled,
+		GCPProjectID:      cfg.OTel.GCPProjectID,
+		ServiceName:       "afirmativo-backend",
+		ServiceInstanceID: instanceMeta.ID,
 	})
 	if err != nil {
 		slog.Error("failed to initialize otel", "error", err)
@@ -94,6 +96,7 @@ func main() {
 	sessionSvc := session.NewService(session.Deps{Store: sessionStore}, session.Settings{
 		ExpiryHours:            cfg.Auth.SessionExpiryHours,
 		InterviewBudgetSeconds: cfg.Interview.BudgetSeconds,
+		DBTimeout:              cfg.DBOperationTimeout,
 	})
 
 	useSecureAuthCookie := strings.HasPrefix(strings.ToLower(cfg.Server.FrontendURL), "https://")
@@ -142,7 +145,7 @@ func main() {
 		OpeningDisclaimer:      cfg.Interview.OpeningDisclaimer,
 		ReadinessQuestion:      cfg.Interview.ReadinessQuestion,
 		AnswerTimeLimitSeconds: cfg.Interview.AnswerTimeLimitSeconds,
-		DBTimeout:              cfg.Interview.DBTimeout,
+		DBTimeout:              cfg.DBOperationTimeout,
 		AsyncRuntime:           cfg.Interview.AsyncRuntime,
 	})
 	asyncRuntimeCtx, asyncRuntimeCancel := context.WithCancel(context.Background())
@@ -160,13 +163,28 @@ func main() {
 		AIClient:   reportAIClient,
 	}, report.Settings{
 		AreaConfigs:  cfg.Interview.AreaConfigs,
-		DBTimeout:    cfg.Report.DBTimeout,
+		DBTimeout:    cfg.DBOperationTimeout,
 		AsyncRuntime: cfg.Report.AsyncRuntime,
 	})
 	reportSvc.StartAsyncRuntime(asyncRuntimeCtx)
 	reportHandler := report.NewHandler(reportSvc)
 
-	paymentHandler := payment.NewHandler()
+	paymentStore := payment.NewPostgresStore(pool)
+	stripeClient := payment.NewStripeClient(payment.StripeClientConfig{
+		SecretKey:     cfg.Payment.StripeSecretKey,
+		WebhookSecret: cfg.Payment.StripeWebhookSecret,
+	})
+	paymentSvc := payment.NewService(payment.Deps{
+		Store:  paymentStore,
+		Stripe: stripeClient,
+	}, payment.Settings{
+		FrontendURL:            cfg.Server.FrontendURL,
+		SessionExpiryHours:     cfg.Auth.SessionExpiryHours,
+		InterviewBudgetSeconds: cfg.Interview.BudgetSeconds,
+		AmountCents:            cfg.Payment.AmountCents,
+		Currency:               cfg.Payment.Currency,
+	})
+	paymentHandler := payment.NewHandler(paymentSvc)
 
 	adminStore := admin.NewPostgresStore(pool)
 	adminSvc := admin.NewService(adminStore)
@@ -206,7 +224,7 @@ func main() {
 	// Register routes.
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /api/health", shared.HandleHealth(pool, Version, interviewSvc, reportSvc, &poolStatsProvider{pool: pool}))
+	mux.HandleFunc("GET /api/health", shared.HandleHealth(pool, Version, instanceMeta, interviewSvc, reportSvc, &poolStatsProvider{pool: pool}))
 	mux.HandleFunc("POST /api/coupon/validate", sessionHandler.HandleValidateCoupon)
 	mux.HandleFunc("POST /api/session/verify", sessionVerifyIPLimiter.Wrap(sessionHandler.HandleVerifySession))
 	mux.HandleFunc("GET /api/session/access", shared.RequireSessionAuth(sessionAuth, sessionHandler.HandleCheckAccess))
@@ -222,6 +240,7 @@ func main() {
 	mux.HandleFunc("GET /api/report/{code}/pdf", shared.RequireSessionAuth(sessionAuth, reportHandler.HandleGetReportPDF))
 	mux.HandleFunc("POST /api/payment/checkout", paymentHandler.HandleCheckout)
 	mux.HandleFunc("POST /api/payment/webhook", paymentHandler.HandleWebhook)
+	mux.HandleFunc("GET /api/payment/checkout-sessions/{id}", paymentHandler.HandleCheckoutSessionStatus)
 
 	if cfg.Admin.CleanupEnabled {
 		mux.HandleFunc("POST /api/admin/cleanup-db", adminHandler.HandleCleanupDB)
@@ -237,6 +256,7 @@ func main() {
 		shared.Trace,
 		shared.SecurityHeaders,
 		shared.Logger,
+		shared.Recovery,
 	)
 
 	// Start server with graceful shutdown.
@@ -249,7 +269,12 @@ func main() {
 	}
 
 	go func() {
-		slog.Info("server starting", "port", cfg.Server.Port, "version", Version)
+		slog.Info("server starting",
+			"port", cfg.Server.Port,
+			"version", Version,
+			"instance_id", instanceMeta.ID,
+			"service_revision", instanceMeta.Revision,
+		)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("server error", "error", err)
 			os.Exit(1)
