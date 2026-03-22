@@ -1,0 +1,66 @@
+# Ignore all markdown files in the project root
+/*.md
+
+# utils, database, terraform, mock servers, design docs
+utils/
+
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Next.js build output
+frontend/.next/
+frontend/out/
+
+# TypeScript build cache
+*.tsbuildinfo
+
+# Production
+frontend/build/
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+backend/.env.example
+frontend/.env.example
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# Go build artifacts
+backend/bin/
+*.exe
+*.test
+
+# GCP credentials
+service-account*.json
+gcp-key*.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/settings.json
+*.swp
+*.swo
+
+# Claude 
+memory/
+
+# Docker
+.dockerignore
+
+.vscode/    
+
+
+backend/server
+backend/.gocache/
