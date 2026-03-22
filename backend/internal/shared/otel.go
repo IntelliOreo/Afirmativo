@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	gcpmetric "github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric"
 	gcptrace "github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/trace"
@@ -18,9 +19,10 @@ import (
 
 // OTelConfig holds settings for OpenTelemetry initialization.
 type OTelConfig struct {
-	Enabled      bool
-	GCPProjectID string
-	ServiceName  string
+	Enabled           bool
+	GCPProjectID      string
+	ServiceName       string
+	ServiceInstanceID string
 }
 
 // OTelShutdown is returned by InitOTel and must be called on process exit.
@@ -43,10 +45,18 @@ func InitOTel(ctx context.Context, cfg OTelConfig) (OTelShutdown, error) {
 	if serviceName == "" {
 		serviceName = "afirmativo-backend"
 	}
+	serviceInstanceID := strings.TrimSpace(cfg.ServiceInstanceID)
+
+	attributes := []attribute.KeyValue{
+		attribute.String("service.name", serviceName),
+	}
+	if serviceInstanceID != "" {
+		attributes = append(attributes, attribute.String("service.instance.id", serviceInstanceID))
+	}
 
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
-			attribute.String("service.name", serviceName),
+			attributes...,
 		),
 	)
 	if err != nil {
@@ -82,6 +92,7 @@ func InitOTel(ctx context.Context, cfg OTelConfig) (OTelShutdown, error) {
 	slog.Info("otel initialized",
 		"project_id", cfg.GCPProjectID,
 		"service_name", serviceName,
+		"service_instance_id", serviceInstanceID,
 	)
 
 	return func(ctx context.Context) error {

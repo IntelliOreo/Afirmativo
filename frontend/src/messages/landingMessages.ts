@@ -20,6 +20,19 @@ type LandingCopy = {
   unknownError: string;
 };
 
+export const LANDING_TESTIMONIALS = [
+  {
+    author: "G.",
+    quote:
+      "“Practicar esto de verdad ha hecho una gran diferencia. Explicar lo que pasó ahora me sale mucho más claro y natural. Antes era un punto débil, pero ha mejorado bastante.”",
+  },
+  {
+    author: "J.",
+    quote:
+      "“Gracias, ya llevo más de diez sesiones practicando y, de verdad, me ha ayudado muchísimo a bajar la ansiedad.”",
+  },
+] as const;
+
 const LANDING_MESSAGES = {
   en: {
     headline: "Prepare for your affirmative asylum interview",

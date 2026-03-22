@@ -25,7 +25,7 @@ func (s *PostgresStore) GetReportBySession(ctx context.Context, sessionCode stri
 	row := s.pool.QueryRow(ctx, `
 SELECT session_code, status, content_en, content_es, strengths, strengths_es, weaknesses, weaknesses_es,
        recommendation, recommendation_es, question_count, duration_minutes, error_code, error_message,
-       attempts, started_at, completed_at
+       attempts, started_at, completed_at, last_request_id
   FROM reports
  WHERE session_code = $1`, sessionCode)
 
@@ -49,9 +49,9 @@ func (s *PostgresStore) CreateReport(ctx context.Context, r *Report) error {
 INSERT INTO reports (
     session_code, status, content_en, content_es, strengths, strengths_es, weaknesses, weaknesses_es,
     recommendation, recommendation_es, question_count, duration_minutes, error_code, error_message,
-    attempts, started_at, completed_at
+    attempts, started_at, completed_at, last_request_id
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
 		r.SessionCode,
 		string(r.Status),
 		nullText(r.ContentEn),
@@ -69,6 +69,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $
 		r.Attempts,
 		nullTime(r.StartedAt),
 		nullTime(r.CompletedAt),
+		nullText(r.LastRequestID),
 	)
 	if err != nil {
 		return fmt.Errorf("create report: %w", err)
@@ -76,7 +77,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $
 	return nil
 }
 
-func (s *PostgresStore) SetReportQueued(ctx context.Context, sessionCode string, resetAttempts bool) error {
+func (s *PostgresStore) SetReportQueued(ctx context.Context, sessionCode string, resetAttempts bool, lastRequestID string) error {
 	attemptsExpr := "attempts"
 	if resetAttempts {
 		attemptsExpr = "0"
@@ -89,11 +90,30 @@ UPDATE reports
        error_message = NULL,
        started_at = NULL,
        completed_at = NULL,
+       last_request_id = COALESCE($2, last_request_id),
        attempts = %s,
        updated_at = now()
- WHERE session_code = $1`, attemptsExpr), sessionCode)
+ WHERE session_code = $1`, attemptsExpr), sessionCode, nullText(lastRequestID))
 	if err != nil {
 		return fmt.Errorf("set report queued: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrReportNotStarted
+	}
+	return nil
+}
+
+func (s *PostgresStore) SetReportLastRequestID(ctx context.Context, sessionCode, lastRequestID string) error {
+	tag, err := s.pool.Exec(ctx, `
+UPDATE reports
+   SET last_request_id = COALESCE($2, last_request_id),
+       updated_at = now()
+ WHERE session_code = $1`,
+		sessionCode,
+		nullText(lastRequestID),
+	)
+	if err != nil {
+		return fmt.Errorf("set report last_request_id: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrReportNotStarted
@@ -113,7 +133,7 @@ UPDATE reports
    AND status = 'queued'
  RETURNING session_code, status, content_en, content_es, strengths, strengths_es, weaknesses, weaknesses_es,
            recommendation, recommendation_es, question_count, duration_minutes, error_code, error_message,
-           attempts, started_at, completed_at`, sessionCode)
+           attempts, started_at, completed_at, last_request_id`, sessionCode)
 
 	report, err := scanReport(row)
 	if err != nil {
@@ -125,34 +145,37 @@ UPDATE reports
 	return report, nil
 }
 
-func (s *PostgresStore) ListQueuedReportSessionCodes(ctx context.Context, limit int) ([]string, error) {
-	if limit <= 0 {
-		return []string{}, nil
-	}
+func (s *PostgresStore) ClaimNextQueuedReport(ctx context.Context) (*Report, error) {
+	row := s.pool.QueryRow(ctx, `
+WITH next_report AS (
+    -- Reports keep updated_at ordering so retried failed reports preserve today's queue semantics.
+    SELECT session_code
+      FROM reports
+     WHERE status = 'queued'
+     ORDER BY updated_at ASC
+     LIMIT 1
+     FOR UPDATE SKIP LOCKED
+)
+UPDATE reports
+   SET status = 'running',
+       attempts = attempts + 1,
+       started_at = now(),
+       completed_at = NULL,
+       updated_at = now()
+  FROM next_report
+ WHERE reports.session_code = next_report.session_code
+ RETURNING reports.session_code, status, content_en, content_es, strengths, strengths_es, weaknesses, weaknesses_es,
+           recommendation, recommendation_es, question_count, duration_minutes, error_code, error_message,
+           attempts, started_at, completed_at, last_request_id`)
 
-	rows, err := s.pool.Query(ctx, `
-SELECT session_code
-  FROM reports
- WHERE status = 'queued'
- ORDER BY updated_at ASC
- LIMIT $1`, limit)
+	report, err := scanReport(row)
 	if err != nil {
-		return nil, fmt.Errorf("list queued reports: %w", err)
-	}
-	defer rows.Close()
-
-	sessionCodes := make([]string, 0, limit)
-	for rows.Next() {
-		var sessionCode string
-		if err := rows.Scan(&sessionCode); err != nil {
-			return nil, fmt.Errorf("scan queued report session code: %w", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
 		}
-		sessionCodes = append(sessionCodes, sessionCode)
+		return nil, fmt.Errorf("claim next queued report: %w", err)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate queued reports: %w", err)
-	}
-	return sessionCodes, nil
+	return report, nil
 }
 
 func (s *PostgresStore) RequeueStaleRunningReports(ctx context.Context, staleBefore time.Time) (int64, error) {
@@ -257,6 +280,7 @@ func scanReport(row interface{ Scan(...any) error }) (*Report, error) {
 		attempts         int32
 		startedAt        pgtype.Timestamptz
 		completedAt      pgtype.Timestamptz
+		lastRequestID    pgtype.Text
 	)
 
 	if err := row.Scan(
@@ -277,6 +301,7 @@ func scanReport(row interface{ Scan(...any) error }) (*Report, error) {
 		&attempts,
 		&startedAt,
 		&completedAt,
+		&lastRequestID,
 	); err != nil {
 		return nil, err
 	}
@@ -284,6 +309,7 @@ func scanReport(row interface{ Scan(...any) error }) (*Report, error) {
 	report := &Report{
 		SessionCode:     sessionCode,
 		Status:          ReportStatus(status),
+		LastRequestID:   lastRequestID.String,
 		QuestionCount:   int(questionCount),
 		DurationMinutes: int(durationMinutes),
 		Attempts:        int(attempts),

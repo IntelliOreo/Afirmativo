@@ -14,9 +14,10 @@ import (
 
 // Service contains session business logic.
 type Service struct {
-	store    Store
-	settings Settings
-	nowFn    func() time.Time
+	store     Store
+	settings  Settings
+	nowFn     func() time.Time
+	dbTimeout time.Duration
 }
 
 type Deps struct {
@@ -26,14 +27,20 @@ type Deps struct {
 type Settings struct {
 	ExpiryHours            int
 	InterviewBudgetSeconds int
+	DBTimeout              time.Duration
 }
 
 // NewService creates a Service with the given dependencies and runtime settings.
 func NewService(deps Deps, settings Settings) *Service {
+	dbTimeout := settings.DBTimeout
+	if dbTimeout <= 0 {
+		dbTimeout = 5 * time.Second
+	}
 	return &Service{
-		store:    deps.Store,
-		settings: settings,
-		nowFn:    time.Now,
+		store:     deps.Store,
+		settings:  settings,
+		nowFn:     time.Now,
+		dbTimeout: dbTimeout,
 	}
 }
 
@@ -63,14 +70,16 @@ func (s *Service) ValidateCoupon(ctx context.Context, couponCode string) (*Valid
 
 	expiresAt := s.nowFn().Add(time.Duration(s.settings.ExpiryHours) * time.Hour)
 
+	dbCtx, cancel := context.WithTimeout(ctx, s.dbTimeout)
 	_, err = s.store.ClaimCouponAndCreateSession(
-		ctx,
+		dbCtx,
 		couponCode,
 		sessionCode,
 		string(pinHash),
 		expiresAt,
 		s.settings.InterviewBudgetSeconds,
 	)
+	cancel()
 	if err != nil {
 		return nil, err // ErrCouponInvalid or internal error — caller maps to HTTP status
 	}
@@ -88,7 +97,9 @@ func (s *Service) ValidateCoupon(ctx context.Context, couponCode string) (*Valid
 
 // VerifySession verifies a session code and PIN, returning the session if valid.
 func (s *Service) VerifySession(ctx context.Context, sessionCode, pin string) (*Session, error) {
-	sess, err := s.store.GetSessionByCode(ctx, sessionCode)
+	dbCtx, cancel := context.WithTimeout(ctx, s.dbTimeout)
+	sess, err := s.store.GetSessionByCode(dbCtx, sessionCode)
+	cancel()
 	if err != nil {
 		return nil, err // ErrNotFound or internal error
 	}

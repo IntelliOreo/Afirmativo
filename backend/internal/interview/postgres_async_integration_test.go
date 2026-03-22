@@ -195,3 +195,182 @@ func TestPostgresStoreAsyncAnswerJobFailedTerminalStateNotClaimable(t *testing.T
 		t.Fatalf("ClaimQueuedAnswerJob() after terminal failure = %#v, want nil", reclaim)
 	}
 }
+
+func TestPostgresStoreClaimNextQueuedAnswerJob_ClaimsOldestQueuedJob(t *testing.T) {
+	store, cleanup := newPostgresIntegrationStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	sessionCode := "AP-ASYNC-CLAIM-NEXT"
+	insertPostgresIntegrationSession(t, store.pool, postgresIntegrationSessionParams{
+		SessionCode: sessionCode,
+		Status:      "interviewing",
+		FlowStep:    FlowStepCriterion,
+	})
+
+	firstJob, err := store.UpsertAnswerJob(ctx, UpsertAnswerJobParams{
+		SessionCode:     sessionCode,
+		ClientRequestID: "req-first",
+		LastRequestID:   "request-first",
+		TurnID:          "turn-10",
+		QuestionText:    "Older question",
+		AnswerText:      "Older answer",
+	})
+	if err != nil {
+		t.Fatalf("UpsertAnswerJob(first) error = %v", err)
+	}
+	secondJob, err := store.UpsertAnswerJob(ctx, UpsertAnswerJobParams{
+		SessionCode:     sessionCode,
+		ClientRequestID: "req-second",
+		LastRequestID:   "request-second",
+		TurnID:          "turn-11",
+		QuestionText:    "Newer question",
+		AnswerText:      "Newer answer",
+	})
+	if err != nil {
+		t.Fatalf("UpsertAnswerJob(second) error = %v", err)
+	}
+
+	older := time.Now().UTC().Add(-2 * time.Minute)
+	newer := older.Add(time.Minute)
+	if _, err := store.pool.Exec(ctx,
+		`UPDATE interview_answer_jobs
+		    SET created_at = $2,
+		        updated_at = $2
+		  WHERE id = $1::uuid`,
+		firstJob.ID,
+		older,
+	); err != nil {
+		t.Fatalf("force first job ordering error = %v", err)
+	}
+	if _, err := store.pool.Exec(ctx,
+		`UPDATE interview_answer_jobs
+		    SET created_at = $2,
+		        updated_at = $2
+		  WHERE id = $1::uuid`,
+		secondJob.ID,
+		newer,
+	); err != nil {
+		t.Fatalf("force second job ordering error = %v", err)
+	}
+
+	claimed, err := store.ClaimNextQueuedAnswerJob(ctx)
+	if err != nil {
+		t.Fatalf("ClaimNextQueuedAnswerJob() error = %v", err)
+	}
+	if claimed == nil {
+		t.Fatal("ClaimNextQueuedAnswerJob() = nil, want claimed job")
+	}
+	if claimed.ID != firstJob.ID {
+		t.Fatalf("claimed.ID = %q, want %q", claimed.ID, firstJob.ID)
+	}
+	if claimed.Status != AsyncAnswerJobRunning {
+		t.Fatalf("claimed.Status = %q, want %q", claimed.Status, AsyncAnswerJobRunning)
+	}
+	if claimed.Attempts != 1 {
+		t.Fatalf("claimed.Attempts = %d, want 1", claimed.Attempts)
+	}
+	if claimed.StartedAt == nil {
+		t.Fatal("claimed.StartedAt = nil, want non-nil")
+	}
+	if claimed.LastRequestID != "request-first" {
+		t.Fatalf("claimed.LastRequestID = %q, want request-first", claimed.LastRequestID)
+	}
+}
+
+func TestPostgresStoreClaimNextQueuedAnswerJob_ReturnsNilWhenQueueEmpty(t *testing.T) {
+	store, cleanup := newPostgresIntegrationStore(t)
+	defer cleanup()
+
+	claimed, err := store.ClaimNextQueuedAnswerJob(context.Background())
+	if err != nil {
+		t.Fatalf("ClaimNextQueuedAnswerJob() error = %v", err)
+	}
+	if claimed != nil {
+		t.Fatalf("ClaimNextQueuedAnswerJob() = %#v, want nil", claimed)
+	}
+}
+
+func TestPostgresStoreClaimNextQueuedAnswerJob_SkipsLockedJob(t *testing.T) {
+	store, cleanup := newPostgresIntegrationStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	sessionCode := "AP-ASYNC-SKIP-LOCKED"
+	insertPostgresIntegrationSession(t, store.pool, postgresIntegrationSessionParams{
+		SessionCode: sessionCode,
+		Status:      "interviewing",
+		FlowStep:    FlowStepCriterion,
+	})
+
+	firstJob, err := store.UpsertAnswerJob(ctx, UpsertAnswerJobParams{
+		SessionCode:     sessionCode,
+		ClientRequestID: "req-lock-first",
+		TurnID:          "turn-20",
+		QuestionText:    "First question",
+		AnswerText:      "First answer",
+	})
+	if err != nil {
+		t.Fatalf("UpsertAnswerJob(first) error = %v", err)
+	}
+	secondJob, err := store.UpsertAnswerJob(ctx, UpsertAnswerJobParams{
+		SessionCode:     sessionCode,
+		ClientRequestID: "req-lock-second",
+		TurnID:          "turn-21",
+		QuestionText:    "Second question",
+		AnswerText:      "Second answer",
+	})
+	if err != nil {
+		t.Fatalf("UpsertAnswerJob(second) error = %v", err)
+	}
+
+	older := time.Now().UTC().Add(-2 * time.Minute)
+	newer := older.Add(time.Minute)
+	if _, err := store.pool.Exec(ctx,
+		`UPDATE interview_answer_jobs
+		    SET created_at = $2,
+		        updated_at = $2
+		  WHERE id = $1::uuid`,
+		firstJob.ID,
+		older,
+	); err != nil {
+		t.Fatalf("force first job ordering error = %v", err)
+	}
+	if _, err := store.pool.Exec(ctx,
+		`UPDATE interview_answer_jobs
+		    SET created_at = $2,
+		        updated_at = $2
+		  WHERE id = $1::uuid`,
+		secondJob.ID,
+		newer,
+	); err != nil {
+		t.Fatalf("force second job ordering error = %v", err)
+	}
+
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("Begin() error = %v", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx,
+		`SELECT id
+		   FROM interview_answer_jobs
+		  WHERE id = $1::uuid
+		  FOR UPDATE`,
+		firstJob.ID,
+	); err != nil {
+		t.Fatalf("lock first queued job error = %v", err)
+	}
+
+	claimed, err := store.ClaimNextQueuedAnswerJob(ctx)
+	if err != nil {
+		t.Fatalf("ClaimNextQueuedAnswerJob() error = %v", err)
+	}
+	if claimed == nil {
+		t.Fatal("ClaimNextQueuedAnswerJob() = nil, want claimed job")
+	}
+	if claimed.ID != secondJob.ID {
+		t.Fatalf("claimed.ID = %q, want %q", claimed.ID, secondJob.ID)
+	}
+}

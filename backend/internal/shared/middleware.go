@@ -1,4 +1,4 @@
-// HTTP middleware: CORS, RequestID, Logger, SecurityHeaders.
+// HTTP middleware: CORS, RequestID, Logger, SecurityHeaders, Recovery.
 // Applied in cmd/server/main.go via middleware chain.
 package shared
 
@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
+
+const maxRecoveryStackBytes = 10 * 1024
 
 // CORS returns middleware that sets CORS headers for the given origin.
 func CORS(allowedOrigin string) func(http.Handler) http.Handler {
@@ -40,6 +43,44 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 		next.ServeHTTP(w, r)
+	})
+}
+
+// Recovery logs panics with request context and returns a standard JSON 500 when possible.
+func Recovery(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sw, ok := w.(*statusWriter)
+		if !ok {
+			sw = &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		}
+
+		defer func() {
+			if rec := recover(); rec != nil {
+				if rec == http.ErrAbortHandler {
+					panic(rec)
+				}
+
+				stack := debug.Stack()
+				if len(stack) > maxRecoveryStackBytes {
+					stack = stack[:maxRecoveryStackBytes]
+				}
+
+				slog.Error("recovered panic",
+					"request_id", RequestIDFromContext(r.Context()),
+					"method", r.Method,
+					"path", r.URL.Path,
+					"client_ip", ClientIPFromRequest(r),
+					"panic", rec,
+					"stack", string(stack),
+				)
+
+				if !sw.wroteHeader {
+					WriteError(sw, ErrInternal, "Internal server error", "INTERNAL_ERROR")
+				}
+			}
+		}()
+
+		next.ServeHTTP(sw, r)
 	})
 }
 
@@ -103,10 +144,21 @@ func Chain(h http.Handler, mw ...func(http.Handler) http.Handler) http.Handler {
 
 type statusWriter struct {
 	http.ResponseWriter
-	status int
+	status      int
+	wroteHeader bool
 }
 
 func (sw *statusWriter) WriteHeader(code int) {
-	sw.status = code
+	if !sw.wroteHeader {
+		sw.status = code
+		sw.wroteHeader = true
+	}
 	sw.ResponseWriter.WriteHeader(code)
+}
+
+func (sw *statusWriter) Write(data []byte) (int, error) {
+	if !sw.wroteHeader {
+		sw.WriteHeader(http.StatusOK)
+	}
+	return sw.ResponseWriter.Write(data)
 }

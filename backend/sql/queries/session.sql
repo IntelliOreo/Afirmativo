@@ -13,6 +13,10 @@ INSERT INTO sessions (session_code, pin_hash, coupon_code, status, expires_at, i
 VALUES ($1, $2, $3, 'created', $4, $5)
 RETURNING *;
 
+-- name: CreatePaidSession :exec
+INSERT INTO sessions (session_code, pin_hash, payment_id, status, expires_at, interview_budget_seconds)
+VALUES ($1, $2, $3, 'created', $4, $5);
+
 -- name: GetSessionByCode :one
 SELECT * FROM sessions WHERE session_code = $1;
 

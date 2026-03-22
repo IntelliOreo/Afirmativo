@@ -35,17 +35,19 @@ func setBaseValidEnv(t *testing.T) {
 		"SESSION_AUTH_MAX_TTL_MINUTES":                "60",
 		"OLLAMA_TEMPERATURE":                          "0.3",
 		"VOICE_AI_TOKEN_TIMEOUT_SECONDS":              "30",
+		"PAYMENT_AMOUNT_CENTS":                        "5000",
+		"PAYMENT_CURRENCY":                            "usd",
+		"STRIPE_SECRET_KEY":                           "sk_test_example",
+		"STRIPE_WEBHOOK_SECRET":                       "whsec_example",
 		"ADMIN_CLEANUP_ENABLED":                       "false",
 		"ALLOW_SENSITIVE_DEBUG_LOGS":                  "false",
 		"ASYNC_ANSWER_WORKERS":                        "4",
 		"ASYNC_ANSWER_QUEUE_SIZE":                     "256",
-		"ASYNC_ANSWER_RECOVERY_BATCH":                 "100",
 		"ASYNC_ANSWER_RECOVERY_EVERY_SECONDS":         "10",
 		"ASYNC_ANSWER_STALE_AFTER_SECONDS":            "180",
 		"ASYNC_ANSWER_JOB_TIMEOUT_SECONDS":            "180",
 		"ASYNC_REPORT_WORKERS":                        "2",
 		"ASYNC_REPORT_QUEUE_SIZE":                     "64",
-		"ASYNC_REPORT_RECOVERY_BATCH":                 "50",
 		"ASYNC_REPORT_RECOVERY_EVERY_SECONDS":         "10",
 		"ASYNC_REPORT_STALE_AFTER_SECONDS":            "180",
 		"ASYNC_REPORT_JOB_TIMEOUT_SECONDS":            "180",
@@ -85,13 +87,11 @@ func TestLoad_ParsesNewAsyncAndRateLimitKnobs(t *testing.T) {
 
 	t.Setenv("ASYNC_ANSWER_WORKERS", "7")
 	t.Setenv("ASYNC_ANSWER_QUEUE_SIZE", "321")
-	t.Setenv("ASYNC_ANSWER_RECOVERY_BATCH", "22")
 	t.Setenv("ASYNC_ANSWER_RECOVERY_EVERY_SECONDS", "11")
 	t.Setenv("ASYNC_ANSWER_STALE_AFTER_SECONDS", "240")
 	t.Setenv("ASYNC_ANSWER_JOB_TIMEOUT_SECONDS", "200")
 	t.Setenv("ASYNC_REPORT_WORKERS", "3")
 	t.Setenv("ASYNC_REPORT_QUEUE_SIZE", "111")
-	t.Setenv("ASYNC_REPORT_RECOVERY_BATCH", "19")
 	t.Setenv("ASYNC_REPORT_RECOVERY_EVERY_SECONDS", "14")
 	t.Setenv("ASYNC_REPORT_STALE_AFTER_SECONDS", "260")
 	t.Setenv("ASYNC_REPORT_JOB_TIMEOUT_SECONDS", "210")
@@ -112,7 +112,6 @@ func TestLoad_ParsesNewAsyncAndRateLimitKnobs(t *testing.T) {
 
 	if cfg.Interview.AsyncRuntime.Workers != 7 ||
 		cfg.Interview.AsyncRuntime.QueueSize != 321 ||
-		cfg.Interview.AsyncRuntime.RecoveryBatch != 22 ||
 		cfg.Interview.AsyncRuntime.RecoveryEvery != 11*time.Second ||
 		cfg.Interview.AsyncRuntime.StaleAfter != 240*time.Second ||
 		cfg.Interview.AsyncRuntime.JobTimeout != 200*time.Second {
@@ -120,7 +119,6 @@ func TestLoad_ParsesNewAsyncAndRateLimitKnobs(t *testing.T) {
 	}
 	if cfg.Report.AsyncRuntime.Workers != 3 ||
 		cfg.Report.AsyncRuntime.QueueSize != 111 ||
-		cfg.Report.AsyncRuntime.RecoveryBatch != 19 ||
 		cfg.Report.AsyncRuntime.RecoveryEvery != 14*time.Second ||
 		cfg.Report.AsyncRuntime.StaleAfter != 260*time.Second ||
 		cfg.Report.AsyncRuntime.JobTimeout != 210*time.Second {
@@ -140,6 +138,9 @@ func TestLoad_ParsesNewAsyncAndRateLimitKnobs(t *testing.T) {
 		cfg.RateLimit.Voice.SessionRatePerMinute != 8 ||
 		cfg.RateLimit.Voice.SessionBurst != 3 {
 		t.Fatalf("unexpected voice limiter config: %#v", cfg)
+	}
+	if cfg.DBOperationTimeout != 5*time.Second {
+		t.Fatalf("DBOperationTimeout = %v, want 5s", cfg.DBOperationTimeout)
 	}
 }
 
@@ -259,6 +260,19 @@ func TestLoad_RejectsInvalidInterviewBudgetSeconds(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "INTERVIEW_BUDGET_SECONDS must be > 0") {
 		t.Fatalf("error = %v, want INTERVIEW_BUDGET_SECONDS validation message", err)
+	}
+}
+
+func TestLoad_RejectsInvalidPaymentCurrency(t *testing.T) {
+	setBaseValidEnv(t)
+	t.Setenv("PAYMENT_CURRENCY", "usdollars")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatalf("Load() expected error for PAYMENT_CURRENCY")
+	}
+	if !strings.Contains(err.Error(), "PAYMENT_CURRENCY must be a 3-letter ISO currency code") {
+		t.Fatalf("error = %v, want PAYMENT_CURRENCY validation message", err)
 	}
 }
 

@@ -31,7 +31,6 @@ type BilingualText struct {
 type AsyncRuntimeConfig struct {
 	Workers       int
 	QueueSize     int
-	RecoveryBatch int
 	RecoveryEvery time.Duration
 	StaleAfter    time.Duration
 	JobTimeout    time.Duration
@@ -61,7 +60,6 @@ type AuthConfig struct {
 type InterviewConfig struct {
 	BudgetSeconds          int
 	AnswerTimeLimitSeconds int
-	DBTimeout              time.Duration
 	AsyncRuntime           AsyncRuntimeConfig
 	AreaConfigs            []AreaConfig
 	OpeningDisclaimer      BilingualText
@@ -69,7 +67,6 @@ type InterviewConfig struct {
 }
 
 type ReportConfig struct {
-	DBTimeout    time.Duration
 	AsyncRuntime AsyncRuntimeConfig
 }
 
@@ -110,6 +107,13 @@ type VoiceConfig struct {
 	Timeout             time.Duration
 }
 
+type PaymentConfig struct {
+	StripeSecretKey     string
+	StripeWebhookSecret string
+	AmountCents         int
+	Currency            string
+}
+
 type VerifyRateLimitConfig struct {
 	IPRatePerMinute int
 	IPBurst         int
@@ -140,25 +144,26 @@ type AdminConfig struct {
 }
 
 // Config holds all application configuration loaded from environment variables.
-// In local dev, values come from .env via godotenv.
+// In local dev, values come from .env loaded by the IDE/debugger (e.g. VS Code envFile).
 // In containers, values come from the runtime environment (e.g., Secret Manager).
 type Config struct {
-	Server    ServerConfig
-	Auth      AuthConfig
-	Interview InterviewConfig
-	Report    ReportConfig
-	AI        AIConfig
-	Voice     VoiceConfig
-	RateLimit RateLimitConfig
-	OTel      OTelConfig
-	Admin     AdminConfig
+	Server             ServerConfig
+	Auth               AuthConfig
+	DBOperationTimeout time.Duration
+	Interview          InterviewConfig
+	Report             ReportConfig
+	AI                 AIConfig
+	Voice              VoiceConfig
+	Payment            PaymentConfig
+	RateLimit          RateLimitConfig
+	OTel               OTelConfig
+	Admin              AdminConfig
 }
 
 const (
 	defaultSessionAuthIssuer   = "afirmativo-backend"
 	defaultSessionAuthAudience = "afirmativo-frontend"
-	defaultInterviewDBTimeout  = 5 * time.Second
-	defaultReportDBTimeout     = 5 * time.Second
+	defaultDBOperationTimeout  = 5 * time.Second
 
 	defaultOpeningDisclaimerEs = "Aviso importante: esta entrevista simulada es solo para preparacion y no constituye asesoramiento legal. Al continuar, usted confirma que leyo y acepta estos terminos."
 	defaultOpeningDisclaimerEn = "Important disclaimer: this mock interview is for preparation only and does not constitute legal advice. By continuing, you confirm that you read and accept these terms."
@@ -237,6 +242,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	paymentAmountCents, err := envIntMin("PAYMENT_AMOUNT_CENTS", 5000, 1)
+	if err != nil {
+		return Config{}, err
+	}
 	if voiceTokenTimeoutSeconds <= 0 || voiceTokenTimeoutSeconds > 3600 {
 		return Config{}, fmt.Errorf("VOICE_AI_TOKEN_TIMEOUT_SECONDS must be between 1 and 3600")
 	}
@@ -266,10 +275,6 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	answerAsyncRecoveryBatch, err := envIntMin("ASYNC_ANSWER_RECOVERY_BATCH", 100, 1)
-	if err != nil {
-		return Config{}, err
-	}
 	answerAsyncRecoveryEverySeconds, err := envIntMin("ASYNC_ANSWER_RECOVERY_EVERY_SECONDS", 10, 1)
 	if err != nil {
 		return Config{}, err
@@ -288,10 +293,6 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	reportAsyncQueueSize, err := envIntMin("ASYNC_REPORT_QUEUE_SIZE", 64, 1)
-	if err != nil {
-		return Config{}, err
-	}
-	reportAsyncRecoveryBatch, err := envIntMin("ASYNC_REPORT_RECOVERY_BATCH", 50, 1)
 	if err != nil {
 		return Config{}, err
 	}
@@ -370,14 +371,13 @@ func Load() (Config, error) {
 			SessionAuthCookieName: envOr("SESSION_AUTH_COOKIE_NAME", "afirmativo_auth"),
 			SessionAuthMaxTTL:     time.Duration(sessionAuthMaxTTLMinutes) * time.Minute,
 		},
+		DBOperationTimeout: defaultDBOperationTimeout,
 		Interview: InterviewConfig{
 			BudgetSeconds:          interviewBudgetSeconds,
 			AnswerTimeLimitSeconds: answerTimeLimitSeconds,
-			DBTimeout:              defaultInterviewDBTimeout,
 			AsyncRuntime: AsyncRuntimeConfig{
 				Workers:       answerAsyncWorkers,
 				QueueSize:     answerAsyncQueueSize,
-				RecoveryBatch: answerAsyncRecoveryBatch,
 				RecoveryEvery: time.Duration(answerAsyncRecoveryEverySeconds) * time.Second,
 				StaleAfter:    time.Duration(answerAsyncStaleAfterSeconds) * time.Second,
 				JobTimeout:    time.Duration(answerAsyncJobTimeoutSeconds) * time.Second,
@@ -393,11 +393,9 @@ func Load() (Config, error) {
 			},
 		},
 		Report: ReportConfig{
-			DBTimeout: defaultReportDBTimeout,
 			AsyncRuntime: AsyncRuntimeConfig{
 				Workers:       reportAsyncWorkers,
 				QueueSize:     reportAsyncQueueSize,
-				RecoveryBatch: reportAsyncRecoveryBatch,
 				RecoveryEvery: time.Duration(reportAsyncRecoveryEverySeconds) * time.Second,
 				StaleAfter:    time.Duration(reportAsyncStaleAfterSeconds) * time.Second,
 				JobTimeout:    time.Duration(reportAsyncJobTimeoutSeconds) * time.Second,
@@ -437,6 +435,12 @@ func Load() (Config, error) {
 			Model:               envOr("VOICE_AI_MODEL", "nova-3"),
 			TokenTimeoutSeconds: voiceTokenTimeoutSeconds,
 			Timeout:             time.Duration(aiTimeoutSeconds) * time.Second,
+		},
+		Payment: PaymentConfig{
+			StripeSecretKey:     os.Getenv("STRIPE_SECRET_KEY"),
+			StripeWebhookSecret: os.Getenv("STRIPE_WEBHOOK_SECRET"),
+			AmountCents:         paymentAmountCents,
+			Currency:            strings.ToLower(strings.TrimSpace(envOr("PAYMENT_CURRENCY", "usd"))),
 		},
 		RateLimit: RateLimitConfig{
 			Verify: VerifyRateLimitConfig{
@@ -481,6 +485,7 @@ func (c Config) LogLoaded() {
 		"session_expiry_hours", c.Auth.SessionExpiryHours,
 		"interview_budget_seconds", c.Interview.BudgetSeconds,
 		"answer_time_limit_seconds", c.Interview.AnswerTimeLimitSeconds,
+		"db_operation_timeout_seconds", int(c.DBOperationTimeout/time.Second),
 		"session_auth_cookie_name", c.Auth.SessionAuthCookieName,
 		"session_auth_max_ttl_minutes", int(c.Auth.SessionAuthMaxTTL/time.Minute),
 		"admin_cleanup_enabled", c.Admin.CleanupEnabled,
@@ -488,13 +493,11 @@ func (c Config) LogLoaded() {
 	slog.Debug("async runtime config loaded",
 		"interview_async_workers", c.Interview.AsyncRuntime.Workers,
 		"interview_async_queue_size", c.Interview.AsyncRuntime.QueueSize,
-		"interview_async_recovery_batch", c.Interview.AsyncRuntime.RecoveryBatch,
 		"interview_async_recovery_every_seconds", int(c.Interview.AsyncRuntime.RecoveryEvery/time.Second),
 		"interview_async_stale_after_seconds", int(c.Interview.AsyncRuntime.StaleAfter/time.Second),
 		"interview_async_job_timeout_seconds", int(c.Interview.AsyncRuntime.JobTimeout/time.Second),
 		"report_async_workers", c.Report.AsyncRuntime.Workers,
 		"report_async_queue_size", c.Report.AsyncRuntime.QueueSize,
-		"report_async_recovery_batch", c.Report.AsyncRuntime.RecoveryBatch,
 		"report_async_recovery_every_seconds", int(c.Report.AsyncRuntime.RecoveryEvery/time.Second),
 		"report_async_stale_after_seconds", int(c.Report.AsyncRuntime.StaleAfter/time.Second),
 		"report_async_job_timeout_seconds", int(c.Report.AsyncRuntime.JobTimeout/time.Second),
@@ -521,6 +524,12 @@ func (c Config) LogLoaded() {
 		"voice_ai_api_key_set", c.Voice.APIKey != "",
 		"voice_ai_token_timeout_seconds", c.Voice.TokenTimeoutSeconds,
 	)
+	slog.Debug("payment config loaded",
+		"stripe_secret_key_set", c.Payment.StripeSecretKey != "",
+		"stripe_webhook_secret_set", c.Payment.StripeWebhookSecret != "",
+		"payment_amount_cents", c.Payment.AmountCents,
+		"payment_currency", c.Payment.Currency,
+	)
 	for _, ac := range c.Interview.AreaConfigs {
 		slog.Debug("area config",
 			"id", ac.ID,
@@ -538,6 +547,9 @@ func validateConfig(cfg Config) error {
 	}
 	if cfg.Auth.JWTSecret == "" {
 		return fmt.Errorf("JWT_SECRET is required")
+	}
+	if cfg.DBOperationTimeout <= 0 {
+		return fmt.Errorf("DB operation timeout must be > 0")
 	}
 	if cfg.Interview.BudgetSeconds < cfg.Interview.AnswerTimeLimitSeconds {
 		return fmt.Errorf("INTERVIEW_BUDGET_SECONDS must be >= ANSWER_TIME_LIMIT_SECONDS")
@@ -563,6 +575,15 @@ func validateConfig(cfg Config) error {
 
 	if cfg.AI.Provider == "claude" && cfg.AI.APIKey == "" && cfg.AI.MockAPIURL == "" {
 		return fmt.Errorf("AI_API_KEY is required (or set MOCK_API_URL for dev)")
+	}
+	if strings.TrimSpace(cfg.Payment.StripeSecretKey) == "" {
+		return fmt.Errorf("STRIPE_SECRET_KEY is required")
+	}
+	if strings.TrimSpace(cfg.Payment.StripeWebhookSecret) == "" {
+		return fmt.Errorf("STRIPE_WEBHOOK_SECRET is required")
+	}
+	if len(strings.TrimSpace(cfg.Payment.Currency)) != 3 {
+		return fmt.Errorf("PAYMENT_CURRENCY must be a 3-letter ISO currency code")
 	}
 	if cfg.AI.Provider == "ollama" {
 		if cfg.AI.MockAPIURL != "" {

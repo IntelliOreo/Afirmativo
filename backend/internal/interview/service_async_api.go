@@ -14,6 +14,7 @@ import (
 func (s *Service) SubmitAnswerAsync(ctx context.Context, sessionCode, answerText, questionText, turnID, clientRequestID string) (*SubmitAnswerAsyncResult, error) {
 	dbCtx, dbCancel := context.WithTimeout(ctx, s.dbTimeout)
 	defer dbCancel()
+	requestID := shared.RequestIDFromContext(ctx)
 
 	sess, err := s.sessionGetter.GetSessionByCode(dbCtx, sessionCode)
 	if err != nil {
@@ -27,15 +28,13 @@ func (s *Service) SubmitAnswerAsync(ctx context.Context, sessionCode, answerText
 	job, err := s.jobStore.UpsertAnswerJob(dbCtx, UpsertAnswerJobParams{
 		SessionCode:     sessionCode,
 		ClientRequestID: clientRequestID,
+		LastRequestID:   requestID,
 		TurnID:          turnID,
 		QuestionText:    questionText,
 		AnswerText:      answerText,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("upsert async answer job: %w", err)
-	}
-	if requestID := shared.RequestIDFromContext(ctx); requestID != "" {
-		s.asyncAnswerRequestIDs.Store(job.ID, requestID)
 	}
 
 	// Idempotency key must map to the same semantic request payload.
@@ -53,11 +52,11 @@ func (s *Service) SubmitAnswerAsync(ctx context.Context, sessionCode, answerText
 
 	triggered := false
 	if job.Status == AsyncAnswerJobQueued {
-		triggered = s.enqueueAsyncAnswerJob(job.ID)
+		triggered = s.enqueueAsyncAnswerJob(job.ID, job.LastRequestID)
 	}
 
 	slog.Info("async answer job accepted",
-		"request_id", s.asyncAnswerRequestID(job.ID),
+		"request_id", job.LastRequestID,
 		"session_code", job.SessionCode,
 		"client_request_id", job.ClientRequestID,
 		"job_id", job.ID,
@@ -84,7 +83,7 @@ func (s *Service) GetAnswerJobResult(ctx context.Context, sessionCode, jobID str
 	}
 
 	slog.Debug("async answer job fetched",
-		"request_id", s.asyncAnswerRequestID(job.ID),
+		"request_id", job.LastRequestID,
 		"session_code", sessionCode,
 		"job_id", job.ID,
 		"client_request_id", job.ClientRequestID,
@@ -125,13 +124,4 @@ func (s *Service) GetAnswerJobResult(ctx context.Context, sessionCode, jobID str
 	}
 
 	return result, nil
-}
-
-func (s *Service) asyncAnswerRequestID(jobID string) string {
-	value, ok := s.asyncAnswerRequestIDs.Load(strings.TrimSpace(jobID))
-	if !ok {
-		return ""
-	}
-	requestID, _ := value.(string)
-	return strings.TrimSpace(requestID)
 }

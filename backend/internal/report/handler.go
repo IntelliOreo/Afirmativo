@@ -46,7 +46,7 @@ func requireReportCode(w http.ResponseWriter, r *http.Request) (string, bool) {
 	code := r.PathValue("code")
 	if code == "" {
 		shared.WriteJSON(w, http.StatusBadRequest, shared.ErrorResponse{
-			Error: "session code is required",
+			Error: "Session code is required",
 			Code:  "MISSING_CODE",
 		})
 		return "", false
@@ -94,30 +94,27 @@ func (h *Handler) HandleGetReportPDF(w http.ResponseWriter, r *http.Request) {
 	if !shared.RequireSessionCodeMatch(w, r, r.PathValue("code")) {
 		return
 	}
-	shared.WriteJSON(w, http.StatusNotImplemented, shared.ErrorResponse{
-		Error: "PDF generation not implemented yet",
-		Code:  "NOT_IMPLEMENTED",
-	})
+	shared.WriteErrorStatus(w, http.StatusNotImplemented, "PDF generation not implemented yet", "NOT_IMPLEMENTED")
 }
 
 func (h *Handler) writeServiceError(w http.ResponseWriter, code string, err error) {
 	if errors.Is(err, ErrSessionNotFound) {
 		shared.WriteJSON(w, http.StatusNotFound, shared.ErrorResponse{
-			Error: "session not found",
+			Error: "Session not found",
 			Code:  "SESSION_NOT_FOUND",
 		})
 		return
 	}
 	if errors.Is(err, ErrSessionNotCompleted) {
 		shared.WriteJSON(w, http.StatusBadRequest, shared.ErrorResponse{
-			Error: "interview not completed yet",
+			Error: "Interview is not completed yet",
 			Code:  "NOT_COMPLETED",
 		})
 		return
 	}
 	if errors.Is(err, ErrReportNotStarted) {
 		shared.WriteJSON(w, http.StatusNotFound, shared.ErrorResponse{
-			Error: "report has not been started",
+			Error: "Report has not been started",
 			Code:  "REPORT_NOT_STARTED",
 		})
 		return
@@ -125,7 +122,7 @@ func (h *Handler) writeServiceError(w http.ResponseWriter, code string, err erro
 
 	slog.Error("report request failed", "code", code, "error", err)
 	shared.WriteJSON(w, http.StatusInternalServerError, shared.ErrorResponse{
-		Error: "failed to generate report",
+		Error: "Failed to generate report",
 		Code:  "GENERATION_ERROR",
 	})
 }
@@ -133,7 +130,7 @@ func (h *Handler) writeServiceError(w http.ResponseWriter, code string, err erro
 func (h *Handler) writeReportResponse(w http.ResponseWriter, report *Report) {
 	if report == nil {
 		shared.WriteJSON(w, http.StatusNotFound, shared.ErrorResponse{
-			Error: "report has not been started",
+			Error: "Report has not been started",
 			Code:  "REPORT_NOT_STARTED",
 		})
 		return
@@ -146,7 +143,7 @@ func (h *Handler) writeReportResponse(w http.ResponseWriter, report *Report) {
 
 	if report.Status == ReportStatusFailed {
 		shared.WriteJSON(w, http.StatusInternalServerError, shared.ErrorResponse{
-			Error: "report generation failed, please try again",
+			Error: "Report generation failed, please try again",
 			Code:  "GENERATION_FAILED",
 		})
 		return
@@ -155,7 +152,7 @@ func (h *Handler) writeReportResponse(w http.ResponseWriter, report *Report) {
 	if report.Status != ReportStatusReady {
 		slog.Error("report has unexpected status", "session_code", report.SessionCode, "status", report.Status)
 		shared.WriteJSON(w, http.StatusInternalServerError, shared.ErrorResponse{
-			Error: "failed to generate report",
+			Error: "Failed to generate report",
 			Code:  "GENERATION_ERROR",
 		})
 		return

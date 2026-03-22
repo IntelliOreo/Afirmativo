@@ -1,8 +1,8 @@
 # Afirmativo
 
-Afirmativo is a bilingual AI-assisted practice tool for asylum interview preparation. The app is session-based, supports typed and voice answers, evaluates interview turns asynchronously, and produces a bilingual report after the interview is complete.
+Bilingual AI-assisted practice tool for asylum interview preparation. Session-based, supports typed and voice answers, async AI evaluation, bilingual reports.
 
-## Architecture Snapshot
+## Architecture
 
 ```text
 +-------------------+      HTTP / JSON      +--------------------+      SQL      +--------------+
@@ -18,21 +18,99 @@ Afirmativo is a bilingual AI-assisted practice tool for asylum interview prepara
    +--------------+                             +---------------+     +-------------------+
 ```
 
-## Repo Map
-
 ```text
-frontend/     Next.js app and browser-side interview state machine
-backend/      Go API for sessions, interview flow, reports, payments, admin, voice
-utils/database/     Migration CLI, coupon loader, and local DB studio
-utils/terraform/    optional local checkout of the private infra repo for operators
-doc/          Committed developer docs
-run-*.sh / rebuild-*.sh     Local container verification helpers
+frontend/                Next.js app, landing/session pages, browser-side interview state machine
+backend/                 Go API: sessions, interview, reports, payments, voice
 ```
 
-## Main Backend Routes
+## Design Choices and Trade-offs
+
+### Async answer processing via Postgres job queue
+
+AI evaluation takes 5-15s per turn. Synchronous would block the browser and risk HTTP timeouts. Instead, answers are submitted as async jobs backed by Postgres rows. Workers claim jobs with `SKIP LOCKED`, which gives us a distributed job queue without adding Redis or SQS. A periodic recovery loop requeues stale jobs; idle workers also poll Postgres directly as a fallback.
+
+**Trade-off**: queue hints are process-local channels. A worker on instance B won't be hinted when instance A enqueues — it falls back to DB polling via recovery. Acceptable at current scale.
+
+### Async request correlation is DB-backed
+
+Interview answer jobs and reports persist the latest triggering HTTP `request_id` as `last_request_id`. Worker logs keep that correlation across restart and cross-instance claim handoff.
+
+### Rate limiting is process-local
+
+Token-bucket throttles and failed-attempt lockouts use in-memory maps. State resets on restart and doesn't span instances.
+
+**Trade-off accepted**: traffic is low. Distributed rate limiting would require Redis or equivalent — not warranted yet. First scaling step when needed.
+
+### Stripe config isolated from the shared config layer
+
+`StripeClientConfig` is constructed directly in `main.go` from env vars, not parsed through `config.go`. Payment is new and still evolving; shared config changes affect all services and tests. Keeping Stripe wiring separate avoids churn in the stable config surface.
+
+**Trade-off**: Stripe settings don't get startup validation like other config. Acceptable — Stripe API calls fail fast with clear errors on bad credentials.
+
+### No Stripe SDK
+
+Zero-dependency Stripe integration: form-encoded POST for hosted checkout, HMAC-SHA256 for webhook signature verification (timing-safe via `hmac.Equal`). We only use a single Stripe surface (checkout sessions), so the SDK's weight isn't justified.
+
+**Trade-off**: we own signature verification code and any Stripe API drift. Acceptable for one endpoint.
+
+### Payment state machine with pessimistic locking
+
+Both the Stripe webhook and the browser poll can provision a session. `FOR UPDATE` in a Postgres transaction prevents double-provisioning. The reveal PIN has a 10-minute TTL and is consumed on first read — prevents replay from stolen poll responses.
+
+**Trade-off**: row-level locks under contention. A single payment rarely has concurrent mutations.
+
+### JWT in HttpOnly cookies
+
+Tokens can't be read by XSS. `SameSite=Strict` prevents CSRF. Same-origin `/api/*` means no cross-subdomain auth needed.
+
+### Inline i18n catalogs
+
+Two languages (en/es), ~30 strings per page. Type-safe `Record<Lang, T>` with `satisfies`. No react-intl/next-intl.
+
+**Trade-off**: won't scale past 5+ languages or translator workflows. Appropriate for current scope; migration path is straightforward.
+
+### sqlc, not an ORM
+
+SQL queries live in `.sql` files, Go code is generated. No runtime reflection, no query builder. Queries are auditable and type-safe.
+
+### stdlib net/http, no framework
+
+Composable middleware chain (`Chain` function). No gin/echo/chi. Minimal dependency tree.
+
+### OpenTelemetry wired but noop by default
+
+OTel tracer is always in the middleware chain. Locally it runs as a noop provider (`OTEL_ENABLED=false`) with zero overhead. In GCP it exports to Cloud Trace. The code path is identical either way — no conditional wiring.
+
+### Interview package is large and stays that way
+
+The backend `interview/` package is ~30 files (~2400 lines of production code, ~3200 lines of tests). The frontend interview page + state machine + hooks is another ~700 lines. These are the largest modules in the codebase.
+
+They were already split by responsibility seam over multiple passes: async runtime, turn policy, criterion helpers, AI retry, timing, snapshots, and control flow each have their own file. The core control flow was deliberately left in place each time. The state machine reducer on the frontend was similarly preserved — timeout, draft, voice, and polling each became their own hook, but the reducer stays as the lifecycle backbone.
+
+**Why not refactor further**: the interview flow is the protected area of the app. Every speculative rewrite attempt (new layers, package reshuffles, shared worker abstractions) was evaluated and rejected because the risk-to-payoff ratio was wrong. The domain is genuinely complex — multi-step branching, AI retry with degraded fallback, async processing with recovery, timeout with draft persistence, voice transcription lifecycle. The files are large because the domain is large, not because the structure is lazy.
+
+**Trade-off accepted**: new contributors will need to read more context before touching the interview path. That's preferable to a "clean" abstraction that hides the actual control flow and makes failure modes invisible. The current shape optimizes for debuggability and safe modification over visual elegance.
+
+## What's Not Built Yet
+
+- `GET /api/report/{code}/pdf` returns `501`
+- Distributed rate limiting (needs Redis)
+- Languages beyond en/es
+
+## If We Need Multiple Instances Later
+
+The current system is intentionally optimized for low cost and low operational complexity. We do not need these changes yet, but scaling to multiple backend instances would require revisiting:
+
+- distributed rate limiting
+- async worker topology (embedded in app instances vs dedicated worker instances)
+- cluster-wide metrics plus shared cache metadata where cost or observability warrants it
+
+Detailed scaling notes live in `utils/design/codebase-deep-dive.md`.
+
+## Routes
 
 ```text
-GET  /api/health                            health + pool stats + async queue stats
+GET  /api/health                            instance-local health + pool stats + async queue depths
 POST /api/coupon/validate
 POST /api/session/verify
 GET  /api/session/access
@@ -44,126 +122,40 @@ POST /api/report/{code}/generate
 GET  /api/report/{code}
 GET  /api/report/{code}/pdf
 POST /api/payment/checkout
+GET  /api/payment/checkout-sessions/{id}
 POST /api/payment/webhook
 POST /api/admin/cleanup-db
 ```
 
-## Interview Flow
+## Local Dev
 
-```text
-start
-  -> disclaimer
-  -> readiness
-  -> criterion turns (loop across evaluation areas)
-  -> done
-  -> report generation
+```bash
+./dev-all.sh                    # starts frontend + backend + mock AI + DB studio
+go run ./cmd/server             # backend only
+npm run dev                     # frontend only
 ```
 
-Criterion turns are the core of the product:
+## Deploy
 
-- same-area follow-ups usually use one AI call
-- moving to a new interview area may use a second AI call to generate the opening question for that area
-- answers are submitted asynchronously, so the browser polls job status instead of waiting on one long request
-
-## Async Answer Pipeline
+Fully automated via GitHub Actions + Terraform. No manual `gcloud` or `terraform apply` in the deploy path.
 
 ```text
-browser submit
-  -> POST /api/interview/answer-async
-  -> backend upserts async job (idempotent by clientRequestId)
-  -> worker claims job
-  -> interview service processes turn
-  -> job marked succeeded / failed / canceled / conflict
-  -> browser polls GET /api/interview/answer-jobs/{jobId}
+pull_request -> main
+  -> GitHub Actions runs backend/frontend verification only
+
+main push
+  -> GitHub Actions builds immutable candidate images (backend:sha, frontend:sha-devcfg, frontend:sha-prodcfg)
+  -> pushes to Artifact Registry via WIF (no static GCP keys)
+
+release-dev-* / release-prod-* push
+  -> dispatches the private Terraform repo
+  -> private repo runs terraform plan/apply + post-deploy smoke tests
 ```
 
-Recovery: stale running jobs are requeued by a periodic recovery loop. Jobs that exceed max retry attempts are marked permanently failed.
+Same-origin `/api/*` contract. GCP load balancer splits `/api/*` to backend, everything else to frontend. Secrets stay in GCP Secret Manager — GitHub Actions never reads `.env` files.
 
-## Observability
+The repos are split by trust boundary: the public app repo can only push images (Artifact Registry write). The private infra repo owns deploy authority (Cloud Run, Terraform state, IAM).
 
-- **Logging**: structured JSON for GCP Cloud Logging (`LOG_FORMAT=json`) or plain text for local dev
-- **Tracing**: OpenTelemetry spans on HTTP requests and AI calls, exported to GCP Cloud Trace when `OTEL_ENABLED=true`
-- **Health endpoint**: DB ping, async queue depths, DB connection pool stats (`db_pool_*`)
+The workflow is deliberately minimal to control costs. Heavy Docker builds run on the public repo (free GitHub-hosted runners). The private infra repo only runs promotion, Terraform, and smoke tests — keeping billed private minutes low.
 
-## Graceful Shutdown
-
-```text
-SIGTERM received
-  1. stop accepting new HTTP connections, drain in-flight requests (10s)
-  2. cancel async runtimes (no new jobs can be enqueued)
-  3. wait for in-progress workers to finish current jobs (15s)
-  4. close DB pool, flush OTel
-```
-
-## Versioning
-
-Both frontend and backend carry their own version, currently kept in sync:
-
-- Backend: `backend/cmd/server/version.go` (compiled into the binary, exposed in `GET /api/health`)
-- Frontend: `frontend/package.json` `"version"` field (read at build time via `next.config.ts`)
-
-To bump: edit both files. They can be decoupled later by bumping independently.
-
-## Current Notes
-
-- The backend still assumes a low-traffic single-server shape for async workers, in-memory request de-duplication, and process-local rate limiting.
-- Payment endpoints return stable `501 PAYMENT_NOT_IMPLEMENTED` responses.
-- `GET /api/report/{code}/pdf` currently returns `501 NOT_IMPLEMENTED`.
-- The interview package remains the most complex backend area and is the main focus of the maintainability refactors.
-
-## Docs
-
-- Deep-dive walkthrough: [doc/codebase-deep-dive.md](doc/codebase-deep-dive.md)
-- Local setup and commands: [doc/commands.md](doc/commands.md)
-- Deployment/runtime baseline: [doc/deployment-phase1.md](doc/deployment-phase1.md)
-- Release automation contract: [doc/deployment-phase2-github-actions.md](doc/deployment-phase2-github-actions.md)
-- Local container verification runbook: [utils/design/local-container-verification-2026-03-19.md](utils/design/local-container-verification-2026-03-19.md)
-
-## Deploy Status
-
-Phase 1 is complete and remains the truthful runtime baseline:
-
-- browser contract is same-origin `/api/*`
-- GCP load balancer routes `/api/*` to backend and everything else to frontend
-- manual Terraform deploys use explicit image refs, environment-specific `tfvars`, and Secret Manager for sensitive runtime values
-- when `app_domain` is set, the load balancer terminates HTTPS with a Google-managed certificate and redirects HTTP to HTTPS
-
-Phase 2 is implemented as a cross-repo release flow:
-
-- `main` in this public repo builds immutable candidate images in the dev Artifact Registry
-- `release-dev-*` and `release-prod-*` in this repo dispatch the private Terraform repo
-- the private `afirmativo-tf` repo runs Terraform `plan/apply`, smoke tests, and environment approvals
-- backend/runtime secrets stay in GCP Secret Manager; this repo does not read local `.env` files during CI
-
-## Local Workflows
-
-Use two local workflows on purpose:
-
-- Native development:
-  - `go run ./cmd/server`
-  - `npm run dev`
-  - or `./dev-all.sh`
-  - fastest iteration path for daily coding
-- Local container verification:
-  - `./rebuild-local-containers.sh`
-  - `./run-backend-container.sh`
-  - `./run-frontend-container.sh`
-  - deployment-parity path for validating Docker + Cloud Run assumptions
-
-Important:
-
-- frontend code or `next.config.ts` changes require a frontend image rebuild before the container reflects them
-- backend code changes require a backend image rebuild before the container reflects them
-- runtime-only env changes can often be tested by restarting the container without rebuilding
-- the frontend image should not hardcode a Cloud Run port assumption; local container runs should pass `PORT=3000`, while Cloud Run injects its own `PORT` at runtime
-
-## Useful Entry Points
-
-- Frontend interview page: `frontend/src/app/interview/[code]/page.tsx`
-- Frontend state machine: `frontend/src/app/interview/[code]/hooks/useInterviewMachine.ts`
-- Frontend active screen orchestrator: `frontend/src/app/interview/[code]/components/InterviewActiveScreen.tsx`
-- Frontend answer timeout hook: `frontend/src/app/interview/[code]/hooks/useAnswerTimeout.ts`
-- Frontend answer draft hook: `frontend/src/app/interview/[code]/hooks/useAnswerDraft.ts`
-- Backend composition root: `backend/cmd/server/main.go`
-- Backend interview service shell: `backend/internal/interview/service.go`
-- Backend async pipeline: `backend/internal/interview/service_async_api.go`, `service_async_runtime.go`, `service_async_processor.go`
+**Trade-off on prod permissions**: the deploy identity currently has broader GCP access than ideal. The target state separates bootstrap/admin Terraform (APIs, IAM, networking) from deploy/runtime Terraform (image selection, Cloud Run revisions). Prod should eventually use private-repo environment approval + least-privilege IAM scoped to image rollout only. Not yet implemented because the team is small and the blast radius is contained.

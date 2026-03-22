@@ -27,6 +27,11 @@ func WriteJSON(w http.ResponseWriter, status int, data any) {
 // WriteError maps a sentinel error to an HTTP status and writes a JSON error response.
 func WriteError(w http.ResponseWriter, err error, msg, code string) {
 	status := mapErrorStatus(err)
+	WriteErrorStatus(w, status, msg, code)
+}
+
+// WriteErrorStatus writes a JSON error response for handlers with fixed statuses.
+func WriteErrorStatus(w http.ResponseWriter, status int, msg, code string) {
 	WriteJSON(w, status, ErrorResponse{
 		Error: msg,
 		Code:  code,

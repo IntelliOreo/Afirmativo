@@ -49,13 +49,11 @@ type Service struct {
 	dbTimeout        time.Duration
 
 	asyncAnswerWorkers       int
-	asyncAnswerRecoveryBatch int
 	asyncAnswerRecoveryEvery time.Duration
 	asyncAnswerStaleAfter    time.Duration
 	asyncAnswerJobTimeout    time.Duration
 	asyncAnswerQueue         chan string
 	asyncRuntimeStartOnce    sync.Once
-	asyncAnswerRequestIDs    sync.Map
 	workerWg                 sync.WaitGroup
 }
 
@@ -89,7 +87,6 @@ func NewService(deps Deps, settings Settings) *Service {
 		nowFn:                    time.Now,
 		dbTimeout:                settings.DBTimeout,
 		asyncAnswerWorkers:       settings.AsyncRuntime.Workers,
-		asyncAnswerRecoveryBatch: settings.AsyncRuntime.RecoveryBatch,
 		asyncAnswerRecoveryEvery: settings.AsyncRuntime.RecoveryEvery,
 		asyncAnswerStaleAfter:    settings.AsyncRuntime.StaleAfter,
 		asyncAnswerJobTimeout:    settings.AsyncRuntime.JobTimeout,
