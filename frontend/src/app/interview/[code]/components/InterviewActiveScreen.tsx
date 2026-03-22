@@ -268,7 +268,6 @@ export function InterviewActiveScreen({
               onPrepareMicrophone={handleEnableMicrophone}
               onDiscardVoiceRecording={discardVoiceRecording}
               onStartVoiceRecording={startVoiceRecording}
-              onCompleteVoiceRecording={completeVoiceRecording}
               onReviewVoiceAnswer={handleReviewVoiceAnswer}
               onTranscriptChange={onTextChange}
               onSubmitAnswer={handleSubmit}

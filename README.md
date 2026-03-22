@@ -19,7 +19,7 @@ Bilingual AI-assisted practice tool for asylum interview preparation. Session-ba
 ```
 
 ```text
-frontend/                Next.js app, landing/session pages, browser-side interview state machine
+frontend/                Next.js app, landing/session pages, mobile-first interview composer, browser-side interview state machine
 backend/                 Go API: sessions, interview, reports, payments, voice
 ```
 
@@ -49,7 +49,7 @@ Token-bucket throttles and failed-attempt lockouts use in-memory maps. State res
 
 ### No Stripe SDK
 
-Zero-dependency Stripe integration: form-encoded POST for hosted checkout, HMAC-SHA256 for webhook signature verification (timing-safe via `hmac.Equal`). We only use a single Stripe surface (checkout sessions), so the SDK's weight isn't justified.
+Zero-dependency Stripe integration: form-encoded POST for hosted checkout, HMAC-SHA256 for webhook signature verification (timing-safe via `hmac.Equal`). We only use a single Stripe surface (checkout sessions), so the SDK's weight isn't justified. The frontend treats checkout start failures as generic retryable runtime errors, not as a feature-unavailable rollout state.
 
 **Trade-off**: we own signature verification code and any Stripe API drift. Acceptable for one endpoint.
 
@@ -63,7 +63,7 @@ The frontend session handoff bootstrap waits for language initialization and run
 
 ### JWT in HttpOnly cookies
 
-Tokens can't be read by XSS. `SameSite=Strict` prevents CSRF. Same-origin `/api/*` means no cross-subdomain auth needed.
+Tokens can't be read by XSS. The auth cookie is `SameSite=Lax`. Same-origin `/api/*` means no cross-subdomain auth needed.
 
 ### Inline i18n catalogs
 
@@ -88,6 +88,8 @@ OTel tracer is always in the middleware chain. Locally it runs as a noop provide
 The backend `interview/` package is ~30 files (~2400 lines of production code, ~3200 lines of tests). The frontend interview page + state machine + hooks is another ~700 lines. These are the largest modules in the codebase.
 
 They were already split by responsibility seam over multiple passes: async runtime, turn policy, criterion helpers, AI retry, timing, snapshots, and control flow each have their own file. The core control flow was deliberately left in place each time. The state machine reducer on the frontend was similarly preserved — timeout, draft, voice, and polling each became their own hook, but the reducer stays as the lifecycle backbone.
+
+The voice composer keeps the same review/edit/submit flow, but the primary action now stops and opens transcript review in one step. Replay lives in the secondary control row instead of beside the timer.
 
 **Why not refactor further**: the interview flow is the protected area of the app. Every speculative rewrite attempt (new layers, package reshuffles, shared worker abstractions) was evaluated and rejected because the risk-to-payoff ratio was wrong. The domain is genuinely complex — multi-step branching, AI retry with degraded fallback, async processing with recovery, timeout with draft persistence, voice transcription lifecycle. The files are large because the domain is large, not because the structure is lazy.
 

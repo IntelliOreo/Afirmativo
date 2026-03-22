@@ -19,7 +19,7 @@ export function NavHeader({ lang = "es", onToggleLang }: NavHeaderProps) {
         {onToggleLang && (
           <button
             onClick={onToggleLang}
-            className="self-start text-sm text-white underline hover:no-underline bg-transparent border-0 cursor-pointer sm:self-auto"
+            className="self-start text-lg font-medium text-white underline hover:no-underline bg-transparent border-0 cursor-pointer sm:self-auto"
           >
             {lang === "es" ? "English" : "Español"}
           </button>

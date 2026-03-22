@@ -56,18 +56,13 @@ function PayPageContent() {
     setCheckoutError("");
 
     try {
-      const { ok, status, data } = await api<{ url?: string; error?: string; code?: string }>("/api/payment/checkout", {
+      const { ok, data } = await api<{ url?: string }>("/api/payment/checkout", {
         method: "POST",
         body: { lang },
       });
 
       if (ok && data?.url) {
         window.location.href = data.url;
-        return;
-      }
-
-      if (status === 501 || data?.code === "PAYMENT_NOT_IMPLEMENTED") {
-        setCheckoutError(t.cardNotAvailable);
         return;
       }
 

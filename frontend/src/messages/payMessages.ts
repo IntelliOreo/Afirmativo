@@ -12,7 +12,6 @@ type PayCopy = {
   onlinePaymentHeading: string;
   onlinePaymentBody: string;
   payByCard: string;
-  cardNotAvailable: string;
   checkoutFailed: string;
   checkoutNetworkError: string;
   pleaseWait: string;
@@ -40,7 +39,6 @@ const PAY_MESSAGES = {
     onlinePaymentHeading: "Pay online",
     onlinePaymentBody: "Secure payment by credit or debit card.",
     payByCard: "Pay by card",
-    cardNotAvailable: "Card payment is not available yet. Please use a coupon to continue.",
     checkoutFailed: "Could not start checkout. Please try again.",
     checkoutNetworkError: "Connection error while starting checkout. Please try again.",
     pleaseWait: "Please wait...",
@@ -66,7 +64,6 @@ const PAY_MESSAGES = {
     onlinePaymentHeading: "Pago en linea",
     onlinePaymentBody: "Pago seguro con tarjeta de credito o debito.",
     payByCard: "Pagar con tarjeta",
-    cardNotAvailable: "El pago con tarjeta no esta disponible aun. Use un cupon para continuar.",
     checkoutFailed: "No se pudo iniciar el pago. Intente nuevamente.",
     checkoutNetworkError: "Error de conexion al iniciar el pago. Intente nuevamente.",
     pleaseWait: "Por favor espere...",

@@ -12,7 +12,7 @@ function makeProps(overrides: Record<string, unknown> = {}) {
     answerTimerTone: "normal" as const,
     answerTimerMessage: "Use this time to review and submit your final answer.",
     voiceTimerLabel: "00:00",
-    canPreviewRecording: false,
+    canReplayRecording: false,
     isVoicePreviewPlaying: false,
     onToggleVoicePreviewPlayback: vi.fn(async () => {}),
     voiceIsRecordingActive: false,
@@ -29,8 +29,6 @@ function makeProps(overrides: Record<string, unknown> = {}) {
     canToggleRecording: true,
     onStartVoiceRecording: vi.fn(async () => {}),
     centerControlLabel: "Record",
-    canCompleteRecording: false,
-    onCompleteVoiceRecording: vi.fn(),
     canReviewTranscript: false,
     onReviewVoiceAnswer: vi.fn(async () => {}),
     canSubmitAnswer: false,
@@ -55,5 +53,48 @@ describe("VoiceRecorderPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Enable microphone" }));
 
     expect(onPrepareMicrophone).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders the answer deadline below the primary voice action", () => {
+    render(<VoiceRecorderPanel {...makeProps()} />);
+
+    const primaryButton = screen.getByRole("button", { name: "Review transcript" });
+    const timerLabel = screen.getByText("Submit this answer in");
+
+    expect(
+      primaryButton.compareDocumentPosition(timerLabel) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+  });
+
+  it("moves replay into the bottom control row and removes the timer-adjacent replay button", () => {
+    const onToggleVoicePreviewPlayback = vi.fn(async () => {});
+
+    render(<VoiceRecorderPanel
+      {...makeProps({
+        voiceRecorderState: "audio_ready",
+        voiceBlob: new Blob(["audio"]),
+        canReplayRecording: true,
+        onToggleVoicePreviewPlayback,
+      })}
+    />);
+
+    expect(screen.getByText("Replay")).toBeInTheDocument();
+    expect(screen.getByText("00:00").parentElement?.querySelector("button")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Play recorded audio" }));
+
+    expect(onToggleVoicePreviewPlayback).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows complete and review as the primary action while recording", () => {
+    render(<VoiceRecorderPanel
+      {...makeProps({
+        voiceRecorderState: "recording",
+        voiceIsRecordingActive: true,
+        canReviewTranscript: true,
+      })}
+    />);
+
+    expect(screen.getByRole("button", { name: "Complete and review" })).toBeInTheDocument();
   });
 });

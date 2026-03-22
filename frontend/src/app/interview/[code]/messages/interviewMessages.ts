@@ -87,7 +87,8 @@ type InterviewCopy = {
     transcriptPlaceholder: string;
     rerecord: string;
     discard: string;
-    complete: string;
+    replay: string;
+    completeAndReview: string;
     timeExpired: string;
     reviewTranscript: string;
     reviewingTranscript: string;
@@ -189,7 +190,8 @@ const INTERVIEW_MESSAGES = {
       transcriptPlaceholder: "Edit the transcript here...",
       rerecord: "Re-record",
       discard: "Discard",
-      complete: "Complete",
+      replay: "Replay",
+      completeAndReview: "Complete and review",
       timeExpired: "Time is up - please submit your answer now.",
       reviewTranscript: "Review transcript",
       reviewingTranscript: "Reviewing transcript...",
@@ -289,7 +291,8 @@ const INTERVIEW_MESSAGES = {
       transcriptPlaceholder: "Edite la transcripcion aqui...",
       rerecord: "Regrabar",
       discard: "Descartar",
-      complete: "Complete",
+      replay: "Reproducir",
+      completeAndReview: "Completar y revisar",
       timeExpired: "Se acabo el tiempo - por favor envie su respuesta ahora.",
       reviewTranscript: "Revisar transcripcion",
       reviewingTranscript: "Revisando transcripcion...",

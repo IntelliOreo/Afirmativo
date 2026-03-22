@@ -42,14 +42,6 @@ export function TextAnswerPanel({
 
   return (
     <Card className="mb-4">
-      <div className={`mb-4 rounded-lg border px-4 py-3 ${timerToneClass}`}>
-        <p className="text-xs font-semibold uppercase tracking-wide">
-          {t.submitWindowLabel}
-        </p>
-        <p className="mt-1 text-2xl font-bold">{answerTimerLabel}</p>
-        <p className="mt-2 text-sm leading-snug">{answerTimerMessage}</p>
-      </div>
-
       <div className="mb-4">
         <label className="block font-semibold text-primary-darkest mb-2">
           {t.finalDraft}
@@ -74,6 +66,14 @@ export function TextAnswerPanel({
       <Button fullWidth disabled={!textAnswer.trim() || isReadOnly} onClick={() => { void onSubmitAnswer(); }}>
         {t.submit}
       </Button>
+
+      <div className={`mt-4 rounded-lg border px-4 py-3 ${timerToneClass}`}>
+        <p className="text-xs font-semibold uppercase tracking-wide">
+          {t.submitWindowLabel}
+        </p>
+        <p className="mt-1 text-2xl font-bold">{answerTimerLabel}</p>
+        <p className="mt-2 text-sm leading-snug">{answerTimerMessage}</p>
+      </div>
     </Card>
   );
 }

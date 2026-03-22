@@ -231,6 +231,28 @@ describe("InterviewActiveScreen", () => {
     });
   });
 
+  it("uses the primary voice action to complete and review an active recording", async () => {
+    const reviewVoiceRecording = vi.fn(async () => "transcribed text");
+    const onTextChange = vi.fn();
+    voiceRecorderMock.mockReturnValue(makeVoiceRecorderState({
+      voiceRecorderState: "recording",
+      isRecordingActive: true,
+      reviewVoiceRecording,
+    }));
+
+    renderScreen({
+      inputMode: "voice",
+      onTextChange,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Complete and review" }));
+
+    await waitFor(() => {
+      expect(reviewVoiceRecording).toHaveBeenCalledWith("AP-TEST");
+      expect(onTextChange).toHaveBeenCalledWith("transcribed text");
+    });
+  });
+
   it("does NOT show timeout dialog for readiness questions", () => {
     renderScreen({
       currentQuestion: makeQuestion({ kind: "readiness" }),
@@ -263,5 +285,16 @@ describe("InterviewActiveScreen", () => {
     fireEvent.click(submitButtons[0]);
 
     expect(requestSubmit).toHaveBeenCalledWith("Final answer");
+  });
+
+  it("renders the answer deadline below the submit button in text mode", () => {
+    renderScreen({ textAnswer: "Final answer" });
+
+    const submitButton = screen.getByRole("button", { name: "Submit answer" });
+    const timerLabel = screen.getByText("Submit this answer in");
+
+    expect(
+      submitButton.compareDocumentPosition(timerLabel) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
   });
 });
