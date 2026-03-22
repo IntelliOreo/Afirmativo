@@ -37,6 +37,7 @@ interface UseMediaRecorderCoreResult {
   voiceBlob: Blob | null;
   voiceBlobRef: MutableRefObject<Blob | null>;
   startVoiceRecording: () => Promise<void>;
+  stopVoiceRecordingAndWaitForBlob: () => Promise<Blob | null>;
   completeVoiceRecording: () => void;
   pauseVoiceRecording: () => void;
   resumeVoiceRecording: () => void;
@@ -379,6 +380,7 @@ export function useMediaRecorderCore({
     voiceBlob,
     voiceBlobRef,
     startVoiceRecording,
+    stopVoiceRecordingAndWaitForBlob,
     completeVoiceRecording,
     pauseVoiceRecording,
     resumeVoiceRecording,

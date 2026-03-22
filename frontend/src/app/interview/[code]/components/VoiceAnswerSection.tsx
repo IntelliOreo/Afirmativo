@@ -31,7 +31,6 @@ interface VoiceAnswerSectionProps {
   onToggleVoicePreviewPlayback: () => Promise<void>;
   onDiscardVoiceRecording: () => void;
   onStartVoiceRecording: () => Promise<void>;
-  onCompleteVoiceRecording: () => void;
   onReviewVoiceAnswer: () => Promise<void>;
   onTranscriptChange: (nextValue: string) => void;
   onSubmitAnswer: () => Promise<void> | void;
@@ -64,7 +63,6 @@ export const VoiceAnswerSection = memo(function VoiceAnswerSection({
   onToggleVoicePreviewPlayback,
   onDiscardVoiceRecording,
   onStartVoiceRecording,
-  onCompleteVoiceRecording,
   onReviewVoiceAnswer,
   onTranscriptChange,
   onSubmitAnswer,
@@ -98,7 +96,7 @@ export const VoiceAnswerSection = memo(function VoiceAnswerSection({
       answerTimerTone={answerTimerTone(answerSecondsLeft)}
       answerTimerMessage={getAnswerTimerMessage(lang, answerSecondsLeft)}
       voiceTimerLabel={voiceTimerLabel}
-      canPreviewRecording={voiceCaps.canPreviewRecording}
+      canReplayRecording={voiceCaps.canReplayRecording}
       isVoicePreviewPlaying={isVoicePreviewPlaying}
       onToggleVoicePreviewPlayback={onToggleVoicePreviewPlayback}
       voiceIsRecordingActive={voiceIsRecordingActive}
@@ -115,8 +113,6 @@ export const VoiceAnswerSection = memo(function VoiceAnswerSection({
       canToggleRecording={voiceCaps.canToggleRecording}
       onStartVoiceRecording={onStartVoiceRecording}
       centerControlLabel={voiceCaps.centerControlLabel}
-      canCompleteRecording={voiceCaps.canCompleteRecording}
-      onCompleteVoiceRecording={onCompleteVoiceRecording}
       canReviewTranscript={voiceCaps.canReviewTranscript}
       onReviewVoiceAnswer={onReviewVoiceAnswer}
       canSubmitAnswer={voiceCaps.canSubmitAnswer}

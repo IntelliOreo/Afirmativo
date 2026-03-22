@@ -100,8 +100,8 @@ export function useVoiceRecorder({
     voiceRecorderState,
     setVoiceRecorderState,
     voiceBlob,
-    voiceBlobRef,
     startVoiceRecording,
+    stopVoiceRecordingAndWaitForBlob,
     completeVoiceRecording,
     discardVoiceRecording,
     cleanupRecorder,
@@ -141,7 +141,7 @@ export function useVoiceRecorder({
   const reviewVoiceRecording = useCallback(createReviewVoiceRecording({
     isActive,
     voiceRecorderState,
-    voiceBlobRef,
+    stopVoiceRecordingAndWaitForBlob,
     langRef,
     stopPlayback,
     setVoiceRecorderState,
@@ -153,7 +153,7 @@ export function useVoiceRecorder({
     resetAfterReviewFailure,
     setVoiceRecorderState,
     stopPlayback,
-    voiceBlobRef,
+    stopVoiceRecordingAndWaitForBlob,
     voiceRecorderState,
   ]);
 

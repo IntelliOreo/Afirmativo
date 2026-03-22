@@ -7,7 +7,7 @@ import type { VoiceFeedback, VoiceRecorderState } from "../viewTypes";
 interface CreateReviewVoiceRecordingDeps {
   isActive: boolean;
   voiceRecorderState: VoiceRecorderState;
-  voiceBlobRef: MutableRefObject<Blob | null>;
+  stopVoiceRecordingAndWaitForBlob: () => Promise<Blob | null>;
   langRef: MutableRefObject<Lang>;
   stopPlayback: () => void;
   setVoiceRecorderState: Dispatch<SetStateAction<VoiceRecorderState>>;
@@ -19,7 +19,7 @@ interface CreateReviewVoiceRecordingDeps {
 export function createReviewVoiceRecording({
   isActive,
   voiceRecorderState,
-  voiceBlobRef,
+  stopVoiceRecordingAndWaitForBlob,
   langRef,
   stopPlayback,
   setVoiceRecorderState,
@@ -28,9 +28,18 @@ export function createReviewVoiceRecording({
   resetAfterReviewFailure,
 }: CreateReviewVoiceRecordingDeps) {
   return async (sessionCode: string): Promise<string | null> => {
-    if (!isActive || voiceRecorderState !== "audio_ready" || !voiceBlobRef.current) return null;
+    if (!isActive) return null;
+    if (
+      voiceRecorderState !== "recording"
+      && voiceRecorderState !== "paused"
+      && voiceRecorderState !== "audio_ready"
+    ) {
+      return null;
+    }
+
     const trimmedSessionCode = sessionCode.trim();
-    const audioBlob = voiceBlobRef.current;
+    const audioBlob = await stopVoiceRecordingAndWaitForBlob();
+    if (!audioBlob) return null;
 
     log.debug("voice review requested", {
       phase: "review_start",

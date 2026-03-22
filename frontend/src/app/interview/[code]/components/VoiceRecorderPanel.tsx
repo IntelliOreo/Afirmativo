@@ -22,7 +22,7 @@ interface VoiceRecorderPanelProps {
   answerTimerTone: "normal" | "warning" | "danger";
   answerTimerMessage: string;
   voiceTimerLabel: string;
-  canPreviewRecording: boolean;
+  canReplayRecording: boolean;
   isVoicePreviewPlaying: boolean;
   onToggleVoicePreviewPlayback: () => Promise<void>;
   voiceIsRecordingActive: boolean;
@@ -39,8 +39,6 @@ interface VoiceRecorderPanelProps {
   canToggleRecording: boolean;
   onStartVoiceRecording: () => Promise<void>;
   centerControlLabel: string;
-  canCompleteRecording: boolean;
-  onCompleteVoiceRecording: () => void;
   canReviewTranscript: boolean;
   onReviewVoiceAnswer: () => Promise<void>;
   canSubmitAnswer: boolean;
@@ -59,7 +57,7 @@ export function VoiceRecorderPanel({
   answerTimerTone,
   answerTimerMessage,
   voiceTimerLabel,
-  canPreviewRecording,
+  canReplayRecording,
   isVoicePreviewPlaying,
   onToggleVoicePreviewPlayback,
   voiceIsRecordingActive,
@@ -76,8 +74,6 @@ export function VoiceRecorderPanel({
   canToggleRecording,
   onStartVoiceRecording,
   centerControlLabel,
-  canCompleteRecording,
-  onCompleteVoiceRecording,
   canReviewTranscript,
   onReviewVoiceAnswer,
   canSubmitAnswer,
@@ -107,31 +103,16 @@ export function VoiceRecorderPanel({
       ? t.reviewingTranscript
       : voiceRecorderState === "review_ready"
         ? t.submitAnswer
-        : t.reviewTranscript;
+        : voiceRecorderState === "recording" || voiceRecorderState === "paused"
+          ? t.completeAndReview
+          : t.reviewTranscript;
 
   return (
     <Card className="mb-4">
-      <div className={`mb-4 rounded-lg border px-4 py-3 ${timerToneClass}`}>
-        <p className="text-xs font-semibold uppercase tracking-wide">
-          {t.submitWindowLabel}
-        </p>
-        <p className="mt-1 text-2xl font-bold">{answerTimerLabel}</p>
-        <p className="mt-2 text-sm leading-snug">{answerTimerMessage}</p>
-      </div>
-
-      <div className="mb-4 flex items-center justify-center gap-3">
+      <div className="mb-4 flex items-center justify-center">
         <p className="text-center text-5xl font-bold tracking-wide text-primary">
           {voiceTimerLabel}
         </p>
-        <button
-          type="button"
-          className="h-9 w-9 rounded-full border border-primary text-primary text-sm font-bold disabled:opacity-40 disabled:cursor-not-allowed"
-          aria-label={t.playbackAria}
-          disabled={!canPreviewRecording}
-          onClick={() => { void onToggleVoicePreviewPlayback(); }}
-        >
-          {isVoicePreviewPlaying ? "II" : ">"}
-        </button>
       </div>
 
       <div className="mb-5 flex items-end justify-center gap-1 h-8">
@@ -263,13 +244,14 @@ export function VoiceRecorderPanel({
             type="button"
             variant="secondary"
             className="!h-14 !w-14 !rounded-full !px-0 !py-0 shadow-sm"
-            disabled={!canCompleteRecording || isTimerExpired}
-            onClick={onCompleteVoiceRecording}
+            aria-label={t.playbackAria}
+            disabled={!canReplayRecording || isTimerExpired}
+            onClick={() => { void onToggleVoicePreviewPlayback(); }}
           >
-            ✓
+            {isVoicePreviewPlaying ? "II" : ">"}
           </Button>
           <span className="text-xs font-semibold text-primary-darkest">
-            {t.complete}
+            {t.replay}
           </span>
         </div>
       </div>
@@ -292,6 +274,14 @@ export function VoiceRecorderPanel({
       >
         {primaryButtonLabel}
       </Button>
+
+      <div className={`mt-4 rounded-lg border px-4 py-3 ${timerToneClass}`}>
+        <p className="text-xs font-semibold uppercase tracking-wide">
+          {t.submitWindowLabel}
+        </p>
+        <p className="mt-1 text-2xl font-bold">{answerTimerLabel}</p>
+        <p className="mt-2 text-sm leading-snug">{answerTimerMessage}</p>
+      </div>
     </Card>
   );
 }

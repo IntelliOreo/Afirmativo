@@ -2,6 +2,7 @@ import { renderHook } from "@testing-library/react";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VOICE_CHUNK_TIMESLICE_MS } from "../constants";
+import { transcribeAudio } from "../lib/voiceTranscription";
 import { useVoiceRecorder } from "./useVoiceRecorder";
 
 const startTickerMock = vi.fn();
@@ -164,6 +165,7 @@ describe("useVoiceRecorder", () => {
     clearPreviewMock.mockReset();
     getUserMediaMock.mockReset();
     recorderStartMock.mockReset();
+    vi.mocked(transcribeAudio).mockReset();
     MockMediaRecorder.instances = [];
 
     Object.defineProperty(window, "isSecureContext", {
@@ -389,6 +391,39 @@ describe("useVoiceRecorder", () => {
 
     expect(result.current.voiceRecorderState).toBe("idle");
     expect(result.current.voiceBlob).toBeNull();
+  });
+
+  it("stops an active recording and reviews it in one action", async () => {
+    const warmed = createStream();
+    getUserMediaMock.mockResolvedValue(warmed.stream);
+    vi.mocked(transcribeAudio).mockResolvedValueOnce("transcribed text");
+
+    const { result } = renderHook(() => useVoiceRecorder({
+      lang: "en",
+      isActive: true,
+      shouldKeepMicWarm: true,
+    }));
+
+    await act(async () => {
+      await result.current.prepareMicrophone();
+      await flushMicrotasks();
+      await result.current.startVoiceRecording();
+    });
+
+    MockMediaRecorder.instances[0]?.emitData("recorded");
+
+    let transcript: string | null = null;
+    await act(async () => {
+      const reviewPromise = result.current.reviewVoiceRecording("AP-123");
+      await vi.runAllTimersAsync();
+      await flushMicrotasks();
+      transcript = await reviewPromise;
+    });
+
+    expect(transcript).toBe("transcribed text");
+    expect(stopPlaybackMock).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(transcribeAudio)).toHaveBeenCalledWith(expect.any(Blob), "en", "AP-123");
+    expect(result.current.voiceRecorderState).toBe("review_ready");
   });
 
   it("recovers a stale warm stream on focus and reuses the new stream on the next start", async () => {

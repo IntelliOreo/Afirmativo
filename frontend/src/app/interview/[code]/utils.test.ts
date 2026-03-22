@@ -47,15 +47,14 @@ describe("getVoiceCapabilities", () => {
 
     expect(caps.canSwitchModes).toBe(true);
     expect(caps.canToggleRecording).toBe(true);
-    expect(caps.canCompleteRecording).toBe(false);
+    expect(caps.canReplayRecording).toBe(false);
     expect(caps.canDiscardRecording).toBe(false);
     expect(caps.canReviewTranscript).toBe(false);
     expect(caps.canSubmitAnswer).toBe(false);
-    expect(caps.canPreviewRecording).toBe(false);
     expect(caps.centerControlLabel).toBe("Record");
   });
 
-  it("blocks mode switching while recording and allows record controls", () => {
+  it("blocks mode switching while recording and enables direct review", () => {
     const caps = getVoiceCapabilities({
       phase: "active",
       voiceRecorderState: "recording",
@@ -67,12 +66,13 @@ describe("getVoiceCapabilities", () => {
 
     expect(caps.canSwitchModes).toBe(false);
     expect(caps.canToggleRecording).toBe(true);
-    expect(caps.canCompleteRecording).toBe(true);
+    expect(caps.canReplayRecording).toBe(false);
     expect(caps.canDiscardRecording).toBe(true);
+    expect(caps.canReviewTranscript).toBe(true);
     expect(caps.centerControlLabel).toBe("Pause");
   });
 
-  it("only enables preview and send once a stopped recording is ready", () => {
+  it("enables replay and transcript review once a stopped recording is ready", () => {
     const caps = getVoiceCapabilities({
       phase: "active",
       voiceRecorderState: "audio_ready",
@@ -84,11 +84,10 @@ describe("getVoiceCapabilities", () => {
 
     expect(caps.canSwitchModes).toBe(true);
     expect(caps.canToggleRecording).toBe(false);
-    expect(caps.canCompleteRecording).toBe(false);
+    expect(caps.canReplayRecording).toBe(true);
     expect(caps.canDiscardRecording).toBe(true);
     expect(caps.canReviewTranscript).toBe(true);
     expect(caps.canSubmitAnswer).toBe(false);
-    expect(caps.canPreviewRecording).toBe(true);
     expect(caps.centerControlLabel).toBe("Record");
   });
 
@@ -104,8 +103,9 @@ describe("getVoiceCapabilities", () => {
 
     expect(caps.canSwitchModes).toBe(false);
     expect(caps.canToggleRecording).toBe(true);
-    expect(caps.canCompleteRecording).toBe(true);
+    expect(caps.canReplayRecording).toBe(false);
     expect(caps.canDiscardRecording).toBe(true);
+    expect(caps.canReviewTranscript).toBe(true);
   });
 
   it("allows starting a new recording from idle during final review window", () => {
@@ -135,11 +135,10 @@ describe("getVoiceCapabilities", () => {
 
     expect(caps.canSwitchModes).toBe(false);
     expect(caps.canToggleRecording).toBe(false);
-    expect(caps.canCompleteRecording).toBe(false);
+    expect(caps.canReplayRecording).toBe(false);
     expect(caps.canDiscardRecording).toBe(false);
     expect(caps.canReviewTranscript).toBe(false);
     expect(caps.canSubmitAnswer).toBe(false);
-    expect(caps.canPreviewRecording).toBe(false);
   });
 });
 

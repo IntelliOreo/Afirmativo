@@ -164,9 +164,14 @@ export function getVoiceCapabilities(params: {
         || voiceRecorderState === "paused"
         || voiceRecorderState === "idle"
       ),
-    canCompleteRecording:
+    canReplayRecording:
       phase === "active"
-      && isRecordingState,
+      && (
+        voiceRecorderState === "paused"
+        || voiceRecorderState === "audio_ready"
+        || voiceRecorderState === "review_ready"
+      )
+      && !!voicePreviewUrl,
     canDiscardRecording:
       phase === "active"
       && (
@@ -177,21 +182,19 @@ export function getVoiceCapabilities(params: {
       ),
     canReviewTranscript:
       phase === "active"
-      && voiceRecorderState === "audio_ready"
-      && !!voiceBlob
-      && voiceBlob.size > 0,
+      && (
+        voiceRecorderState === "recording"
+        || voiceRecorderState === "paused"
+        || (
+          voiceRecorderState === "audio_ready"
+          && !!voiceBlob
+          && voiceBlob.size > 0
+        )
+      ),
     canSubmitAnswer:
       phase === "active"
       && voiceRecorderState === "review_ready"
       && hasDraftText,
-    canPreviewRecording:
-      phase === "active"
-      && (
-        voiceRecorderState === "paused"
-        || voiceRecorderState === "audio_ready"
-        || voiceRecorderState === "review_ready"
-      )
-      && !!voicePreviewUrl,
     centerControlLabel:
       voiceRecorderState === "idle"
         ? "Record"

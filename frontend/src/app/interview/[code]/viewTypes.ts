@@ -31,11 +31,10 @@ export type MicrophoneWarmupDialogState =
 export interface VoiceCapabilities {
   canSwitchModes: boolean;
   canToggleRecording: boolean;
-  canCompleteRecording: boolean;
+  canReplayRecording: boolean;
   canDiscardRecording: boolean;
   canReviewTranscript: boolean;
   canSubmitAnswer: boolean;
-  canPreviewRecording: boolean;
   centerControlLabel: string;
 }
 
