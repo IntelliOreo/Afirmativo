@@ -126,9 +126,9 @@ function SessionPageContent() {
     return `${window.location.origin}/session/${code}`;
   }
 
-  async function handleCopyAll() {
+  function getRevealText() {
     const url = getResumeUrl();
-    const text = [
+    return [
       ...(couponReveal ? [
         `${t.couponLabel}: ${couponReveal.code}`,
         getSessionCouponUsageSummary(lang, couponReveal.currentUses, couponReveal.maxUses),
@@ -139,6 +139,10 @@ function SessionPageContent() {
       `${common.pinLabel}: ${displayPin}`,
       `${common.linkLabel}: ${url}`,
     ].join("\n");
+  }
+
+  async function handleCopyAll() {
+    const text = getRevealText();
 
     try {
       await navigator.clipboard.writeText(text);
@@ -154,6 +158,14 @@ function SessionPageContent() {
     }
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  }
+
+  function handleEmailSessionInfo() {
+    const params = new URLSearchParams({
+      subject: t.emailSubject,
+      body: getRevealText(),
+    });
+    window.location.href = `mailto:?${params.toString()}`;
   }
 
   async function handleVerifySession() {
@@ -304,13 +316,22 @@ function SessionPageContent() {
                   </div>
                 </div>
 
-                <Button
-                  fullWidth
-                  variant="secondary"
-                  onClick={handleCopyAll}
-                >
-                  {copied ? common.copied : common.copyAll}
-                </Button>
+                <div className="space-y-3">
+                  <Button
+                    fullWidth
+                    variant="secondary"
+                    onClick={handleCopyAll}
+                  >
+                    {copied ? common.copied : common.copyAll}
+                  </Button>
+                  <Button
+                    fullWidth
+                    variant="secondary"
+                    onClick={handleEmailSessionInfo}
+                  >
+                    {t.emailSessionInfo}
+                  </Button>
+                </div>
               </Card>
             </>
           )}

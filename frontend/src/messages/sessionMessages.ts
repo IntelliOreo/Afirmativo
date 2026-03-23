@@ -21,6 +21,9 @@ type SessionCopy = {
   couponLabel: string;
   sessionInfoIntro: string;
   revealWarning: string;
+  emailSessionInfo: string;
+  emailSubject: string;
+  couponUsageSummary: (currentUses: number, maxUses: number) => string;
 };
 
 const SESSION_MESSAGES = {
@@ -44,6 +47,10 @@ const SESSION_MESSAGES = {
     couponLabel: "Coupon",
     sessionInfoIntro: "Below is your current session information.",
     revealWarning: "This information will not be shown again automatically. Please copy it or save it somewhere safe before you begin.",
+    emailSessionInfo: "Email my session/coupon info",
+    emailSubject: "asilo-afirmativo: session/coupon info",
+    couponUsageSummary: (currentUses, maxUses) =>
+      `This coupon can be redeemed up to ${maxUses} times. This was redemption ${currentUses} of ${maxUses}.`,
   },
   es: {
     loading: "Cargando...",
@@ -65,6 +72,10 @@ const SESSION_MESSAGES = {
     couponLabel: "Cupon",
     sessionInfoIntro: "A continuacion esta la informacion actual de su sesion.",
     revealWarning: "Esta informacion no se volvera a mostrar automaticamente. Copiela o guardela en un lugar seguro antes de comenzar.",
+    emailSessionInfo: "Enviarme por correo la informacion de mi sesion/cupon",
+    emailSubject: "asilo-afirmativo: informacion de sesion/cupon",
+    couponUsageSummary: (currentUses, maxUses) =>
+      `Este cupon se puede canjear hasta ${maxUses} veces. Este fue el canje ${currentUses} de ${maxUses}.`,
   },
 } as const satisfies Record<Lang, SessionCopy>;
 
@@ -101,10 +112,7 @@ export function getSessionCouponUsageSummary(
   currentUses: number,
   maxUses: number,
 ): string {
-  if (lang === "es") {
-    return `Este cupon se puede canjear hasta ${maxUses} veces. Este fue el canje ${currentUses} de ${maxUses}.`;
-  }
-  return `This coupon can be redeemed up to ${maxUses} times. This was redemption ${currentUses} of ${maxUses}.`;
+  return getSessionMessages(lang).couponUsageSummary(currentUses, maxUses);
 }
 
 export { SESSION_MESSAGES };

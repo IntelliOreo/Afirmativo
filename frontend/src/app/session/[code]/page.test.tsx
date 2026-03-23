@@ -1,6 +1,6 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import SessionPage from "./page";
 
 const pushMock = vi.fn();
@@ -14,6 +14,7 @@ const checkSessionAccessMock = vi.fn();
 const writeInterviewLangMock = vi.fn();
 const setLangMock = vi.fn();
 const useLanguageMock = vi.fn();
+const originalLocation = window.location;
 
 vi.mock("next/navigation", () => ({
   useParams: () => useParamsMock(),
@@ -46,6 +47,7 @@ describe("SessionPage", () => {
   beforeEach(() => {
     pushMock.mockReset();
     replaceMock.mockReset();
+    useSearchParamsMock.mockReset();
     readAndConsumePinMock.mockReset();
     readAndConsumeCouponRevealMock.mockReset();
     verifySessionMock.mockReset();
@@ -53,12 +55,34 @@ describe("SessionPage", () => {
     writeInterviewLangMock.mockReset();
     setLangMock.mockReset();
     useLanguageMock.mockReset();
+    useSearchParamsMock.mockReturnValue({ get: () => "en" });
     useLanguageMock.mockReturnValue({
       lang: "en",
       setLang: setLangMock,
       initialized: true,
     });
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { href: "http://localhost/session/AP-123", origin: "http://localhost" } as Location,
+    });
   });
+
+  afterAll(() => {
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: originalLocation,
+    });
+  });
+
+  function parseMailtoHref(href: string) {
+    const [scheme, query = ""] = href.split("?");
+    expect(scheme).toBe("mailto:");
+    const params = new URLSearchParams(query);
+    return {
+      subject: params.get("subject"),
+      body: params.get("body"),
+    };
+  }
 
   it("shows the ready state when a stored PIN verifies a not-started session", async () => {
     readAndConsumePinMock.mockReturnValue("482917");
@@ -80,6 +104,64 @@ describe("SessionPage", () => {
     expect(screen.getByText("Below is your current session information.")).toBeInTheDocument();
     expect(screen.getByText("482917")).toBeInTheDocument();
     expect(replaceMock).not.toHaveBeenCalled();
+  });
+
+  it("opens a mailto link with the full reveal payload in English", async () => {
+    readAndConsumePinMock.mockReturnValue("482917");
+    readAndConsumeCouponRevealMock.mockReturnValue({
+      code: "BETA-0001",
+      maxUses: 5,
+      currentUses: 2,
+    });
+    verifySessionMock.mockResolvedValue({ ok: true });
+
+    render(<SessionPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Email my session/coupon info" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Email my session/coupon info" }));
+
+    const mailto = parseMailtoHref(window.location.href);
+    expect(mailto.subject).toBe("asilo-afirmativo: session/coupon info");
+    expect(mailto.body).toBe([
+      "Coupon: BETA-0001",
+      "This coupon can be redeemed up to 5 times. This was redemption 2 of 5.",
+      "",
+      "Below is your current session information.",
+      "Session code: AP-123",
+      "PIN: 482917",
+      "Link: http://localhost/session/AP-123",
+    ].join("\n"));
+  });
+
+  it("opens a localized mailto link in Spanish", async () => {
+    useSearchParamsMock.mockReturnValue({ get: () => "es" });
+    useLanguageMock.mockReturnValue({
+      lang: "es",
+      setLang: setLangMock,
+      initialized: true,
+    });
+    readAndConsumePinMock.mockReturnValue("482917");
+    readAndConsumeCouponRevealMock.mockReturnValue(null);
+    verifySessionMock.mockResolvedValue({ ok: true });
+
+    render(<SessionPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Enviarme por correo la informacion de mi sesion/cupon" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Enviarme por correo la informacion de mi sesion/cupon" }));
+
+    const mailto = parseMailtoHref(window.location.href);
+    expect(mailto.subject).toBe("asilo-afirmativo: informacion de sesion/cupon");
+    expect(mailto.body).toBe([
+      "Codigo de sesion: AP-123",
+      "PIN: 482917",
+      "Enlace: http://localhost/session/AP-123",
+    ].join("\n"));
   });
 
   it("goes straight to the interview when a valid cookie is already present", async () => {

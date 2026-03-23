@@ -65,6 +65,7 @@ Both the Stripe webhook and the browser poll can provision a session. `FOR UPDAT
 
 The frontend session handoff bootstrap waits for language initialization and runs once per session page load. This keeps the one-time PIN handoff resilient to client rerenders while preserving immediate PIN consumption from browser storage.
 Coupon redemptions reuse that same one-time handoff: `/api/coupon/validate` now returns coupon code plus redemption counts, and `/session/[code]` shows that summary only when the handoff came from coupon redemption.
+That same ready state now offers both `Copy all` and a user-controlled `mailto:` handoff, with the email body reusing the exact same session/coupon reveal text.
 
 **Trade-off**: row-level locks under contention. A single payment rarely has concurrent mutations.
 
