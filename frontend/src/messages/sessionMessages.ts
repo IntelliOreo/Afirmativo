@@ -18,6 +18,9 @@ type SessionCopy = {
   rateLimited: string;
   serverError: string;
   unknownError: string;
+  couponLabel: string;
+  sessionInfoIntro: string;
+  revealWarning: string;
 };
 
 const SESSION_MESSAGES = {
@@ -38,6 +41,9 @@ const SESSION_MESSAGES = {
     rateLimited: "Too many attempts. Please wait and try again.",
     serverError: "Could not verify the session right now. Please try again.",
     unknownError: "Could not verify the session. Please try again.",
+    couponLabel: "Coupon",
+    sessionInfoIntro: "Below is your current session information.",
+    revealWarning: "This information will not be shown again automatically. Please copy it or save it somewhere safe before you begin.",
   },
   es: {
     loading: "Cargando...",
@@ -56,6 +62,9 @@ const SESSION_MESSAGES = {
     rateLimited: "Demasiados intentos. Espere un momento e intente otra vez.",
     serverError: "No se pudo verificar la sesion en este momento. Intente de nuevo.",
     unknownError: "No se pudo verificar la sesion. Intente de nuevo.",
+    couponLabel: "Cupon",
+    sessionInfoIntro: "A continuacion esta la informacion actual de su sesion.",
+    revealWarning: "Esta informacion no se volvera a mostrar automaticamente. Copiela o guardela en un lugar seguro antes de comenzar.",
   },
 } as const satisfies Record<Lang, SessionCopy>;
 
@@ -85,6 +94,17 @@ export function getSessionVerifyErrorMessage(
     default:
       return copy.unknownError;
   }
+}
+
+export function getSessionCouponUsageSummary(
+  lang: Lang,
+  currentUses: number,
+  maxUses: number,
+): string {
+  if (lang === "es") {
+    return `Este cupon se puede canjear hasta ${maxUses} veces. Este fue el canje ${currentUses} de ${maxUses}.`;
+  }
+  return `This coupon can be redeemed up to ${maxUses} times. This was redemption ${currentUses} of ${maxUses}.`;
 }
 
 export { SESSION_MESSAGES };

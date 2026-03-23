@@ -48,6 +48,7 @@ func NewService(deps Deps, settings Settings) *Service {
 type ValidateCouponResult struct {
 	SessionCode string
 	PIN         string // plaintext — returned once, never stored
+	Coupon      Coupon
 }
 
 // ValidateCoupon claims a coupon and creates a session atomically.
@@ -71,7 +72,7 @@ func (s *Service) ValidateCoupon(ctx context.Context, couponCode string) (*Valid
 	expiresAt := s.nowFn().Add(time.Duration(s.settings.ExpiryHours) * time.Hour)
 
 	dbCtx, cancel := context.WithTimeout(ctx, s.dbTimeout)
-	_, err = s.store.ClaimCouponAndCreateSession(
+	claimResult, err := s.store.ClaimCouponAndCreateSession(
 		dbCtx,
 		couponCode,
 		sessionCode,
@@ -90,8 +91,9 @@ func (s *Service) ValidateCoupon(ctx context.Context, couponCode string) (*Valid
 	)
 
 	return &ValidateCouponResult{
-		SessionCode: sessionCode,
+		SessionCode: claimResult.Session.SessionCode,
 		PIN:         pin,
+		Coupon:      claimResult.Coupon,
 	}, nil
 }
 

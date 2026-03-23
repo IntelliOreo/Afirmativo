@@ -15,11 +15,11 @@ import (
 )
 
 type fakeStore struct {
-	claimCouponAndCreateSessionFn func(ctx context.Context, couponCode, sessionCode, pinHash string, expiresAt time.Time, interviewBudgetSeconds int) (*Session, error)
+	claimCouponAndCreateSessionFn func(ctx context.Context, couponCode, sessionCode, pinHash string, expiresAt time.Time, interviewBudgetSeconds int) (*CouponClaimSessionResult, error)
 	getSessionByCodeFn            func(ctx context.Context, sessionCode string) (*Session, error)
 }
 
-func (f *fakeStore) ClaimCouponAndCreateSession(ctx context.Context, couponCode, sessionCode, pinHash string, expiresAt time.Time, interviewBudgetSeconds int) (*Session, error) {
+func (f *fakeStore) ClaimCouponAndCreateSession(ctx context.Context, couponCode, sessionCode, pinHash string, expiresAt time.Time, interviewBudgetSeconds int) (*CouponClaimSessionResult, error) {
 	if f.claimCouponAndCreateSessionFn != nil {
 		return f.claimCouponAndCreateSessionFn(ctx, couponCode, sessionCode, pinHash, expiresAt, interviewBudgetSeconds)
 	}
@@ -106,7 +106,7 @@ func TestHandleValidateCoupon_MapsCouponInvalid(t *testing.T) {
 	t.Parallel()
 
 	h := newHandlerForTest(t, &fakeStore{
-		claimCouponAndCreateSessionFn: func(context.Context, string, string, string, time.Time, int) (*Session, error) {
+		claimCouponAndCreateSessionFn: func(context.Context, string, string, string, time.Time, int) (*CouponClaimSessionResult, error) {
 			return nil, shared.ErrCouponInvalid
 		},
 	})
@@ -141,9 +141,16 @@ func TestServiceValidateCoupon_UsesDBDeadline(t *testing.T) {
 	const dbTimeout = 2 * time.Second
 	svc := NewService(Deps{
 		Store: &fakeStore{
-			claimCouponAndCreateSessionFn: func(ctx context.Context, _ string, sessionCode, _ string, _ time.Time, _ int) (*Session, error) {
+			claimCouponAndCreateSessionFn: func(ctx context.Context, _ string, sessionCode, _ string, _ time.Time, _ int) (*CouponClaimSessionResult, error) {
 				assertContextDeadlineWithin(t, ctx, dbTimeout)
-				return &Session{SessionCode: sessionCode}, nil
+				return &CouponClaimSessionResult{
+					Session: &Session{SessionCode: sessionCode},
+					Coupon: Coupon{
+						Code:        "BETA-0001",
+						MaxUses:     5,
+						CurrentUses: 2,
+					},
+				}, nil
 			},
 		},
 	}, Settings{
@@ -193,12 +200,19 @@ func TestHandleValidateCoupon_SuccessContract(t *testing.T) {
 	start := time.Now()
 
 	h := newHandlerForTest(t, &fakeStore{
-		claimCouponAndCreateSessionFn: func(_ context.Context, _ string, sessionCode, pinHash string, expiresAt time.Time, interviewBudgetSeconds int) (*Session, error) {
+		claimCouponAndCreateSessionFn: func(_ context.Context, _ string, sessionCode, pinHash string, expiresAt time.Time, interviewBudgetSeconds int) (*CouponClaimSessionResult, error) {
 			capturedSessionCode = sessionCode
 			capturedPinHash = pinHash
 			capturedExpiry = expiresAt
 			capturedInterviewBudgetSeconds = interviewBudgetSeconds
-			return &Session{SessionCode: sessionCode}, nil
+			return &CouponClaimSessionResult{
+				Session: &Session{SessionCode: sessionCode},
+				Coupon: Coupon{
+					Code:        "BETA-0001",
+					MaxUses:     5,
+					CurrentUses: 2,
+				},
+			}, nil
 		},
 	})
 
@@ -214,6 +228,11 @@ func TestHandleValidateCoupon_SuccessContract(t *testing.T) {
 		Valid       bool   `json:"valid"`
 		SessionCode string `json:"session_code"`
 		PIN         string `json:"pin"`
+		Coupon      struct {
+			Code        string `json:"code"`
+			MaxUses     int    `json:"max_uses"`
+			CurrentUses int    `json:"current_uses"`
+		} `json:"coupon"`
 	}
 	decodeJSONBody(t, rr, &got)
 
@@ -233,6 +252,9 @@ func TestHandleValidateCoupon_SuccessContract(t *testing.T) {
 	}
 	if capturedPinHash == got.PIN {
 		t.Fatalf("store pin hash should not equal plaintext pin")
+	}
+	if got.Coupon.Code != "BETA-0001" || got.Coupon.MaxUses != 5 || got.Coupon.CurrentUses != 2 {
+		t.Fatalf("coupon = %+v, want code/max_uses/current_uses set", got.Coupon)
 	}
 	if capturedInterviewBudgetSeconds != 2400 {
 		t.Fatalf("interviewBudgetSeconds = %d, want 2400", capturedInterviewBudgetSeconds)

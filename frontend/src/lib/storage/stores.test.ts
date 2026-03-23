@@ -8,7 +8,12 @@ import {
   writeUiLang,
 } from "./languageStore";
 import { read as readPendingAnswer, write as writePendingAnswer } from "./pendingAnswerStore";
-import { readAndConsumePin, writePin } from "./sessionPinStore";
+import {
+  readAndConsumeCouponReveal,
+  readAndConsumePin,
+  writeCouponReveal,
+  writePin,
+} from "./sessionPinStore";
 import {
   toClientRequestId,
   toJobId,
@@ -21,6 +26,7 @@ function quotaExceededError(): DOMException {
 
 beforeEach(() => {
   window.localStorage.clear();
+  window.sessionStorage.clear();
 });
 
 afterEach(() => {
@@ -43,6 +49,28 @@ describe("sessionPinStore", () => {
 
     expect(readAndConsumePin("AP-123")).toBe("1234");
     expect(readAndConsumePin("AP-123")).toBeNull();
+  });
+
+  it("reads and consumes stored coupon reveal data", () => {
+    writeCouponReveal("AP-123", {
+      code: "BETA-0001",
+      maxUses: 5,
+      currentUses: 2,
+    });
+
+    expect(readAndConsumeCouponReveal("AP-123")).toEqual({
+      code: "BETA-0001",
+      maxUses: 5,
+      currentUses: 2,
+    });
+    expect(readAndConsumeCouponReveal("AP-123")).toBeNull();
+  });
+
+  it("clears malformed stored coupon reveal data", () => {
+    window.sessionStorage.setItem("coupon_AP-123", "{not-json");
+
+    expect(readAndConsumeCouponReveal("AP-123")).toBeNull();
+    expect(window.sessionStorage.getItem("coupon_AP-123")).toBeNull();
   });
 });
 

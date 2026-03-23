@@ -28,7 +28,7 @@ func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
 // ClaimCouponAndCreateSession runs ClaimCoupon + CreateSession in a single
 // database transaction. If the coupon is invalid or exhausted, the TX is
 // rolled back and ErrCouponInvalid is returned.
-func (s *PostgresStore) ClaimCouponAndCreateSession(ctx context.Context, couponCode, sessionCode, pinHash string, expiresAt time.Time, interviewBudgetSeconds int) (*Session, error) {
+func (s *PostgresStore) ClaimCouponAndCreateSession(ctx context.Context, couponCode, sessionCode, pinHash string, expiresAt time.Time, interviewBudgetSeconds int) (*CouponClaimSessionResult, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
@@ -38,7 +38,7 @@ func (s *PostgresStore) ClaimCouponAndCreateSession(ctx context.Context, couponC
 	q := sqlgen.New(tx)
 
 	// Atomically claim the coupon (UPDATE ... WHERE current_uses < max_uses).
-	_, err = q.ClaimCoupon(ctx, couponCode)
+	claimedCoupon, err := q.ClaimCoupon(ctx, couponCode)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, shared.ErrCouponInvalid
@@ -62,7 +62,10 @@ func (s *PostgresStore) ClaimCouponAndCreateSession(ctx context.Context, couponC
 		return nil, fmt.Errorf("commit tx: %w", err)
 	}
 
-	return sessionFromRow(row), nil
+	return &CouponClaimSessionResult{
+		Session: sessionFromRow(row),
+		Coupon:  couponFromRow(claimedCoupon),
+	}, nil
 }
 
 // GetSessionByCode retrieves a session by its code.
@@ -145,4 +148,18 @@ func sessionFromRow(row sqlgen.Session) *Session {
 		s.CouponCode = row.CouponCode.String
 	}
 	return s
+}
+
+func couponFromRow(row sqlgen.Coupon) Coupon {
+	c := Coupon{
+		Code:        row.Code,
+		MaxUses:     int(row.MaxUses),
+		CurrentUses: int(row.CurrentUses),
+		DiscountPct: int(row.DiscountPct),
+	}
+	if row.ExpiresAt.Valid {
+		t := row.ExpiresAt.Time
+		c.ExpiresAt = &t
+	}
+	return c
 }

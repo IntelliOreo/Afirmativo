@@ -8,8 +8,8 @@ interface NavHeaderProps {
 export function NavHeader({ lang = "es", onToggleLang }: NavHeaderProps) {
   return (
     <header className="bg-primary-dark text-white">
-      <div className="max-w-5xl mx-auto px-4 py-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <Link href="/" className="text-white no-underline hover:underline min-w-0">
+      <div className="max-w-5xl mx-auto px-4 py-3 flex items-start justify-between gap-3 sm:items-center">
+        <Link href="/" className="flex-1 min-w-0 text-white no-underline hover:underline">
           <span className="block font-bold text-base leading-tight break-words sm:text-lg">
             {lang === "es"
               ? "Simulador de Entrevista Afirmativa"
@@ -19,7 +19,7 @@ export function NavHeader({ lang = "es", onToggleLang }: NavHeaderProps) {
         {onToggleLang && (
           <button
             onClick={onToggleLang}
-            className="self-start text-lg font-medium text-white underline hover:no-underline bg-transparent border-0 cursor-pointer sm:self-auto"
+            className="shrink-0 self-start text-lg font-medium text-white underline hover:no-underline bg-transparent border-0 cursor-pointer sm:self-auto"
           >
             {lang === "es" ? "English" : "Español"}
           </button>

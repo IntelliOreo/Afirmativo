@@ -8,6 +8,7 @@ const replaceMock = vi.fn();
 const useParamsMock = vi.fn(() => ({ code: "AP-123" }));
 const useSearchParamsMock = vi.fn(() => ({ get: () => "en" }));
 const readAndConsumePinMock = vi.fn();
+const readAndConsumeCouponRevealMock = vi.fn();
 const verifySessionMock = vi.fn();
 const checkSessionAccessMock = vi.fn();
 const writeInterviewLangMock = vi.fn();
@@ -25,6 +26,7 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/lib/storage/sessionPinStore", () => ({
   readAndConsumePin: (...args: unknown[]) => readAndConsumePinMock(...args),
+  readAndConsumeCouponReveal: (...args: unknown[]) => readAndConsumeCouponRevealMock(...args),
 }));
 
 vi.mock("@/lib/storage/languageStore", () => ({
@@ -45,6 +47,7 @@ describe("SessionPage", () => {
     pushMock.mockReset();
     replaceMock.mockReset();
     readAndConsumePinMock.mockReset();
+    readAndConsumeCouponRevealMock.mockReset();
     verifySessionMock.mockReset();
     checkSessionAccessMock.mockReset();
     writeInterviewLangMock.mockReset();
@@ -59,6 +62,11 @@ describe("SessionPage", () => {
 
   it("shows the ready state when a stored PIN verifies a not-started session", async () => {
     readAndConsumePinMock.mockReturnValue("482917");
+    readAndConsumeCouponRevealMock.mockReturnValue({
+      code: "BETA-0001",
+      maxUses: 5,
+      currentUses: 2,
+    });
     verifySessionMock.mockResolvedValue({ ok: true });
 
     render(<SessionPage />);
@@ -66,6 +74,10 @@ describe("SessionPage", () => {
     await waitFor(() => {
       expect(screen.getByText("Your session is ready")).toBeInTheDocument();
     });
+    expect(screen.getByText("This information will not be shown again automatically. Please copy it or save it somewhere safe before you begin.")).toBeInTheDocument();
+    expect(screen.getByText("BETA-0001")).toBeInTheDocument();
+    expect(screen.getByText("This coupon can be redeemed up to 5 times. This was redemption 2 of 5.")).toBeInTheDocument();
+    expect(screen.getByText("Below is your current session information.")).toBeInTheDocument();
     expect(screen.getByText("482917")).toBeInTheDocument();
     expect(replaceMock).not.toHaveBeenCalled();
   });
@@ -79,6 +91,7 @@ describe("SessionPage", () => {
     await waitFor(() => {
       expect(replaceMock).toHaveBeenCalledWith("/interview/AP-123?lang=en");
     });
+    expect(readAndConsumeCouponRevealMock).not.toHaveBeenCalled();
     expect(screen.queryByText("Resume session")).not.toBeInTheDocument();
   });
 
@@ -91,10 +104,12 @@ describe("SessionPage", () => {
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Resume session" })).toBeInTheDocument();
     });
+    expect(readAndConsumeCouponRevealMock).not.toHaveBeenCalled();
   });
 
   it("consumes the handoff PIN only once across rerenders", async () => {
     readAndConsumePinMock.mockReturnValue("482917");
+    readAndConsumeCouponRevealMock.mockReturnValue(null);
     verifySessionMock.mockReturnValue(new Promise(() => {}));
 
     const { rerender, unmount } = render(<SessionPage />);
@@ -102,6 +117,7 @@ describe("SessionPage", () => {
 
     await waitFor(() => {
       expect(readAndConsumePinMock).toHaveBeenCalledTimes(1);
+      expect(readAndConsumeCouponRevealMock).toHaveBeenCalledTimes(0);
       expect(verifySessionMock).toHaveBeenCalledTimes(1);
     });
     expect(checkSessionAccessMock).not.toHaveBeenCalled();
@@ -130,6 +146,7 @@ describe("SessionPage", () => {
       initialized: false,
     });
     readAndConsumePinMock.mockReturnValue("482917");
+    readAndConsumeCouponRevealMock.mockReturnValue(null);
     verifySessionMock.mockResolvedValue({ ok: true });
 
     const { rerender } = render(<SessionPage />);

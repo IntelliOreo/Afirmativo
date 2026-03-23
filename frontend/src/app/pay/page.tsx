@@ -10,10 +10,21 @@ import { Input } from "@components/Input";
 import { Alert } from "@components/Alert";
 import { api } from "@/lib/api";
 import { withLang } from "@/lib/language";
-import { writePin } from "@/lib/storage/sessionPinStore";
+import { writeCouponReveal, writePin } from "@/lib/storage/sessionPinStore";
 import { useLanguage } from "@/lib/useLanguage";
 import { getCommonMessages } from "@/messages/commonMessages";
 import { getPayMessages } from "@/messages/payMessages";
+
+type CouponValidateResponse = {
+  valid?: boolean;
+  session_code?: string;
+  pin?: string;
+  coupon?: {
+    code?: string;
+    max_uses?: number;
+    current_uses?: number;
+  };
+};
 
 function PayPageContent() {
   const router = useRouter();
@@ -33,13 +44,24 @@ function PayPageContent() {
     setLoading(true);
     setCouponError("");
     try {
-      const { ok, data } = await api<{ valid?: boolean; session_code?: string; pin?: string }>("/api/coupon/validate", {
+      const { ok, data } = await api<CouponValidateResponse>("/api/coupon/validate", {
         method: "POST",
         body: { code: coupon.trim() },
       });
 
       if (ok && data?.valid && data.session_code) {
         writePin(data.session_code, data.pin ?? "");
+        if (
+          data.coupon?.code &&
+          typeof data.coupon.max_uses === "number" &&
+          typeof data.coupon.current_uses === "number"
+        ) {
+          writeCouponReveal(data.session_code, {
+            code: data.coupon.code,
+            maxUses: data.coupon.max_uses,
+            currentUses: data.coupon.current_uses,
+          });
+        }
         router.push(withLang(`/session/${data.session_code}`, lang));
       } else {
         setCouponError(t.couponInvalid);

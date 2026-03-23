@@ -12,10 +12,17 @@ vi.mock("next/link", () => ({
 }));
 
 describe("NavHeader", () => {
-  it("renders the shared language toggle with the larger text size", () => {
+  it("keeps the shared language toggle pinned on the right without collapsing its width", () => {
     render(<NavHeader lang="es" onToggleLang={vi.fn()} />);
 
+    const wrapper = screen.getByRole("banner").firstElementChild;
     const toggle = screen.getByRole("button", { name: "English" });
+    const titleLink = screen.getByRole("link", { name: "Simulador de Entrevista Afirmativa" });
+
+    expect(wrapper).toHaveClass("justify-between");
+    expect(wrapper).not.toHaveClass("flex-col");
+    expect(titleLink).toHaveClass("flex-1");
+    expect(toggle).toHaveClass("shrink-0");
     expect(toggle).toHaveClass("text-lg");
     expect(toggle).toHaveClass("font-medium");
     expect(toggle).not.toHaveClass("text-base");

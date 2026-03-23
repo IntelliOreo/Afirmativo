@@ -48,9 +48,16 @@ type validateRequest struct {
 
 // validateResponse is the success response for POST /api/coupon/validate.
 type validateResponse struct {
-	Valid       bool   `json:"valid"`
-	SessionCode string `json:"session_code"`
-	PIN         string `json:"pin"`
+	Valid       bool       `json:"valid"`
+	SessionCode string     `json:"session_code"`
+	PIN         string     `json:"pin"`
+	Coupon      couponView `json:"coupon"`
+}
+
+type couponView struct {
+	Code        string `json:"code"`
+	MaxUses     int    `json:"max_uses"`
+	CurrentUses int    `json:"current_uses"`
 }
 
 // validateErrorResponse is the error response for POST /api/coupon/validate.
@@ -94,6 +101,11 @@ func (h *Handler) HandleValidateCoupon(w http.ResponseWriter, r *http.Request) {
 		Valid:       true,
 		SessionCode: result.SessionCode,
 		PIN:         result.PIN,
+		Coupon: couponView{
+			Code:        result.Coupon.Code,
+			MaxUses:     result.Coupon.MaxUses,
+			CurrentUses: result.Coupon.CurrentUses,
+		},
 	})
 }
 

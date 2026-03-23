@@ -64,6 +64,13 @@ type Coupon struct {
 	ExpiresAt   *time.Time
 }
 
+// CouponClaimSessionResult is the atomic result of claiming a coupon and
+// creating a session in the same transaction.
+type CouponClaimSessionResult struct {
+	Session *Session
+	Coupon  Coupon
+}
+
 const codeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // no I/O/0/1 to avoid confusion
 
 // GenerateSessionCode produces a session code in the format AP-XXXX-XXXX.

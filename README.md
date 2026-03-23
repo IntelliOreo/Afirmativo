@@ -53,11 +53,18 @@ Zero-dependency Stripe integration: form-encoded POST for hosted checkout, HMAC-
 
 **Trade-off**: we own signature verification code and any Stripe API drift. Acceptable for one endpoint.
 
+### Install metadata is truthful but intentionally minimal
+
+The frontend serves a real app manifest and generated app icons so browsers are not pointed at missing install assets.
+
+**Trade-off**: this is install metadata only. There is still no service worker, offline cache, or special install flow. The app behaves like a normal networked web app after installation.
+
 ### Payment state machine with pessimistic locking
 
 Both the Stripe webhook and the browser poll can provision a session. `FOR UPDATE` in a Postgres transaction prevents double-provisioning. The reveal PIN has a 10-minute TTL and is consumed on first read — prevents replay from stolen poll responses.
 
 The frontend session handoff bootstrap waits for language initialization and runs once per session page load. This keeps the one-time PIN handoff resilient to client rerenders while preserving immediate PIN consumption from browser storage.
+Coupon redemptions reuse that same one-time handoff: `/api/coupon/validate` now returns coupon code plus redemption counts, and `/session/[code]` shows that summary only when the handoff came from coupon redemption.
 
 **Trade-off**: row-level locks under contention. A single payment rarely has concurrent mutations.
 
@@ -100,6 +107,7 @@ The voice composer keeps the same review/edit/submit flow, but the primary actio
 - `GET /api/report/{code}/pdf` returns `501`
 - Distributed rate limiting (needs Redis)
 - Languages beyond en/es
+- Offline/PWA support beyond install metadata
 
 ## If We Need Multiple Instances Later
 

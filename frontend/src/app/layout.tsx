@@ -12,7 +12,6 @@ const sourceSans = Source_Sans_3({
 export const metadata: Metadata = {
   title: "Affirmative Interview Simulator | Simulador de Entrevista Afirmativa",
   description: "",
-  manifest: "/manifest.json",
 };
 
 export const viewport: Viewport = {

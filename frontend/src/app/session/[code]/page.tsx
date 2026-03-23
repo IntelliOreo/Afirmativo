@@ -8,11 +8,15 @@ import { Button } from "@components/Button";
 import { Card } from "@components/Card";
 import { Input } from "@components/Input";
 import { writeInterviewLang } from "@/lib/storage/languageStore";
-import { readAndConsumePin } from "@/lib/storage/sessionPinStore";
+import { type CouponReveal, readAndConsumeCouponReveal, readAndConsumePin } from "@/lib/storage/sessionPinStore";
 import { checkSessionAccess, verifySession } from "@/lib/sessionService";
 import { useLanguage } from "@/lib/useLanguage";
 import { getCommonMessages } from "@/messages/commonMessages";
-import { getSessionMessages, getSessionVerifyErrorMessage } from "@/messages/sessionMessages";
+import {
+  getSessionCouponUsageSummary,
+  getSessionMessages,
+  getSessionVerifyErrorMessage,
+} from "@/messages/sessionMessages";
 
 type View = "loading" | "ready" | "verification";
 
@@ -29,6 +33,7 @@ function SessionPageContent() {
   const [view, setView] = useState<View>("loading");
   const [pin, setPin] = useState("");
   const [displayPin, setDisplayPin] = useState("");
+  const [couponReveal, setCouponReveal] = useState<CouponReveal | null>(null);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -72,6 +77,7 @@ function SessionPageContent() {
         }
         if (result.ok) {
           setDisplayPin(storedPin);
+          setCouponReveal(readAndConsumeCouponReveal(code));
           if (result.interviewStartedAt) {
             goToInterview(lang, true);
             return;
@@ -123,6 +129,12 @@ function SessionPageContent() {
   async function handleCopyAll() {
     const url = getResumeUrl();
     const text = [
+      ...(couponReveal ? [
+        `${t.couponLabel}: ${couponReveal.code}`,
+        getSessionCouponUsageSummary(lang, couponReveal.currentUses, couponReveal.maxUses),
+        "",
+        t.sessionInfoIntro,
+      ] : []),
       `${common.sessionCodeLabel}: ${code}`,
       `${common.pinLabel}: ${displayPin}`,
       `${common.linkLabel}: ${url}`,
@@ -156,6 +168,7 @@ function SessionPageContent() {
         return;
       }
       setDisplayPin(pin.trim());
+      setCouponReveal(readAndConsumeCouponReveal(code));
       setPin("");
       setView("ready");
     } else {
@@ -231,6 +244,10 @@ function SessionPageContent() {
                 {t.readyBody}
               </p>
 
+              <p className="mb-6 rounded border border-danger/20 bg-danger-lightest px-3 py-3 text-sm font-semibold text-danger-dark">
+                {t.revealWarning}
+              </p>
+
               <Button fullWidth className="mb-8" onClick={() => goToInterview(lang)}>
                 {t.beginInterview}
               </Button>
@@ -241,6 +258,26 @@ function SessionPageContent() {
                 </p>
 
                 <div className="space-y-3 mb-4">
+                  {couponReveal && (
+                    <div className="bg-base-lightest rounded px-3 py-2">
+                      <div className="flex flex-col items-start gap-1 sm:flex-row sm:items-center sm:justify-between">
+                        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                          {t.couponLabel}
+                        </span>
+                        <span className="font-bold text-primary-dark tracking-wide break-all w-full text-left sm:w-auto sm:text-right">
+                          {couponReveal.code}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-sm text-primary-darkest">
+                        {getSessionCouponUsageSummary(lang, couponReveal.currentUses, couponReveal.maxUses)}
+                      </p>
+                    </div>
+                  )}
+                  {couponReveal && (
+                    <p className="pt-2 text-sm text-gray-600">
+                      {t.sessionInfoIntro}
+                    </p>
+                  )}
                   <div className="flex flex-col items-start gap-1 bg-base-lightest rounded px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
                     <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
                       {common.sessionCodeLabel}
