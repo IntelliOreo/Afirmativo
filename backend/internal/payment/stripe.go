@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -111,8 +112,18 @@ func (c *StripeClient) CreateCheckoutSession(ctx context.Context, params CreateC
 	req.Header.Set("Authorization", "Bearer "+c.secretKey)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
+	slog.Info("stripe checkout session request",
+		"url", c.baseURL+"/v1/checkout/sessions",
+		"client_reference_id", params.ClientReferenceID,
+		"amount_cents", params.AmountCents,
+		"currency", params.Currency,
+	)
+
 	res, err := c.httpClient.Do(req)
 	if err != nil {
+		slog.Error("stripe checkout session http failed",
+			"error", err,
+		)
 		return nil, fmt.Errorf("send stripe checkout request: %w", err)
 	}
 	defer res.Body.Close()
@@ -122,6 +133,10 @@ func (c *StripeClient) CreateCheckoutSession(ctx context.Context, params CreateC
 		return nil, fmt.Errorf("read stripe checkout response: %w", err)
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		slog.Error("stripe checkout session api error",
+			"status", res.StatusCode,
+			"body", strings.TrimSpace(string(body)),
+		)
 		return nil, fmt.Errorf("stripe checkout create failed: status=%d body=%s", res.StatusCode, strings.TrimSpace(string(body)))
 	}
 
@@ -135,6 +150,10 @@ func (c *StripeClient) CreateCheckoutSession(ctx context.Context, params CreateC
 	if strings.TrimSpace(response.ID) == "" || strings.TrimSpace(response.URL) == "" {
 		return nil, fmt.Errorf("stripe checkout response missing id or url")
 	}
+
+	slog.Info("stripe checkout session created",
+		"checkout_session_id", response.ID,
+	)
 
 	return &CreatedCheckoutSession{
 		ID:  response.ID,

@@ -45,9 +45,19 @@ func NewHandler(svc *Service) *Handler {
 func (h *Handler) HandleCheckout(w http.ResponseWriter, r *http.Request) {
 	var req checkoutRequest
 	if err := shared.DecodeJSON(r, &req, maxJSONBody); err != nil {
+		slog.Warn("payment checkout decode failed",
+			"request_id", shared.RequestIDFromContext(r.Context()),
+			"error", err,
+		)
 		shared.WriteError(w, shared.ErrBadRequest, "Invalid request body", "BAD_REQUEST")
 		return
 	}
+
+	slog.Info("payment checkout request received",
+		"request_id", shared.RequestIDFromContext(r.Context()),
+		"lang", strings.TrimSpace(req.Lang),
+		"product", strings.TrimSpace(req.Product),
+	)
 
 	checkout, err := h.svc.CreateCheckout(r.Context(), req.Lang, req.Product)
 	if err != nil {
@@ -86,9 +96,17 @@ func (h *Handler) HandleWebhook(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.svc.HandleWebhook(r.Context(), payload, r.Header.Get("Stripe-Signature")); err != nil {
 		if errors.Is(err, ErrInvalidStripeSignature) {
+			slog.Warn("payment webhook invalid signature",
+				"request_id", shared.RequestIDFromContext(r.Context()),
+				"error", err,
+			)
 			shared.WriteErrorStatus(w, http.StatusBadRequest, "Invalid Stripe signature", "INVALID_STRIPE_SIGNATURE")
 			return
 		}
+		slog.Error("payment webhook failed",
+			"request_id", shared.RequestIDFromContext(r.Context()),
+			"error", err,
+		)
 		shared.WriteError(w, shared.ErrInternal, "Could not process Stripe webhook", "PAYMENT_WEBHOOK_FAILED")
 		return
 	}

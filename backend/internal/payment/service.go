@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"net/url"
 	"strings"
@@ -73,23 +74,58 @@ func (s *Service) CreateCheckout(ctx context.Context, lang string, rawProduct st
 
 	paymentRow, err := s.store.CreatePendingPayment(ctx, productCfg.AmountCents, productCfg.Currency, productType)
 	if err != nil {
+		slog.Error("payment create pending row failed",
+			"product", string(productType),
+			"error", err,
+		)
 		return nil, fmt.Errorf("create pending payment: %w", err)
 	}
+
+	slog.Info("payment pending row created",
+		"payment_id", paymentRow.ID,
+		"product", string(productType),
+		"amount_cents", productCfg.AmountCents,
+		"currency", productCfg.Currency,
+	)
+
+	successURL := buildFrontendURL(s.settings.FrontendURL, "/pay/success", map[string]string{"session_id": stripeCheckoutSessionPlaceholder, "lang": normalizedLang})
+	cancelURL := buildFrontendURL(s.settings.FrontendURL, "/pay", map[string]string{"lang": normalizedLang})
+
+	slog.Info("payment creating stripe checkout session",
+		"payment_id", paymentRow.ID,
+		"success_url", successURL,
+		"cancel_url", cancelURL,
+		"frontend_url", s.settings.FrontendURL,
+	)
 
 	checkout, err := s.stripe.CreateCheckoutSession(ctx, CreateCheckoutSessionParams{
 		AmountCents:       productCfg.AmountCents,
 		Currency:          productCfg.Currency,
 		ProductName:       productCfg.ProductName,
-		SuccessURL:        buildFrontendURL(s.settings.FrontendURL, "/pay/success", map[string]string{"session_id": stripeCheckoutSessionPlaceholder, "lang": normalizedLang}),
-		CancelURL:         buildFrontendURL(s.settings.FrontendURL, "/pay", map[string]string{"lang": normalizedLang}),
+		SuccessURL:        successURL,
+		CancelURL:         cancelURL,
 		ClientReferenceID: paymentRow.ID,
 	})
 	if err != nil {
+		slog.Error("payment stripe checkout session create failed",
+			"payment_id", paymentRow.ID,
+			"error", err,
+		)
 		_, _ = s.store.MarkPaymentFailed(ctx, PaymentReference{PaymentID: paymentRow.ID}, "STRIPE_CHECKOUT_CREATE_FAILED", truncateFailureDetail(err))
 		return nil, err
 	}
 
+	slog.Info("payment stripe checkout session created",
+		"payment_id", paymentRow.ID,
+		"checkout_session_id", checkout.ID,
+	)
+
 	if _, err := s.store.AttachCheckoutSessionID(ctx, paymentRow.ID, checkout.ID); err != nil {
+		slog.Error("payment attach checkout session id failed",
+			"payment_id", paymentRow.ID,
+			"checkout_session_id", checkout.ID,
+			"error", err,
+		)
 		_, _ = s.store.MarkPaymentFailed(ctx, PaymentReference{PaymentID: paymentRow.ID, CheckoutSessionID: checkout.ID}, "PAYMENT_LINK_FAILED", truncateFailureDetail(err))
 		return nil, fmt.Errorf("attach checkout session id: %w", err)
 	}
@@ -100,9 +136,19 @@ func (s *Service) CreateCheckout(ctx context.Context, lang string, rawProduct st
 func (s *Service) HandleWebhook(ctx context.Context, payload []byte, signatureHeader string) error {
 	event, err := s.stripe.ParseWebhookEvent(payload, signatureHeader)
 	if err != nil {
+		slog.Error("payment webhook parse failed",
+			"error", err,
+		)
 		return err
 	}
 	if event == nil || event.Type != "checkout.session.completed" || event.CheckoutSession == nil {
+		eventType := ""
+		if event != nil {
+			eventType = event.Type
+		}
+		slog.Info("payment webhook ignored event",
+			"event_type", eventType,
+		)
 		return nil
 	}
 
@@ -112,12 +158,33 @@ func (s *Service) HandleWebhook(ctx context.Context, payload []byte, signatureHe
 		CheckoutSessionID: strings.TrimSpace(checkout.ID),
 	}
 
+	slog.Info("payment webhook received checkout.session.completed",
+		"payment_id", ref.PaymentID,
+		"checkout_session_id", ref.CheckoutSessionID,
+		"amount_total", checkout.AmountTotal,
+		"currency", checkout.Currency,
+		"payment_status", checkout.PaymentStatus,
+	)
+
 	paymentRow, err := s.store.GetPayment(ctx, ref)
 	if err != nil {
+		slog.Error("payment webhook get payment failed",
+			"payment_id", ref.PaymentID,
+			"checkout_session_id", ref.CheckoutSessionID,
+			"error", err,
+		)
 		return fmt.Errorf("get payment: %w", err)
 	}
 
 	if !amountCurrencyMatch(checkout, paymentRow.AmountCents, paymentRow.Currency) {
+		slog.Warn("payment webhook amount/currency mismatch",
+			"payment_id", ref.PaymentID,
+			"checkout_session_id", ref.CheckoutSessionID,
+			"stripe_amount", checkout.AmountTotal,
+			"stripe_currency", checkout.Currency,
+			"stored_amount", paymentRow.AmountCents,
+			"stored_currency", paymentRow.Currency,
+		)
 		if _, markErr := s.store.MarkPaymentFailed(ctx, ref, "PAYMENT_AMOUNT_MISMATCH", "Stripe checkout amount or currency did not match stored payment values"); markErr != nil {
 			return fmt.Errorf("mark payment failed after amount mismatch: %w", markErr)
 		}
@@ -126,16 +193,34 @@ func (s *Service) HandleWebhook(ctx context.Context, payload []byte, signatureHe
 
 	paymentRow, err = s.store.MarkPaymentPaid(ctx, ref, s.nowFn().UTC())
 	if err != nil {
+		slog.Error("payment webhook mark paid failed",
+			"payment_id", ref.PaymentID,
+			"checkout_session_id", ref.CheckoutSessionID,
+			"error", err,
+		)
 		return fmt.Errorf("mark payment paid: %w", err)
 	}
 	if paymentRow.Status != StatusPaidUnprovisioned {
+		slog.Info("payment webhook skipping provision, status already advanced",
+			"payment_id", ref.PaymentID,
+			"status", string(paymentRow.Status),
+		)
 		return nil
 	}
 
 	if _, err := s.store.ProvisionIfNeeded(ctx, checkout.ID, s.nowFn().UTC(), s.buildFulfillmentData); err != nil {
+		slog.Error("payment webhook provision failed",
+			"checkout_session_id", checkout.ID,
+			"error", err,
+		)
 		_, _ = s.store.MarkProvisionFailure(ctx, checkout.ID, "PAYMENT_PROVISION_FAILED", truncateFailureDetail(err))
 		return fmt.Errorf("provision checkout session: %w", err)
 	}
+
+	slog.Info("payment webhook provisioned successfully",
+		"payment_id", ref.PaymentID,
+		"checkout_session_id", ref.CheckoutSessionID,
+	)
 	return nil
 }
 
