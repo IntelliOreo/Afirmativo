@@ -3,6 +3,7 @@ package payment
 import (
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -51,9 +52,21 @@ func (h *Handler) HandleCheckout(w http.ResponseWriter, r *http.Request) {
 	checkout, err := h.svc.CreateCheckout(r.Context(), req.Lang, req.Product)
 	if err != nil {
 		if errors.Is(err, shared.ErrBadRequest) {
+			slog.Warn("payment checkout rejected",
+				"request_id", shared.RequestIDFromContext(r.Context()),
+				"lang", strings.TrimSpace(req.Lang),
+				"product", strings.TrimSpace(req.Product),
+				"error", err,
+			)
 			shared.WriteError(w, shared.ErrBadRequest, "Invalid checkout request", "BAD_REQUEST")
 			return
 		}
+		slog.Error("payment checkout failed",
+			"request_id", shared.RequestIDFromContext(r.Context()),
+			"lang", strings.TrimSpace(req.Lang),
+			"product", strings.TrimSpace(req.Product),
+			"error", err,
+		)
 		shared.WriteError(w, shared.ErrInternal, "Could not start checkout", "PAYMENT_CHECKOUT_FAILED")
 		return
 	}
