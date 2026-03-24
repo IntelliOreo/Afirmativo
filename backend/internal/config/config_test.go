@@ -279,6 +279,19 @@ func TestLoad_ParsesCouponPackPaymentAmount(t *testing.T) {
 	}
 }
 
+func TestLoad_ParsesStripeBaseURL(t *testing.T) {
+	setBaseValidEnv(t)
+	t.Setenv("STRIPE_BASE_URL", "http://127.0.0.1:12111")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Payment.StripeBaseURL != "http://127.0.0.1:12111" {
+		t.Fatalf("StripeBaseURL = %q, want test mock base URL", cfg.Payment.StripeBaseURL)
+	}
+}
+
 func TestLoad_RejectsInterviewBudgetSmallerThanAnswerTimeLimit(t *testing.T) {
 	setBaseValidEnv(t)
 	t.Setenv("INTERVIEW_BUDGET_SECONDS", "299")

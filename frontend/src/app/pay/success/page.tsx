@@ -191,7 +191,7 @@ function PaymentSuccessPageContent() {
           </p>
 
           {!error && !couponReady && (
-            <div className="rounded-lg bg-white border border-base-lighter px-4 py-6 text-center">
+            <div data-testid="payment-pending" className="rounded-lg bg-white border border-base-lighter px-4 py-6 text-center">
               <div className="mx-auto mb-4 h-10 w-10 rounded-full border-4 border-primary border-t-transparent animate-spin" />
               <p className="text-primary-darkest">
                 {t.successPending}

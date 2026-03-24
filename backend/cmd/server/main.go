@@ -173,6 +173,7 @@ func main() {
 	stripeClient := payment.NewStripeClient(payment.StripeClientConfig{
 		SecretKey:     cfg.Payment.StripeSecretKey,
 		WebhookSecret: cfg.Payment.StripeWebhookSecret,
+		BaseURL:       cfg.Payment.StripeBaseURL,
 	})
 	paymentSvc := payment.NewService(payment.Deps{
 		Store:  paymentStore,

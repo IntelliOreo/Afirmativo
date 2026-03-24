@@ -154,6 +154,24 @@ go run ./cmd/server             # backend only
 npm run dev                     # frontend only
 ```
 
+## Local E2E
+
+Browser E2E lives in `e2e/` and is intentionally narrow: smoke coverage plus the access handoff journeys.
+
+Requirements:
+- frontend dependencies installed in `frontend/`
+- e2e dependencies installed in `e2e/`
+- local or CI Postgres admin URL exposed as `AFIRMATIVO_TEST_DATABASE_URL`
+
+Run locally:
+
+```bash
+cd e2e
+npx playwright test
+```
+
+The E2E setup creates a throwaway database, applies the repo-local `e2e/migrations` snapshot, seeds `E2E-TEST-COUPON`, starts the backend with a test Stripe mock, starts the frontend with `API_PROXY_TARGET=http://127.0.0.1:8080`, and tears the database down after the run.
+
 ## Deploy
 
 Fully automated via GitHub Actions + Terraform. No manual `gcloud` or `terraform apply` in the deploy path.

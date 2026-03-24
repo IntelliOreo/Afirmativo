@@ -110,6 +110,7 @@ type VoiceConfig struct {
 type PaymentConfig struct {
 	StripeSecretKey          string
 	StripeWebhookSecret      string
+	StripeBaseURL            string
 	DirectSessionAmountCents int
 	CouponPack10AmountCents  int
 }
@@ -443,6 +444,7 @@ func Load() (Config, error) {
 		Payment: PaymentConfig{
 			StripeSecretKey:          os.Getenv("STRIPE_SECRET_KEY"),
 			StripeWebhookSecret:      os.Getenv("STRIPE_WEBHOOK_SECRET"),
+			StripeBaseURL:            envOr("STRIPE_BASE_URL", ""),
 			DirectSessionAmountCents: paymentAmountCents,
 			CouponPack10AmountCents:  couponPack10AmountCents,
 		},

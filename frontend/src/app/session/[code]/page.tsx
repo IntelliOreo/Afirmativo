@@ -302,7 +302,7 @@ function SessionPageContent() {
                     <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
                       {common.pinLabel}
                     </span>
-                    <span className="font-bold text-primary-dark tracking-wide break-all w-full text-left sm:w-auto sm:text-right">
+                    <span data-testid="session-pin" className="font-bold text-primary-dark tracking-wide break-all w-full text-left sm:w-auto sm:text-right">
                       {displayPin}
                     </span>
                   </div>

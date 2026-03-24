@@ -1,0 +1,6 @@
+{
+  "adminDatabaseUrl": "postgresql://postgres:password@127.0.0.1:5432/postgres?sslmode=disable",
+  "testDatabaseUrl": "postgresql://postgres:password@127.0.0.1:5432/afirmativo_e2e_7f3dd92e?sslmode=disable",
+  "testDatabaseName": "afirmativo_e2e_7f3dd92e",
+  "seededCouponCode": "E2E-TEST-COUPON"
+}
