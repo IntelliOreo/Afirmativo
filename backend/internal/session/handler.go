@@ -128,6 +128,7 @@ type verifySessionView struct {
 
 type verifyResponse struct {
 	Session verifySessionView `json:"session"`
+	Coupon  *couponView       `json:"coupon,omitempty"`
 }
 
 // HandleVerifySession handles POST /api/session/verify.
@@ -198,6 +199,15 @@ func (h *Handler) HandleVerifySession(w http.ResponseWriter, r *http.Request) {
 		"auth_ttl_seconds", int(tokenExpiresAt.Sub(now).Seconds()),
 	)
 
+	var coupon *couponView
+	if sess.CouponSnapshot != nil {
+		coupon = &couponView{
+			Code:        sess.CouponSnapshot.Code,
+			MaxUses:     sess.CouponSnapshot.MaxUses,
+			CurrentUses: sess.CouponSnapshot.CurrentUses,
+		}
+	}
+
 	shared.WriteJSON(w, http.StatusOK, verifyResponse{
 		Session: verifySessionView{
 			SessionCode:            sess.SessionCode,
@@ -209,6 +219,7 @@ func (h *Handler) HandleVerifySession(w http.ResponseWriter, r *http.Request) {
 			CreatedAt:              sess.CreatedAt,
 			ExpiresAt:              sess.ExpiresAt,
 		},
+		Coupon: coupon,
 	})
 }
 

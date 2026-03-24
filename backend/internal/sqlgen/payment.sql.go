@@ -16,7 +16,7 @@ UPDATE payments
 SET checkout_session_id = $2,
     updated_at = now()
 WHERE id = $1
-RETURNING id, checkout_session_id, session_code, amount_cents, currency, status, reveal_pin, reveal_expires_at, reveal_consumed_at, failure_code, failure_detail, created_at, updated_at
+RETURNING id, checkout_session_id, session_code, amount_cents, currency, status, reveal_pin, reveal_expires_at, reveal_consumed_at, failure_code, failure_detail, created_at, updated_at, product_type, coupon_code
 `
 
 type AttachCheckoutSessionIDParams struct {
@@ -41,6 +41,8 @@ func (q *Queries) AttachCheckoutSessionID(ctx context.Context, arg AttachCheckou
 		&i.FailureDetail,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ProductType,
+		&i.CouponCode,
 	)
 	return i, err
 }
@@ -50,7 +52,7 @@ UPDATE payments
 SET reveal_consumed_at = $2,
     updated_at = $2
 WHERE id = $1
-RETURNING id, checkout_session_id, session_code, amount_cents, currency, status, reveal_pin, reveal_expires_at, reveal_consumed_at, failure_code, failure_detail, created_at, updated_at
+RETURNING id, checkout_session_id, session_code, amount_cents, currency, status, reveal_pin, reveal_expires_at, reveal_consumed_at, failure_code, failure_detail, created_at, updated_at, product_type, coupon_code
 `
 
 type ConsumePaymentRevealParams struct {
@@ -75,25 +77,28 @@ func (q *Queries) ConsumePaymentReveal(ctx context.Context, arg ConsumePaymentRe
 		&i.FailureDetail,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ProductType,
+		&i.CouponCode,
 	)
 	return i, err
 }
 
 const createPendingPayment = `-- name: CreatePendingPayment :one
 
-INSERT INTO payments (amount_cents, currency, status)
-VALUES ($1, $2, 'pending')
-RETURNING id, checkout_session_id, session_code, amount_cents, currency, status, reveal_pin, reveal_expires_at, reveal_consumed_at, failure_code, failure_detail, created_at, updated_at
+INSERT INTO payments (amount_cents, currency, product_type, status)
+VALUES ($1, $2, $3, 'pending')
+RETURNING id, checkout_session_id, session_code, amount_cents, currency, status, reveal_pin, reveal_expires_at, reveal_consumed_at, failure_code, failure_detail, created_at, updated_at, product_type, coupon_code
 `
 
 type CreatePendingPaymentParams struct {
 	AmountCents int32  `json:"amount_cents"`
 	Currency    string `json:"currency"`
+	ProductType string `json:"product_type"`
 }
 
 // Queries for payments table.
 func (q *Queries) CreatePendingPayment(ctx context.Context, arg CreatePendingPaymentParams) (Payment, error) {
-	row := q.db.QueryRow(ctx, createPendingPayment, arg.AmountCents, arg.Currency)
+	row := q.db.QueryRow(ctx, createPendingPayment, arg.AmountCents, arg.Currency, arg.ProductType)
 	var i Payment
 	err := row.Scan(
 		&i.ID,
@@ -109,12 +114,14 @@ func (q *Queries) CreatePendingPayment(ctx context.Context, arg CreatePendingPay
 		&i.FailureDetail,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ProductType,
+		&i.CouponCode,
 	)
 	return i, err
 }
 
 const getPaymentByCheckoutSessionID = `-- name: GetPaymentByCheckoutSessionID :one
-SELECT id, checkout_session_id, session_code, amount_cents, currency, status, reveal_pin, reveal_expires_at, reveal_consumed_at, failure_code, failure_detail, created_at, updated_at FROM payments WHERE checkout_session_id = $1
+SELECT id, checkout_session_id, session_code, amount_cents, currency, status, reveal_pin, reveal_expires_at, reveal_consumed_at, failure_code, failure_detail, created_at, updated_at, product_type, coupon_code FROM payments WHERE checkout_session_id = $1
 `
 
 func (q *Queries) GetPaymentByCheckoutSessionID(ctx context.Context, checkoutSessionID pgtype.Text) (Payment, error) {
@@ -134,12 +141,14 @@ func (q *Queries) GetPaymentByCheckoutSessionID(ctx context.Context, checkoutSes
 		&i.FailureDetail,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ProductType,
+		&i.CouponCode,
 	)
 	return i, err
 }
 
 const getPaymentByCheckoutSessionIDForUpdate = `-- name: GetPaymentByCheckoutSessionIDForUpdate :one
-SELECT id, checkout_session_id, session_code, amount_cents, currency, status, reveal_pin, reveal_expires_at, reveal_consumed_at, failure_code, failure_detail, created_at, updated_at FROM payments WHERE checkout_session_id = $1 FOR UPDATE
+SELECT id, checkout_session_id, session_code, amount_cents, currency, status, reveal_pin, reveal_expires_at, reveal_consumed_at, failure_code, failure_detail, created_at, updated_at, product_type, coupon_code FROM payments WHERE checkout_session_id = $1 FOR UPDATE
 `
 
 func (q *Queries) GetPaymentByCheckoutSessionIDForUpdate(ctx context.Context, checkoutSessionID pgtype.Text) (Payment, error) {
@@ -159,12 +168,14 @@ func (q *Queries) GetPaymentByCheckoutSessionIDForUpdate(ctx context.Context, ch
 		&i.FailureDetail,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ProductType,
+		&i.CouponCode,
 	)
 	return i, err
 }
 
 const getPaymentByIDForUpdate = `-- name: GetPaymentByIDForUpdate :one
-SELECT id, checkout_session_id, session_code, amount_cents, currency, status, reveal_pin, reveal_expires_at, reveal_consumed_at, failure_code, failure_detail, created_at, updated_at FROM payments WHERE id = $1 FOR UPDATE
+SELECT id, checkout_session_id, session_code, amount_cents, currency, status, reveal_pin, reveal_expires_at, reveal_consumed_at, failure_code, failure_detail, created_at, updated_at, product_type, coupon_code FROM payments WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) GetPaymentByIDForUpdate(ctx context.Context, id pgtype.UUID) (Payment, error) {
@@ -184,6 +195,8 @@ func (q *Queries) GetPaymentByIDForUpdate(ctx context.Context, id pgtype.UUID) (
 		&i.FailureDetail,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ProductType,
+		&i.CouponCode,
 	)
 	return i, err
 }
@@ -199,7 +212,7 @@ SET checkout_session_id = CASE
     failure_detail = $4,
     updated_at = now()
 WHERE id = $1
-RETURNING id, checkout_session_id, session_code, amount_cents, currency, status, reveal_pin, reveal_expires_at, reveal_consumed_at, failure_code, failure_detail, created_at, updated_at
+RETURNING id, checkout_session_id, session_code, amount_cents, currency, status, reveal_pin, reveal_expires_at, reveal_consumed_at, failure_code, failure_detail, created_at, updated_at, product_type, coupon_code
 `
 
 type MarkPaymentFailedByIDParams struct {
@@ -231,6 +244,8 @@ func (q *Queries) MarkPaymentFailedByID(ctx context.Context, arg MarkPaymentFail
 		&i.FailureDetail,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ProductType,
+		&i.CouponCode,
 	)
 	return i, err
 }
@@ -246,7 +261,7 @@ SET checkout_session_id = CASE
     failure_detail = NULL,
     updated_at = $3
 WHERE id = $1
-RETURNING id, checkout_session_id, session_code, amount_cents, currency, status, reveal_pin, reveal_expires_at, reveal_consumed_at, failure_code, failure_detail, created_at, updated_at
+RETURNING id, checkout_session_id, session_code, amount_cents, currency, status, reveal_pin, reveal_expires_at, reveal_consumed_at, failure_code, failure_detail, created_at, updated_at, product_type, coupon_code
 `
 
 type MarkPaymentPaidUnprovisionedByIDParams struct {
@@ -272,6 +287,8 @@ func (q *Queries) MarkPaymentPaidUnprovisionedByID(ctx context.Context, arg Mark
 		&i.FailureDetail,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ProductType,
+		&i.CouponCode,
 	)
 	return i, err
 }
@@ -283,7 +300,7 @@ SET failure_code = $2,
     updated_at = now()
 WHERE checkout_session_id = $1
   AND status = 'paid_unprovisioned'
-RETURNING id, checkout_session_id, session_code, amount_cents, currency, status, reveal_pin, reveal_expires_at, reveal_consumed_at, failure_code, failure_detail, created_at, updated_at
+RETURNING id, checkout_session_id, session_code, amount_cents, currency, status, reveal_pin, reveal_expires_at, reveal_consumed_at, failure_code, failure_detail, created_at, updated_at, product_type, coupon_code
 `
 
 type MarkPaymentProvisionFailureParams struct {
@@ -309,6 +326,8 @@ func (q *Queries) MarkPaymentProvisionFailure(ctx context.Context, arg MarkPayme
 		&i.FailureDetail,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ProductType,
+		&i.CouponCode,
 	)
 	return i, err
 }
@@ -317,13 +336,15 @@ const markPaymentProvisioned = `-- name: MarkPaymentProvisioned :one
 UPDATE payments
 SET status = 'provisioned',
     session_code = $2,
+    coupon_code = NULL,
     reveal_pin = $3,
     reveal_expires_at = $4,
+    reveal_consumed_at = NULL,
     failure_code = NULL,
     failure_detail = NULL,
     updated_at = $5
 WHERE id = $1
-RETURNING id, checkout_session_id, session_code, amount_cents, currency, status, reveal_pin, reveal_expires_at, reveal_consumed_at, failure_code, failure_detail, created_at, updated_at
+RETURNING id, checkout_session_id, session_code, amount_cents, currency, status, reveal_pin, reveal_expires_at, reveal_consumed_at, failure_code, failure_detail, created_at, updated_at, product_type, coupon_code
 `
 
 type MarkPaymentProvisionedParams struct {
@@ -357,6 +378,52 @@ func (q *Queries) MarkPaymentProvisioned(ctx context.Context, arg MarkPaymentPro
 		&i.FailureDetail,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ProductType,
+		&i.CouponCode,
+	)
+	return i, err
+}
+
+const markPaymentProvisionedCouponPack = `-- name: MarkPaymentProvisionedCouponPack :one
+UPDATE payments
+SET status = 'provisioned',
+    session_code = NULL,
+    coupon_code = $2,
+    reveal_pin = NULL,
+    reveal_expires_at = NULL,
+    reveal_consumed_at = NULL,
+    failure_code = NULL,
+    failure_detail = NULL,
+    updated_at = $3
+WHERE id = $1
+RETURNING id, checkout_session_id, session_code, amount_cents, currency, status, reveal_pin, reveal_expires_at, reveal_consumed_at, failure_code, failure_detail, created_at, updated_at, product_type, coupon_code
+`
+
+type MarkPaymentProvisionedCouponPackParams struct {
+	ID         pgtype.UUID        `json:"id"`
+	CouponCode pgtype.Text        `json:"coupon_code"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) MarkPaymentProvisionedCouponPack(ctx context.Context, arg MarkPaymentProvisionedCouponPackParams) (Payment, error) {
+	row := q.db.QueryRow(ctx, markPaymentProvisionedCouponPack, arg.ID, arg.CouponCode, arg.UpdatedAt)
+	var i Payment
+	err := row.Scan(
+		&i.ID,
+		&i.CheckoutSessionID,
+		&i.SessionCode,
+		&i.AmountCents,
+		&i.Currency,
+		&i.Status,
+		&i.RevealPin,
+		&i.RevealExpiresAt,
+		&i.RevealConsumedAt,
+		&i.FailureCode,
+		&i.FailureDetail,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ProductType,
+		&i.CouponCode,
 	)
 	return i, err
 }

@@ -47,12 +47,19 @@ type Session struct {
 	ConversationHistory []byte // raw JSONB
 
 	// Payment
-	PaymentID  string
-	CouponCode string
+	PaymentID       string
+	CouponCode      string
+	CouponSnapshot  *CouponSnapshot
 
 	// Session validity
 	ExpiresAt time.Time
 	CreatedAt time.Time
+}
+
+type CouponSnapshot struct {
+	Code        string
+	MaxUses     int
+	CurrentUses int
 }
 
 // Coupon represents a redeemable coupon.

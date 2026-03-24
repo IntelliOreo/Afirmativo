@@ -353,6 +353,8 @@ func TestHandleVerifySession_SuccessContract(t *testing.T) {
 				PinHash:                hashPIN(t, "482917"),
 				Status:                 "interviewing",
 				Track:                  "A",
+				CouponCode:             "BETA-0001",
+				CouponSnapshot:         &CouponSnapshot{Code: "BETA-0001", MaxUses: 5, CurrentUses: 2},
 				InterviewBudgetSeconds: 3600,
 				InterviewLapsedSeconds: 0,
 				InterviewStartedAt:     &startedAt,
@@ -389,6 +391,11 @@ func TestHandleVerifySession_SuccessContract(t *testing.T) {
 			InterviewLapsedSeconds int        `json:"interview_lapsed_seconds"`
 			InterviewStartedAt     *time.Time `json:"interview_started_at"`
 		} `json:"session"`
+		Coupon *struct {
+			Code        string `json:"code"`
+			MaxUses     int    `json:"max_uses"`
+			CurrentUses int    `json:"current_uses"`
+		} `json:"coupon"`
 	}
 	decodeJSONBody(t, rr, &got)
 
@@ -406,6 +413,9 @@ func TestHandleVerifySession_SuccessContract(t *testing.T) {
 	}
 	if got.Session.InterviewStartedAt == nil || !got.Session.InterviewStartedAt.Equal(startedAt) {
 		t.Fatalf("interview_started_at = %v, want %v", got.Session.InterviewStartedAt, startedAt)
+	}
+	if got.Coupon == nil || got.Coupon.Code != "BETA-0001" || got.Coupon.MaxUses != 5 || got.Coupon.CurrentUses != 2 {
+		t.Fatalf("coupon = %#v, want coupon snapshot", got.Coupon)
 	}
 }
 

@@ -8,8 +8,8 @@ import { Button } from "@components/Button";
 import { Card } from "@components/Card";
 import { Input } from "@components/Input";
 import { writeInterviewLang } from "@/lib/storage/languageStore";
-import { type CouponReveal, readAndConsumeCouponReveal, readAndConsumePin } from "@/lib/storage/sessionPinStore";
-import { checkSessionAccess, verifySession } from "@/lib/sessionService";
+import { readAndConsumePin } from "@/lib/storage/sessionPinStore";
+import { type VerifiedCoupon, checkSessionAccess, verifySession } from "@/lib/sessionService";
 import { useLanguage } from "@/lib/useLanguage";
 import { getCommonMessages } from "@/messages/commonMessages";
 import {
@@ -33,7 +33,7 @@ function SessionPageContent() {
   const [view, setView] = useState<View>("loading");
   const [pin, setPin] = useState("");
   const [displayPin, setDisplayPin] = useState("");
-  const [couponReveal, setCouponReveal] = useState<CouponReveal | null>(null);
+  const [couponReveal, setCouponReveal] = useState<VerifiedCoupon | null>(null);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -77,7 +77,7 @@ function SessionPageContent() {
         }
         if (result.ok) {
           setDisplayPin(storedPin);
-          setCouponReveal(readAndConsumeCouponReveal(code));
+          setCouponReveal(result.coupon ?? null);
           if (result.interviewStartedAt) {
             goToInterview(lang, true);
             return;
@@ -180,7 +180,7 @@ function SessionPageContent() {
         return;
       }
       setDisplayPin(pin.trim());
-      setCouponReveal(readAndConsumeCouponReveal(code));
+      setCouponReveal(result.coupon ?? null);
       setPin("");
       setView("ready");
     } else {

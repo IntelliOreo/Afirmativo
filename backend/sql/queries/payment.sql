@@ -1,8 +1,8 @@
 -- Queries for payments table.
 
 -- name: CreatePendingPayment :one
-INSERT INTO payments (amount_cents, currency, status)
-VALUES ($1, $2, 'pending')
+INSERT INTO payments (amount_cents, currency, product_type, status)
+VALUES ($1, $2, $3, 'pending')
 RETURNING *;
 
 -- name: AttachCheckoutSessionID :one
@@ -51,11 +51,27 @@ RETURNING *;
 UPDATE payments
 SET status = 'provisioned',
     session_code = $2,
+    coupon_code = NULL,
     reveal_pin = $3,
     reveal_expires_at = $4,
+    reveal_consumed_at = NULL,
     failure_code = NULL,
     failure_detail = NULL,
     updated_at = $5
+WHERE id = $1
+RETURNING *;
+
+-- name: MarkPaymentProvisionedCouponPack :one
+UPDATE payments
+SET status = 'provisioned',
+    session_code = NULL,
+    coupon_code = $2,
+    reveal_pin = NULL,
+    reveal_expires_at = NULL,
+    reveal_consumed_at = NULL,
+    failure_code = NULL,
+    failure_detail = NULL,
+    updated_at = $3
 WHERE id = $1
 RETURNING *;
 

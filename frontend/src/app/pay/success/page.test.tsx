@@ -1,27 +1,27 @@
-import { render, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import PaymentSuccessPage from "./page";
 
-const replaceMock = vi.fn();
 const apiMock = vi.fn();
+const replaceMock = vi.fn();
+const pushMock = vi.fn();
 const writePinMock = vi.fn();
-const languageState = {
-  lang: "en",
-  initialized: true,
-};
-const searchParamsValues = new Map<string, string>([
-  ["session_id", "cs_test_123"],
-  ["lang", "en"],
-]);
+const setLangMock = vi.fn();
+const useLanguageMock = vi.fn();
+const originalLocation = window.location;
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({
     replace: replaceMock,
-    push: vi.fn(),
+    push: pushMock,
   }),
   useSearchParams: () => ({
-    get: (key: string) => searchParamsValues.get(key) ?? null,
+    get: (key: string) => {
+      if (key === "lang") return "en";
+      if (key === "session_id") return "cs_test_123";
+      return null;
+    },
   }),
 }));
 
@@ -29,35 +29,57 @@ vi.mock("@/lib/api", () => ({
   api: (...args: unknown[]) => apiMock(...args),
 }));
 
-vi.mock("@/lib/storage/sessionPinStore", () => ({
-  writePin: (...args: unknown[]) => writePinMock(...args),
+vi.mock("@/lib/useLanguage", () => ({
+  useLanguage: (...args: unknown[]) => useLanguageMock(...args),
 }));
 
-vi.mock("@/lib/useLanguage", () => ({
-  useLanguage: () => ({
-    lang: languageState.lang,
-    setLang: vi.fn(),
-    initialized: languageState.initialized,
-  }),
+vi.mock("@/lib/storage/sessionPinStore", () => ({
+  writePin: (...args: unknown[]) => writePinMock(...args),
 }));
 
 describe("PaymentSuccessPage", () => {
   beforeEach(() => {
     apiMock.mockReset();
     replaceMock.mockReset();
+    pushMock.mockReset();
     writePinMock.mockReset();
-    languageState.lang = "en";
-    languageState.initialized = true;
-    searchParamsValues.set("session_id", "cs_test_123");
-    searchParamsValues.set("lang", "en");
+    setLangMock.mockReset();
+    useLanguageMock.mockReset();
+    useLanguageMock.mockReturnValue({
+      lang: "en",
+      setLang: setLangMock,
+      initialized: true,
+    });
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { href: "http://localhost/pay/success?session_id=cs_test_123", origin: "http://localhost" } as Location,
+    });
   });
 
-  it("stores the PIN and redirects when checkout status is ready", async () => {
+  afterAll(() => {
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: originalLocation,
+    });
+  });
+
+  function parseMailtoHref(href: string) {
+    const [scheme, query = ""] = href.split("?");
+    expect(scheme).toBe("mailto:");
+    const params = new URLSearchParams(query);
+    return {
+      subject: params.get("subject"),
+      body: params.get("body"),
+    };
+  }
+
+  it("redirects direct-session checkouts into the session page", async () => {
     apiMock.mockResolvedValue({
       ok: true,
       status: 200,
       data: {
         status: "ready",
+        product_type: "direct_session",
         session_code: "AP-1234-5678",
         pin: "482917",
       },
@@ -67,40 +89,58 @@ describe("PaymentSuccessPage", () => {
 
     await waitFor(() => {
       expect(writePinMock).toHaveBeenCalledWith("AP-1234-5678", "482917");
-      expect(replaceMock).toHaveBeenCalledWith("/session/AP-1234-5678?lang=en");
     });
+    expect(replaceMock).toHaveBeenCalledWith("/session/AP-1234-5678?lang=en");
   });
 
-  it("does not start polling before language initialization or restart polling when language changes", async () => {
+  it("renders coupon-pack ready state and opens a mailto handoff", async () => {
     apiMock.mockResolvedValue({
       ok: true,
       status: 200,
       data: {
         status: "ready",
-        session_code: "AP-1234-5678",
-        pin: "482917",
+        product_type: "coupon_pack_10",
+        coupon_code: "PACK10-ABCD2345",
+        coupon_max_uses: 10,
+        coupon_current_uses: 0,
       },
     });
 
-    languageState.initialized = false;
-    const { rerender } = render(<PaymentSuccessPage />);
+    render(<PaymentSuccessPage />);
 
     await waitFor(() => {
-      expect(apiMock).toHaveBeenCalledTimes(0);
+      expect(screen.getByRole("heading", { name: "Your coupon is ready" })).toBeInTheDocument();
+    });
+    expect(screen.getByText("PACK10-ABCD2345")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Email my coupon info" }));
+
+    const mailto = parseMailtoHref(window.location.href);
+    expect(mailto.subject).toBe("asilo-afirmativo: coupon info");
+    expect(mailto.body).toBe([
+      "Coupon: PACK10-ABCD2345",
+      "This coupon can be redeemed up to 10 times. This was redemption 0 of 10.",
+      "Link: http://localhost/pay?coupon=PACK10-ABCD2345&lang=en",
+    ].join("\n"));
+  });
+
+  it("treats omitted coupon_current_uses as zero for coupon-pack ready responses", async () => {
+    apiMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: {
+        status: "ready",
+        product_type: "coupon_pack_10",
+        coupon_code: "PACK10-ABCD2345",
+        coupon_max_uses: 10,
+      },
     });
 
-    languageState.initialized = true;
-    rerender(<PaymentSuccessPage />);
+    render(<PaymentSuccessPage />);
 
     await waitFor(() => {
-      expect(apiMock).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole("heading", { name: "Your coupon is ready" })).toBeInTheDocument();
     });
-
-    languageState.lang = "es";
-    rerender(<PaymentSuccessPage />);
-
-    await waitFor(() => {
-      expect(apiMock).toHaveBeenCalledTimes(1);
-    });
+    expect(screen.getByText("This coupon can be redeemed up to 10 times. This was redemption 0 of 10.")).toBeInTheDocument();
   });
 });

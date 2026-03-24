@@ -9,13 +9,27 @@ AND (expires_at IS NULL OR expires_at > now())
 RETURNING *;
 
 -- name: CreateSession :one
-INSERT INTO sessions (session_code, pin_hash, coupon_code, status, expires_at, interview_budget_seconds)
-VALUES ($1, $2, $3, 'created', $4, $5)
+INSERT INTO sessions (
+    session_code,
+    pin_hash,
+    coupon_code,
+    coupon_max_uses_at_claim,
+    coupon_current_uses_at_claim,
+    status,
+    expires_at,
+    interview_budget_seconds
+)
+VALUES ($1, $2, $3, $4, $5, 'created', $6, $7)
 RETURNING *;
 
 -- name: CreatePaidSession :exec
 INSERT INTO sessions (session_code, pin_hash, payment_id, status, expires_at, interview_budget_seconds)
 VALUES ($1, $2, $3, 'created', $4, $5);
+
+-- name: CreateCoupon :one
+INSERT INTO coupons (code, max_uses, source)
+VALUES ($1, $2, $3)
+RETURNING *;
 
 -- name: GetSessionByCode :one
 SELECT * FROM sessions WHERE session_code = $1;

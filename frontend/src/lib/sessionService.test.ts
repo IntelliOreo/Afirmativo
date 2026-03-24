@@ -12,7 +12,7 @@ describe("verifySession", () => {
     apiMock.mockReset();
   });
 
-  it("returns interviewStartedAt on success", async () => {
+  it("returns interviewStartedAt and coupon snapshot on success", async () => {
     apiMock.mockResolvedValue({
       ok: true,
       status: 200,
@@ -20,12 +20,22 @@ describe("verifySession", () => {
         session: {
           interview_started_at: "2026-03-07T12:00:00.000Z",
         },
+        coupon: {
+          code: "BETA-0001",
+          max_uses: 5,
+          current_uses: 2,
+        },
       },
     });
 
     await expect(verifySession("AP-123", "1234")).resolves.toEqual({
       ok: true,
       interviewStartedAt: "2026-03-07T12:00:00.000Z",
+      coupon: {
+        code: "BETA-0001",
+        maxUses: 5,
+        currentUses: 2,
+      },
     });
     expect(apiMock).toHaveBeenCalledWith("/api/session/verify", {
       method: "POST",

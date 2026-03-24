@@ -35,8 +35,8 @@ func setBaseValidEnv(t *testing.T) {
 		"SESSION_AUTH_MAX_TTL_MINUTES":                "60",
 		"OLLAMA_TEMPERATURE":                          "0.3",
 		"VOICE_AI_TOKEN_TIMEOUT_SECONDS":              "30",
-		"PAYMENT_AMOUNT_CENTS":                        "5000",
-		"PAYMENT_CURRENCY":                            "usd",
+		"PAYMENT_AMOUNT_CENTS":                        "499",
+		"PAYMENT_COUPON_PACK_10_AMOUNT_CENTS":         "3500",
 		"STRIPE_SECRET_KEY":                           "sk_test_example",
 		"STRIPE_WEBHOOK_SECRET":                       "whsec_example",
 		"ADMIN_CLEANUP_ENABLED":                       "false",
@@ -263,16 +263,19 @@ func TestLoad_RejectsInvalidInterviewBudgetSeconds(t *testing.T) {
 	}
 }
 
-func TestLoad_RejectsInvalidPaymentCurrency(t *testing.T) {
+func TestLoad_ParsesCouponPackPaymentAmount(t *testing.T) {
 	setBaseValidEnv(t)
-	t.Setenv("PAYMENT_CURRENCY", "usdollars")
+	t.Setenv("PAYMENT_COUPON_PACK_10_AMOUNT_CENTS", "4200")
 
-	_, err := Load()
-	if err == nil {
-		t.Fatalf("Load() expected error for PAYMENT_CURRENCY")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "PAYMENT_CURRENCY must be a 3-letter ISO currency code") {
-		t.Fatalf("error = %v, want PAYMENT_CURRENCY validation message", err)
+	if cfg.Payment.DirectSessionAmountCents != 499 {
+		t.Fatalf("DirectSessionAmountCents = %d, want 499", cfg.Payment.DirectSessionAmountCents)
+	}
+	if cfg.Payment.CouponPack10AmountCents != 4200 {
+		t.Fatalf("CouponPack10AmountCents = %d, want 4200", cfg.Payment.CouponPack10AmountCents)
 	}
 }
 

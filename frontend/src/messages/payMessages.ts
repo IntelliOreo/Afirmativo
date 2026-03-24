@@ -11,7 +11,8 @@ type PayCopy = {
   divider: string;
   onlinePaymentHeading: string;
   onlinePaymentBody: string;
-  payByCard: string;
+  payDirectSession: string;
+  payCouponPack10: string;
   checkoutFailed: string;
   checkoutNetworkError: string;
   pleaseWait: string;
@@ -24,6 +25,12 @@ type PayCopy = {
   paymentStatusTimeout: string;
   paymentRevealExpired: string;
   returnToPay: string;
+  couponReadyHeading: string;
+  couponReadyBody: string;
+  couponRecoveryInfo: string;
+  couponEmailInfo: string;
+  couponEmailSubject: string;
+  redeemNow: string;
 };
 
 const PAY_MESSAGES = {
@@ -38,7 +45,8 @@ const PAY_MESSAGES = {
     divider: "or",
     onlinePaymentHeading: "Pay online",
     onlinePaymentBody: "Secure payment by credit or debit card.",
-    payByCard: "Pay by card",
+    payDirectSession: "Pay $4.99 for 1 session",
+    payCouponPack10: "Buy 10-use coupon pack (30% off) - $35.00",
     checkoutFailed: "Could not start checkout. Please try again.",
     checkoutNetworkError: "Connection error while starting checkout. Please try again.",
     pleaseWait: "Please wait...",
@@ -51,6 +59,12 @@ const PAY_MESSAGES = {
     paymentStatusTimeout: "Payment confirmation is taking longer than expected. Please try again from the payment page.",
     paymentRevealExpired: "Your payment was confirmed, but the PIN handoff expired. Please contact support or try again from the payment page.",
     returnToPay: "Back to payment",
+    couponReadyHeading: "Your coupon is ready",
+    couponReadyBody: "Save this coupon and use it whenever you want to start a session.",
+    couponRecoveryInfo: "Keep this coupon somewhere safe. You can redeem it later from the payment page.",
+    couponEmailInfo: "Email my coupon info",
+    couponEmailSubject: "asilo-afirmativo: coupon info",
+    redeemNow: "Redeem now",
   },
   es: {
     heading: "Acceso",
@@ -63,7 +77,8 @@ const PAY_MESSAGES = {
     divider: "o",
     onlinePaymentHeading: "Pago en linea",
     onlinePaymentBody: "Pago seguro con tarjeta de credito o debito.",
-    payByCard: "Pagar con tarjeta",
+    payDirectSession: "Pagar $4.99 por 1 sesion",
+    payCouponPack10: "Comprar cupon de 10 usos (30% de descuento) - $35.00",
     checkoutFailed: "No se pudo iniciar el pago. Intente nuevamente.",
     checkoutNetworkError: "Error de conexion al iniciar el pago. Intente nuevamente.",
     pleaseWait: "Por favor espere...",
@@ -76,6 +91,12 @@ const PAY_MESSAGES = {
     paymentStatusTimeout: "La confirmacion del pago esta tardando mas de lo esperado. Intente nuevamente desde la pagina de pago.",
     paymentRevealExpired: "Su pago fue confirmado, pero la entrega del PIN expiro. Contacte soporte o intente nuevamente desde la pagina de pago.",
     returnToPay: "Volver al pago",
+    couponReadyHeading: "Su cupon esta listo",
+    couponReadyBody: "Guarde este cupon y uselo cuando quiera comenzar una sesion.",
+    couponRecoveryInfo: "Guarde este cupon en un lugar seguro. Puede canjearlo mas tarde desde la pagina de pago.",
+    couponEmailInfo: "Enviarme por correo la informacion de mi cupon",
+    couponEmailSubject: "asilo-afirmativo: informacion de cupon",
+    redeemNow: "Canjear ahora",
   },
 } as const satisfies Record<Lang, PayCopy>;
 

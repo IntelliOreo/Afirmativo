@@ -19,7 +19,8 @@ type Handler struct {
 }
 
 type checkoutRequest struct {
-	Lang string `json:"lang"`
+	Lang    string `json:"lang"`
+	Product string `json:"product"`
 }
 
 type checkoutResponse struct {
@@ -27,9 +28,13 @@ type checkoutResponse struct {
 }
 
 type checkoutStatusResponse struct {
-	Status      string `json:"status"`
-	SessionCode string `json:"session_code,omitempty"`
-	PIN         string `json:"pin,omitempty"`
+	Status            string `json:"status"`
+	ProductType       string `json:"product_type,omitempty"`
+	SessionCode       string `json:"session_code,omitempty"`
+	PIN               string `json:"pin,omitempty"`
+	CouponCode        string `json:"coupon_code,omitempty"`
+	CouponMaxUses     *int   `json:"coupon_max_uses,omitempty"`
+	CouponCurrentUses *int   `json:"coupon_current_uses,omitempty"`
 }
 
 func NewHandler(svc *Service) *Handler {
@@ -43,10 +48,10 @@ func (h *Handler) HandleCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	checkout, err := h.svc.CreateCheckout(r.Context(), req.Lang)
+	checkout, err := h.svc.CreateCheckout(r.Context(), req.Lang, req.Product)
 	if err != nil {
 		if errors.Is(err, shared.ErrBadRequest) {
-			shared.WriteError(w, shared.ErrBadRequest, "Language must be en or es", "BAD_REQUEST")
+			shared.WriteError(w, shared.ErrBadRequest, "Invalid checkout request", "BAD_REQUEST")
 			return
 		}
 		shared.WriteError(w, shared.ErrInternal, "Could not start checkout", "PAYMENT_CHECKOUT_FAILED")
@@ -106,14 +111,28 @@ func (h *Handler) HandleCheckoutSessionStatus(w http.ResponseWriter, r *http.Req
 	case "failed":
 		shared.WriteErrorStatus(w, http.StatusConflict, "Payment could not be completed", firstNonEmpty(status.FailureCode, "PAYMENT_FAILED"))
 	case "ready":
+		var couponMaxUses *int
+		var couponCurrentUses *int
+		if status.ProductType == ProductTypeCouponPack10 {
+			couponMaxUses = intPtr(status.CouponMaxUses)
+			couponCurrentUses = intPtr(status.CouponCurrentUses)
+		}
 		shared.WriteJSON(w, http.StatusOK, checkoutStatusResponse{
-			Status:      "ready",
-			SessionCode: status.SessionCode,
-			PIN:         status.PIN,
+			Status:            "ready",
+			ProductType:       string(status.ProductType),
+			SessionCode:       status.SessionCode,
+			PIN:               status.PIN,
+			CouponCode:        status.CouponCode,
+			CouponMaxUses:     couponMaxUses,
+			CouponCurrentUses: couponCurrentUses,
 		})
 	default:
 		shared.WriteError(w, shared.ErrInternal, "Unsupported checkout session status", "PAYMENT_STATUS_FAILED")
 	}
+}
+
+func intPtr(value int) *int {
+	return &value
 }
 
 func firstNonEmpty(values ...string) string {

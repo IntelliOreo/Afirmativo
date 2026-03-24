@@ -108,10 +108,10 @@ type VoiceConfig struct {
 }
 
 type PaymentConfig struct {
-	StripeSecretKey     string
-	StripeWebhookSecret string
-	AmountCents         int
-	Currency            string
+	StripeSecretKey          string
+	StripeWebhookSecret      string
+	DirectSessionAmountCents int
+	CouponPack10AmountCents  int
 }
 
 type VerifyRateLimitConfig struct {
@@ -242,7 +242,11 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	paymentAmountCents, err := envIntMin("PAYMENT_AMOUNT_CENTS", 5000, 1)
+	paymentAmountCents, err := envIntMin("PAYMENT_AMOUNT_CENTS", 499, 1)
+	if err != nil {
+		return Config{}, err
+	}
+	couponPack10AmountCents, err := envIntMin("PAYMENT_COUPON_PACK_10_AMOUNT_CENTS", 3500, 1)
 	if err != nil {
 		return Config{}, err
 	}
@@ -437,10 +441,10 @@ func Load() (Config, error) {
 			Timeout:             time.Duration(aiTimeoutSeconds) * time.Second,
 		},
 		Payment: PaymentConfig{
-			StripeSecretKey:     os.Getenv("STRIPE_SECRET_KEY"),
-			StripeWebhookSecret: os.Getenv("STRIPE_WEBHOOK_SECRET"),
-			AmountCents:         paymentAmountCents,
-			Currency:            strings.ToLower(strings.TrimSpace(envOr("PAYMENT_CURRENCY", "usd"))),
+			StripeSecretKey:          os.Getenv("STRIPE_SECRET_KEY"),
+			StripeWebhookSecret:      os.Getenv("STRIPE_WEBHOOK_SECRET"),
+			DirectSessionAmountCents: paymentAmountCents,
+			CouponPack10AmountCents:  couponPack10AmountCents,
 		},
 		RateLimit: RateLimitConfig{
 			Verify: VerifyRateLimitConfig{
@@ -527,8 +531,8 @@ func (c Config) LogLoaded() {
 	slog.Debug("payment config loaded",
 		"stripe_secret_key_set", c.Payment.StripeSecretKey != "",
 		"stripe_webhook_secret_set", c.Payment.StripeWebhookSecret != "",
-		"payment_amount_cents", c.Payment.AmountCents,
-		"payment_currency", c.Payment.Currency,
+		"direct_session_amount_cents", c.Payment.DirectSessionAmountCents,
+		"coupon_pack_10_amount_cents", c.Payment.CouponPack10AmountCents,
 	)
 	for _, ac := range c.Interview.AreaConfigs {
 		slog.Debug("area config",
@@ -581,9 +585,6 @@ func validateConfig(cfg Config) error {
 	}
 	if strings.TrimSpace(cfg.Payment.StripeWebhookSecret) == "" {
 		return fmt.Errorf("STRIPE_WEBHOOK_SECRET is required")
-	}
-	if len(strings.TrimSpace(cfg.Payment.Currency)) != 3 {
-		return fmt.Errorf("PAYMENT_CURRENCY must be a 3-letter ISO currency code")
 	}
 	if cfg.AI.Provider == "ollama" {
 		if cfg.AI.MockAPIURL != "" {

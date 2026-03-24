@@ -6,7 +6,6 @@ import PayPage from "./page";
 const apiMock = vi.fn();
 const pushMock = vi.fn();
 const writePinMock = vi.fn();
-const writeCouponRevealMock = vi.fn();
 const originalLocation = window.location;
 
 vi.mock("next/navigation", () => ({
@@ -31,7 +30,6 @@ vi.mock("@/lib/useLanguage", () => ({
 
 vi.mock("@/lib/storage/sessionPinStore", () => ({
   writePin: (...args: unknown[]) => writePinMock(...args),
-  writeCouponReveal: (...args: unknown[]) => writeCouponRevealMock(...args),
 }));
 
 describe("PayPage", () => {
@@ -39,7 +37,6 @@ describe("PayPage", () => {
     apiMock.mockReset();
     pushMock.mockReset();
     writePinMock.mockReset();
-    writeCouponRevealMock.mockReset();
     Object.defineProperty(window, "location", {
       configurable: true,
       value: { href: "http://localhost/pay" } as Location,
@@ -53,7 +50,7 @@ describe("PayPage", () => {
     });
   });
 
-  it("redirects to the Stripe checkout URL with the selected language", async () => {
+  it("starts direct-session checkout with the selected language", async () => {
     apiMock.mockResolvedValue({
       ok: true,
       status: 200,
@@ -62,12 +59,12 @@ describe("PayPage", () => {
 
     render(<PayPage />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Pay by card" }));
+    fireEvent.click(screen.getByRole("button", { name: "Pay $4.99 for 1 session" }));
 
     await waitFor(() => {
       expect(apiMock).toHaveBeenCalledWith("/api/payment/checkout", {
         method: "POST",
-        body: { lang: "en" },
+        body: { lang: "en", product: "direct_session" },
       });
     });
 
@@ -107,12 +104,30 @@ describe("PayPage", () => {
     });
 
     expect(writePinMock).toHaveBeenCalledWith("AP-1234-5678", "482917");
-    expect(writeCouponRevealMock).toHaveBeenCalledWith("AP-1234-5678", {
-      code: "BETA-0001",
-      maxUses: 5,
-      currentUses: 2,
-    });
     expect(pushMock).toHaveBeenCalledWith("/session/AP-1234-5678?lang=en");
+  });
+
+  it("starts coupon-pack checkout with the selected language", async () => {
+    apiMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: { url: "https://checkout.stripe.com/c/pay/cs_test_coupon_pack" },
+    });
+
+    render(<PayPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Buy 10-use coupon pack (30% off) - $35.00" }));
+
+    await waitFor(() => {
+      expect(apiMock).toHaveBeenCalledWith("/api/payment/checkout", {
+        method: "POST",
+        body: { lang: "en", product: "coupon_pack_10" },
+      });
+    });
+
+    await waitFor(() => {
+      expect(window.location.href).toBe("https://checkout.stripe.com/c/pay/cs_test_coupon_pack");
+    });
   });
 
   it("shows the generic checkout failure for resolved non-ok responses", async () => {
@@ -124,7 +139,7 @@ describe("PayPage", () => {
 
     render(<PayPage />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Pay by card" }));
+    fireEvent.click(screen.getByRole("button", { name: "Pay $4.99 for 1 session" }));
 
     expect(await screen.findByText("Could not start checkout. Please try again.")).toBeInTheDocument();
     expect(screen.queryByText("Card payment is not available yet. Please use a coupon to continue.")).not.toBeInTheDocument();
@@ -135,7 +150,7 @@ describe("PayPage", () => {
 
     render(<PayPage />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Pay by card" }));
+    fireEvent.click(screen.getByRole("button", { name: "Pay $4.99 for 1 session" }));
 
     expect(await screen.findByText("Connection error while starting checkout. Please try again.")).toBeInTheDocument();
   });

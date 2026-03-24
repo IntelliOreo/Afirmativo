@@ -48,11 +48,13 @@ func (s *PostgresStore) ClaimCouponAndCreateSession(ctx context.Context, couponC
 
 	// Create the session in the same transaction.
 	row, err := q.CreateSession(ctx, sqlgen.CreateSessionParams{
-		SessionCode:            sessionCode,
-		PinHash:                pinHash,
-		CouponCode:             pgtype.Text{String: couponCode, Valid: true},
-		ExpiresAt:              pgtype.Timestamptz{Time: expiresAt, Valid: true},
-		InterviewBudgetSeconds: int32(interviewBudgetSeconds),
+		SessionCode:              sessionCode,
+		PinHash:                  pinHash,
+		CouponCode:               pgtype.Text{String: couponCode, Valid: true},
+		CouponMaxUsesAtClaim:     pgtype.Int4{Int32: claimedCoupon.MaxUses, Valid: true},
+		CouponCurrentUsesAtClaim: pgtype.Int4{Int32: claimedCoupon.CurrentUses, Valid: true},
+		ExpiresAt:                pgtype.Timestamptz{Time: expiresAt, Valid: true},
+		InterviewBudgetSeconds:   int32(interviewBudgetSeconds),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
@@ -146,6 +148,13 @@ func sessionFromRow(row sqlgen.Session) *Session {
 	}
 	if row.CouponCode.Valid {
 		s.CouponCode = row.CouponCode.String
+	}
+	if row.CouponCode.Valid && row.CouponMaxUsesAtClaim.Valid && row.CouponCurrentUsesAtClaim.Valid {
+		s.CouponSnapshot = &CouponSnapshot{
+			Code:        row.CouponCode.String,
+			MaxUses:     int(row.CouponMaxUsesAtClaim.Int32),
+			CurrentUses: int(row.CouponCurrentUsesAtClaim.Int32),
+		}
 	}
 	return s
 }

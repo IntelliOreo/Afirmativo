@@ -41,6 +41,7 @@ type StripeClient struct {
 type CreateCheckoutSessionParams struct {
 	AmountCents       int
 	Currency          string
+	ProductName       string
 	SuccessURL        string
 	CancelURL         string
 	ClientReferenceID string
@@ -99,7 +100,7 @@ func (c *StripeClient) CreateCheckoutSession(ctx context.Context, params CreateC
 	form.Set("cancel_url", params.CancelURL)
 	form.Set("client_reference_id", params.ClientReferenceID)
 	form.Set("line_items[0][price_data][currency]", strings.ToLower(params.Currency))
-	form.Set("line_items[0][price_data][product_data][name]", "Afirmativo Session Access")
+	form.Set("line_items[0][price_data][product_data][name]", params.ProductName)
 	form.Set("line_items[0][price_data][unit_amount]", strconv.Itoa(params.AmountCents))
 	form.Set("line_items[0][quantity]", "1")
 

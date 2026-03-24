@@ -1,8 +1,14 @@
 import { api } from "@/lib/api";
 
 export type VerifyResult =
-  | { ok: true; interviewStartedAt?: string }
+  | { ok: true; interviewStartedAt?: string; coupon?: VerifiedCoupon }
   | { ok: false; reason: "not_found" | "expired" | "invalid_pin" | "rate_limited" | "server" | "network" | "unknown" };
+
+export type VerifiedCoupon = {
+  code: string;
+  maxUses: number;
+  currentUses: number;
+};
 
 export type SessionAccessResult =
   | { ok: true }
@@ -10,15 +16,28 @@ export type SessionAccessResult =
 
 export async function verifySession(sessionCode: string, pin: string): Promise<VerifyResult> {
   try {
-    const result = await api<{ session?: { interview_started_at?: string } }>("/api/session/verify", {
+    const result = await api<{
+      session?: { interview_started_at?: string };
+      coupon?: { code?: string; max_uses?: number; current_uses?: number };
+    }>("/api/session/verify", {
       method: "POST",
       body: { session_code: sessionCode, pin },
     });
 
     if (result.ok && result.data?.session) {
+      const coupon = result.data.coupon;
       return {
         ok: true,
         interviewStartedAt: result.data.session.interview_started_at,
+        coupon: coupon && typeof coupon.code === "string" &&
+          typeof coupon.max_uses === "number" &&
+          typeof coupon.current_uses === "number"
+          ? {
+              code: coupon.code,
+              maxUses: coupon.max_uses,
+              currentUses: coupon.current_uses,
+            }
+          : undefined,
       };
     }
 

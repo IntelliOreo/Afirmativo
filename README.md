@@ -41,11 +41,16 @@ Token-bucket throttles and failed-attempt lockouts use in-memory maps. State res
 
 **Trade-off accepted**: traffic is low. Distributed rate limiting would require Redis or equivalent — not warranted yet. First scaling step when needed.
 
-### Stripe config isolated from the shared config layer
+### Payment config is typed, fulfillment stays local
 
-`StripeClientConfig` is constructed directly in `main.go` from env vars, not parsed through `config.go`. Payment is new and still evolving; shared config changes affect all services and tests. Keeping Stripe wiring separate avoids churn in the stable config surface.
+`config.go` now validates the Stripe secrets plus the two checkout amounts used by the payment flow. `main.go` still owns the product names and fulfillment wiring for `direct_session` and `coupon_pack_10`.
 
-**Trade-off**: Stripe settings don't get startup validation like other config. Acceptable — Stripe API calls fail fast with clear errors on bad credentials.
+**Decision**: pricing lives in config, but the small product catalog and fulfillment semantics stay in code.
+**Trade-off**: startup validation stays strong without turning payment setup into a wider abstraction, but future product shapes require an explicit code change instead of a config flip.
+
+`coupon_pack_10` is intentionally a fixed 10-use product. Only pricing is configurable.
+**Decision**: `POST /api/payment/checkout` currently treats a missing `product` as `direct_session` during rollout.
+**Trade-off**: older callers keep working while frontend and backend can roll independently, but malformed new callers can still under-specify the request until that fallback is removed. Once all callers send an explicit product, missing `product` should become a `400`.
 
 ### No Stripe SDK
 
@@ -61,10 +66,11 @@ The frontend serves a real app manifest and generated app icons so browsers are 
 
 ### Payment state machine with pessimistic locking
 
-Both the Stripe webhook and the browser poll can provision a session. `FOR UPDATE` in a Postgres transaction prevents double-provisioning. The reveal PIN has a 10-minute TTL and is consumed on first read — prevents replay from stolen poll responses.
+Both the Stripe webhook and the browser poll can resolve fulfillment under the same locked payment row. `FOR UPDATE` prevents double-provisioning. Direct-session reveal PINs still have a 10-minute TTL and are consumed on first read; coupon-pack reveals are repeatable because the issued coupon is not treated like secret PIN material.
 
 The frontend session handoff bootstrap waits for language initialization and runs once per session page load. This keeps the one-time PIN handoff resilient to client rerenders while preserving immediate PIN consumption from browser storage.
-Coupon redemptions reuse that same one-time handoff: `/api/coupon/validate` now returns coupon code plus redemption counts, and `/session/[code]` shows that summary only when the handoff came from coupon redemption.
+Coupon redemptions no longer rely on browser-only coupon handoff state. The redeemed coupon snapshot is stored on the session and returned by `POST /api/session/verify`, so `/session/[code]` can show the same coupon summary again after reload or manual PIN verification.
+Hosted Stripe Checkout now supports two products through the same webhook endpoint: a one-time direct session and a 10-use coupon pack. `/pay/success` either redirects into `/session/{code}` for direct-session fulfillment or shows the issued coupon for the coupon-pack path.
 That same ready state now offers both `Copy all` and a user-controlled `mailto:` handoff, with the email body reusing the exact same session/coupon reveal text.
 
 **Trade-off**: row-level locks under contention. A single payment rarely has concurrent mutations.

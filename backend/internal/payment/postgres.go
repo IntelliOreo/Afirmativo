@@ -25,10 +25,11 @@ func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
 	return &PostgresStore{pool: pool}
 }
 
-func (s *PostgresStore) CreatePendingPayment(ctx context.Context, amountCents int, currency string) (*Payment, error) {
+func (s *PostgresStore) CreatePendingPayment(ctx context.Context, amountCents int, currency string, productType ProductType) (*Payment, error) {
 	row, err := sqlgen.New(s.pool).CreatePendingPayment(ctx, sqlgen.CreatePendingPaymentParams{
 		AmountCents: int32(amountCents),
 		Currency:    currency,
+		ProductType: string(productType),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create pending payment: %w", err)
@@ -54,6 +55,15 @@ func (s *PostgresStore) AttachCheckoutSessionID(ctx context.Context, paymentID, 
 	return paymentFromRow(row), nil
 }
 
+func (s *PostgresStore) GetPayment(ctx context.Context, ref PaymentReference) (*Payment, error) {
+	return s.withLockedPayment(ctx, ref, func(_ context.Context, _ *sqlgen.Queries, row sqlgen.Payment) (*Payment, error) {
+		if _, err := rowProductType(row); err != nil {
+			return nil, err
+		}
+		return paymentFromRow(row), nil
+	})
+}
+
 func (s *PostgresStore) MarkPaymentFailed(ctx context.Context, ref PaymentReference, failureCode, failureDetail string) (*Payment, error) {
 	return s.withLockedPayment(ctx, ref, func(ctx context.Context, q *sqlgen.Queries, row sqlgen.Payment) (*Payment, error) {
 		updated, err := q.MarkPaymentFailedByID(ctx, sqlgen.MarkPaymentFailedByIDParams{
@@ -71,6 +81,10 @@ func (s *PostgresStore) MarkPaymentFailed(ctx context.Context, ref PaymentRefere
 
 func (s *PostgresStore) MarkPaymentPaid(ctx context.Context, ref PaymentReference, now time.Time) (*Payment, error) {
 	return s.withLockedPayment(ctx, ref, func(ctx context.Context, q *sqlgen.Queries, row sqlgen.Payment) (*Payment, error) {
+		if _, err := rowProductType(row); err != nil {
+			return nil, err
+		}
+
 		switch Status(row.Status) {
 		case StatusPending:
 			updated, err := q.MarkPaymentPaidUnprovisionedByID(ctx, sqlgen.MarkPaymentPaidUnprovisionedByIDParams{
@@ -90,63 +104,22 @@ func (s *PostgresStore) MarkPaymentPaid(ctx context.Context, ref PaymentReferenc
 	})
 }
 
-func (s *PostgresStore) ProvisionIfNeeded(ctx context.Context, checkoutSessionID string, now time.Time, buildProvision func() (*ProvisionData, error)) (*Payment, error) {
-	tx, err := s.pool.Begin(ctx)
+func (s *PostgresStore) ProvisionIfNeeded(ctx context.Context, checkoutSessionID string, now time.Time, buildFulfillment BuildFulfillmentFunc) (*Payment, error) {
+	result, err := s.resolveCheckoutSession(ctx, checkoutSessionID, now, false, buildFulfillment)
 	if err != nil {
-		return nil, fmt.Errorf("begin tx: %w", err)
+		return nil, err
 	}
-	defer tx.Rollback(ctx) //nolint:errcheck
-
-	q := sqlgen.New(tx)
-	row, err := q.GetPaymentByCheckoutSessionIDForUpdate(ctx, nullableText(checkoutSessionID))
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, shared.ErrNotFound
-		}
-		return nil, fmt.Errorf("lock payment by checkout session id: %w", err)
+	if result == nil {
+		return nil, fmt.Errorf("missing payment result")
 	}
-
-	switch Status(row.Status) {
-	case StatusProvisioned, StatusPending, StatusFailed:
-		if err := tx.Commit(ctx); err != nil {
-			return nil, fmt.Errorf("commit tx: %w", err)
-		}
-		return paymentFromRow(row), nil
-	case StatusPaidUnprovisioned:
-		provisionData, err := buildProvision()
-		if err != nil {
-			return nil, err
-		}
-		provisionData.PaymentID = paymentIDString(row.ID)
-		if err := q.CreatePaidSession(ctx, sqlgen.CreatePaidSessionParams{
-			SessionCode:            provisionData.SessionCode,
-			PinHash:                provisionData.PINHash,
-			PaymentID:              nullableText(provisionData.PaymentID),
-			ExpiresAt:              pgtype.Timestamptz{Time: provisionData.ExpiresAt, Valid: true},
-			InterviewBudgetSeconds: int32(provisionData.InterviewBudgetSeconds),
-		}); err != nil {
-			return nil, fmt.Errorf("create paid session: %w", err)
-		}
-		updated, err := q.MarkPaymentProvisioned(ctx, sqlgen.MarkPaymentProvisionedParams{
-			ID:              row.ID,
-			SessionCode:     nullableText(provisionData.SessionCode),
-			RevealPin:       nullableText(provisionData.PIN),
-			RevealExpiresAt: pgtype.Timestamptz{Time: provisionData.RevealExpiresAt, Valid: true},
-			UpdatedAt:       pgtype.Timestamptz{Time: now, Valid: true},
-		})
-		if err != nil {
-			return nil, fmt.Errorf("mark payment provisioned: %w", err)
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return nil, fmt.Errorf("commit tx: %w", err)
-		}
-		return paymentFromRow(updated), nil
-	default:
-		return nil, fmt.Errorf("unsupported payment status %q", row.Status)
-	}
+	return result.Payment, nil
 }
 
-func (s *PostgresStore) ResolveCheckoutSessionForPoll(ctx context.Context, checkoutSessionID string, now time.Time, buildProvision func() (*ProvisionData, error)) (*PollResult, error) {
+func (s *PostgresStore) ResolveCheckoutSessionForPoll(ctx context.Context, checkoutSessionID string, now time.Time, buildFulfillment BuildFulfillmentFunc) (*PollResult, error) {
+	return s.resolveCheckoutSession(ctx, checkoutSessionID, now, true, buildFulfillment)
+}
+
+func (s *PostgresStore) resolveCheckoutSession(ctx context.Context, checkoutSessionID string, now time.Time, forPoll bool, buildFulfillment BuildFulfillmentFunc) (*PollResult, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
@@ -160,6 +133,11 @@ func (s *PostgresStore) ResolveCheckoutSessionForPoll(ctx context.Context, check
 			return nil, shared.ErrNotFound
 		}
 		return nil, fmt.Errorf("lock payment by checkout session id: %w", err)
+	}
+
+	productType, err := rowProductType(row)
+	if err != nil {
+		return nil, err
 	}
 
 	switch Status(row.Status) {
@@ -169,62 +147,126 @@ func (s *PostgresStore) ResolveCheckoutSessionForPoll(ctx context.Context, check
 		}
 		return &PollResult{Payment: paymentFromRow(row)}, nil
 	case StatusPaidUnprovisioned:
-		provisionData, err := buildProvision()
+		row, err = s.provisionLockedPayment(ctx, q, row, productType, now, buildFulfillment)
 		if err != nil {
 			return nil, err
 		}
-		provisionData.PaymentID = paymentIDString(row.ID)
-		if err := q.CreatePaidSession(ctx, sqlgen.CreatePaidSessionParams{
-			SessionCode:            provisionData.SessionCode,
-			PinHash:                provisionData.PINHash,
-			PaymentID:              nullableText(provisionData.PaymentID),
-			ExpiresAt:              pgtype.Timestamptz{Time: provisionData.ExpiresAt, Valid: true},
-			InterviewBudgetSeconds: int32(provisionData.InterviewBudgetSeconds),
-		}); err != nil {
-			return nil, fmt.Errorf("create paid session: %w", err)
-		}
-		row, err = q.MarkPaymentProvisioned(ctx, sqlgen.MarkPaymentProvisionedParams{
-			ID:              row.ID,
-			SessionCode:     nullableText(provisionData.SessionCode),
-			RevealPin:       nullableText(provisionData.PIN),
-			RevealExpiresAt: pgtype.Timestamptz{Time: provisionData.RevealExpiresAt, Valid: true},
-			UpdatedAt:       pgtype.Timestamptz{Time: now, Valid: true},
-		})
-		if err != nil {
-			return nil, fmt.Errorf("mark payment provisioned: %w", err)
-		}
 	case StatusProvisioned:
-		// Already provisioned; fall through to reveal consumption.
+		// Already provisioned; resolve poll output below when needed.
 	default:
 		return nil, fmt.Errorf("unsupported payment status %q", row.Status)
 	}
 
-	if row.RevealConsumedAt.Valid {
-		return nil, ErrRevealConsumed
-	}
-	if row.RevealExpiresAt.Valid && !row.RevealExpiresAt.Time.After(now) {
-		return nil, ErrRevealExpired
-	}
-	if !row.RevealPin.Valid || !row.SessionCode.Valid {
-		return nil, fmt.Errorf("payment provisioned without reveal data")
+	if !forPoll {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, fmt.Errorf("commit tx: %w", err)
+		}
+		return &PollResult{Payment: paymentFromRow(row)}, nil
 	}
 
-	consumed, err := q.ConsumePaymentReveal(ctx, sqlgen.ConsumePaymentRevealParams{
-		ID:               row.ID,
-		RevealConsumedAt: pgtype.Timestamptz{Time: now, Valid: true},
-	})
+	result, err := s.resolvePollResult(ctx, q, row, productType, now)
 	if err != nil {
-		return nil, fmt.Errorf("consume payment reveal: %w", err)
+		return nil, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit tx: %w", err)
 	}
-	return &PollResult{
-		Payment:     paymentFromRow(consumed),
-		SessionCode: consumed.SessionCode.String,
-		PIN:         consumed.RevealPin.String,
-	}, nil
+	return result, nil
+}
+
+func (s *PostgresStore) provisionLockedPayment(ctx context.Context, q *sqlgen.Queries, row sqlgen.Payment, productType ProductType, now time.Time, buildFulfillment BuildFulfillmentFunc) (sqlgen.Payment, error) {
+	paymentID := paymentIDString(row.ID)
+	fulfillment, err := buildFulfillment(productType, paymentID)
+	if err != nil {
+		return sqlgen.Payment{}, err
+	}
+
+	switch productType {
+	case ProductTypeDirectSession:
+		if err := q.CreatePaidSession(ctx, sqlgen.CreatePaidSessionParams{
+			SessionCode:            fulfillment.SessionCode,
+			PinHash:                fulfillment.PINHash,
+			PaymentID:              nullableText(paymentID),
+			ExpiresAt:              pgtype.Timestamptz{Time: fulfillment.ExpiresAt, Valid: true},
+			InterviewBudgetSeconds: int32(fulfillment.InterviewBudgetSeconds),
+		}); err != nil {
+			return sqlgen.Payment{}, fmt.Errorf("create paid session: %w", err)
+		}
+
+		updated, err := q.MarkPaymentProvisioned(ctx, sqlgen.MarkPaymentProvisionedParams{
+			ID:              row.ID,
+			SessionCode:     nullableText(fulfillment.SessionCode),
+			RevealPin:       nullableText(fulfillment.PIN),
+			RevealExpiresAt: pgtype.Timestamptz{Time: fulfillment.RevealExpiresAt, Valid: true},
+			UpdatedAt:       pgtype.Timestamptz{Time: now, Valid: true},
+		})
+		if err != nil {
+			return sqlgen.Payment{}, fmt.Errorf("mark payment provisioned: %w", err)
+		}
+		return updated, nil
+	case ProductTypeCouponPack10:
+		createdCoupon, err := q.CreateCoupon(ctx, sqlgen.CreateCouponParams{
+			Code:    fulfillment.CouponCode,
+			MaxUses: int32(fulfillment.CouponMaxUses),
+			Source:  nullableText(fulfillment.CouponSource),
+		})
+		if err != nil {
+			return sqlgen.Payment{}, fmt.Errorf("create coupon: %w", err)
+		}
+
+		updated, err := q.MarkPaymentProvisionedCouponPack(ctx, sqlgen.MarkPaymentProvisionedCouponPackParams{
+			ID:         row.ID,
+			CouponCode: nullableText(createdCoupon.Code),
+			UpdatedAt:  pgtype.Timestamptz{Time: now, Valid: true},
+		})
+		if err != nil {
+			return sqlgen.Payment{}, fmt.Errorf("mark payment provisioned coupon pack: %w", err)
+		}
+		return updated, nil
+	default:
+		return sqlgen.Payment{}, fmt.Errorf("%w: %q", ErrUnknownProductType, productType)
+	}
+}
+
+func (s *PostgresStore) resolvePollResult(ctx context.Context, q *sqlgen.Queries, row sqlgen.Payment, productType ProductType, now time.Time) (*PollResult, error) {
+	switch productType {
+	case ProductTypeDirectSession:
+		if row.RevealConsumedAt.Valid {
+			return nil, ErrRevealConsumed
+		}
+		if row.RevealExpiresAt.Valid && !row.RevealExpiresAt.Time.After(now) {
+			return nil, ErrRevealExpired
+		}
+		if !row.RevealPin.Valid || !row.SessionCode.Valid {
+			return nil, fmt.Errorf("payment provisioned without reveal data")
+		}
+
+		consumed, err := q.ConsumePaymentReveal(ctx, sqlgen.ConsumePaymentRevealParams{
+			ID:               row.ID,
+			RevealConsumedAt: pgtype.Timestamptz{Time: now, Valid: true},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("consume payment reveal: %w", err)
+		}
+		return &PollResult{
+			Payment:     paymentFromRow(consumed),
+			SessionCode: consumed.SessionCode.String,
+			PIN:         consumed.RevealPin.String,
+		}, nil
+	case ProductTypeCouponPack10:
+		if !row.CouponCode.Valid {
+			return nil, fmt.Errorf("coupon-pack payment provisioned without coupon code")
+		}
+		return &PollResult{
+			Payment:           paymentFromRow(row),
+			CouponCode:        row.CouponCode.String,
+			CouponMaxUses:     couponPack10MaxUses,
+			CouponCurrentUses: 0,
+		}, nil
+	default:
+		return nil, fmt.Errorf("%w: %q", ErrUnknownProductType, productType)
+	}
 }
 
 func (s *PostgresStore) MarkProvisionFailure(ctx context.Context, checkoutSessionID, failureCode, failureDetail string) (*Payment, error) {
@@ -312,6 +354,7 @@ func lockPayment(ctx context.Context, q *sqlgen.Queries, ref PaymentReference) (
 func paymentFromRow(row sqlgen.Payment) *Payment {
 	payment := &Payment{
 		ID:          paymentIDString(row.ID),
+		ProductType: ProductType(row.ProductType),
 		AmountCents: int(row.AmountCents),
 		Currency:    row.Currency,
 		Status:      Status(row.Status),
@@ -323,6 +366,9 @@ func paymentFromRow(row sqlgen.Payment) *Payment {
 	}
 	if row.SessionCode.Valid {
 		payment.SessionCode = row.SessionCode.String
+	}
+	if row.CouponCode.Valid {
+		payment.CouponCode = row.CouponCode.String
 	}
 	if row.RevealPin.Valid {
 		payment.RevealPIN = row.RevealPin.String
@@ -375,4 +421,13 @@ func checkoutSessionValue(row sqlgen.Payment, fallback string) string {
 		return row.CheckoutSessionID.String
 	}
 	return strings.TrimSpace(fallback)
+}
+
+func rowProductType(row sqlgen.Payment) (ProductType, error) {
+	switch ProductType(row.ProductType) {
+	case ProductTypeDirectSession, ProductTypeCouponPack10:
+		return ProductType(row.ProductType), nil
+	default:
+		return "", fmt.Errorf("%w: %q", ErrUnknownProductType, row.ProductType)
+	}
 }

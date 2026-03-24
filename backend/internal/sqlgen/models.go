@@ -37,7 +37,6 @@ type InterviewAnswerJob struct {
 	ID                     pgtype.UUID        `json:"id"`
 	SessionCode            string             `json:"session_code"`
 	ClientRequestID        string             `json:"client_request_id"`
-	LastRequestID          pgtype.Text        `json:"last_request_id"`
 	TurnID                 string             `json:"turn_id"`
 	QuestionText           pgtype.Text        `json:"question_text"`
 	AnswerText             string             `json:"answer_text"`
@@ -51,6 +50,7 @@ type InterviewAnswerJob struct {
 	CreatedAt              pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
 	FailedReasonsTruncated string             `json:"failed_reasons_truncated"`
+	LastRequestID          pgtype.Text        `json:"last_request_id"`
 }
 
 type InterviewEvent struct {
@@ -75,6 +75,8 @@ type Payment struct {
 	FailureDetail     pgtype.Text        `json:"failure_detail"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	ProductType       string             `json:"product_type"`
+	CouponCode        pgtype.Text        `json:"coupon_code"`
 }
 
 type QuestionArea struct {
@@ -140,4 +142,6 @@ type Session struct {
 	ActiveQuestionKind        pgtype.Text        `json:"active_question_kind"`
 	ActiveQuestionIssuedAt    pgtype.Timestamptz `json:"active_question_issued_at"`
 	ActiveAnswerDeadlineAt    pgtype.Timestamptz `json:"active_answer_deadline_at"`
+	CouponMaxUsesAtClaim      pgtype.Int4        `json:"coupon_max_uses_at_claim"`
+	CouponCurrentUsesAtClaim  pgtype.Int4        `json:"coupon_current_uses_at_claim"`
 }

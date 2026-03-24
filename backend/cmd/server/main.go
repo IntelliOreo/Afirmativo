@@ -181,8 +181,16 @@ func main() {
 		FrontendURL:            cfg.Server.FrontendURL,
 		SessionExpiryHours:     cfg.Auth.SessionExpiryHours,
 		InterviewBudgetSeconds: cfg.Interview.BudgetSeconds,
-		AmountCents:            cfg.Payment.AmountCents,
-		Currency:               cfg.Payment.Currency,
+		DirectSession: payment.ProductConfig{
+			AmountCents: cfg.Payment.DirectSessionAmountCents,
+			Currency:    "usd",
+			ProductName: "Afirmativo Session Access",
+		},
+		CouponPack10: payment.ProductConfig{
+			AmountCents: cfg.Payment.CouponPack10AmountCents,
+			Currency:    "usd",
+			ProductName: "Afirmativo 10-Use Coupon Pack",
+		},
 	})
 	paymentHandler := payment.NewHandler(paymentSvc)
 

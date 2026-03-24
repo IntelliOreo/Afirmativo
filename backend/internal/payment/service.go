@@ -2,8 +2,10 @@ package payment
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
+	"math/big"
 	"net/url"
 	"strings"
 	"time"
@@ -16,6 +18,9 @@ import (
 const (
 	defaultRevealPINTTL              = 10 * time.Minute
 	stripeCheckoutSessionPlaceholder = "{CHECKOUT_SESSION_ID}"
+	couponAlphabet                   = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+	couponPack10Prefix               = "PACK10"
+	couponTokenLength                = 8
 )
 
 type Deps struct {
@@ -27,8 +32,8 @@ type Settings struct {
 	FrontendURL            string
 	SessionExpiryHours     int
 	InterviewBudgetSeconds int
-	AmountCents            int
-	Currency               string
+	DirectSession          ProductConfig
+	CouponPack10           ProductConfig
 	RevealPINTTL           time.Duration
 }
 
@@ -51,20 +56,30 @@ func NewService(deps Deps, settings Settings) *Service {
 	}
 }
 
-func (s *Service) CreateCheckout(ctx context.Context, lang string) (*CreatedCheckoutSession, error) {
+func (s *Service) CreateCheckout(ctx context.Context, lang string, rawProduct string) (*CreatedCheckoutSession, error) {
 	normalizedLang, err := normalizeLang(lang)
 	if err != nil {
 		return nil, err
 	}
 
-	paymentRow, err := s.store.CreatePendingPayment(ctx, s.settings.AmountCents, s.settings.Currency)
+	productType, err := normalizeProductType(strings.TrimSpace(strings.ToLower(rawProduct)))
+	if err != nil {
+		return nil, fmt.Errorf("%w: unsupported product", shared.ErrBadRequest)
+	}
+	productCfg, err := s.productConfig(productType)
+	if err != nil {
+		return nil, fmt.Errorf("%w: unsupported product", shared.ErrBadRequest)
+	}
+
+	paymentRow, err := s.store.CreatePendingPayment(ctx, productCfg.AmountCents, productCfg.Currency, productType)
 	if err != nil {
 		return nil, fmt.Errorf("create pending payment: %w", err)
 	}
 
 	checkout, err := s.stripe.CreateCheckoutSession(ctx, CreateCheckoutSessionParams{
-		AmountCents:       s.settings.AmountCents,
-		Currency:          s.settings.Currency,
+		AmountCents:       productCfg.AmountCents,
+		Currency:          productCfg.Currency,
+		ProductName:       productCfg.ProductName,
 		SuccessURL:        buildFrontendURL(s.settings.FrontendURL, "/pay/success", map[string]string{"session_id": stripeCheckoutSessionPlaceholder, "lang": normalizedLang}),
 		CancelURL:         buildFrontendURL(s.settings.FrontendURL, "/pay", map[string]string{"lang": normalizedLang}),
 		ClientReferenceID: paymentRow.ID,
@@ -97,14 +112,19 @@ func (s *Service) HandleWebhook(ctx context.Context, payload []byte, signatureHe
 		CheckoutSessionID: strings.TrimSpace(checkout.ID),
 	}
 
-	if !amountCurrencyMatch(checkout, s.settings.AmountCents, s.settings.Currency) {
-		if _, markErr := s.store.MarkPaymentFailed(ctx, ref, "PAYMENT_AMOUNT_MISMATCH", "Stripe checkout amount or currency did not match configured values"); markErr != nil {
+	paymentRow, err := s.store.GetPayment(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("get payment: %w", err)
+	}
+
+	if !amountCurrencyMatch(checkout, paymentRow.AmountCents, paymentRow.Currency) {
+		if _, markErr := s.store.MarkPaymentFailed(ctx, ref, "PAYMENT_AMOUNT_MISMATCH", "Stripe checkout amount or currency did not match stored payment values"); markErr != nil {
 			return fmt.Errorf("mark payment failed after amount mismatch: %w", markErr)
 		}
 		return nil
 	}
 
-	paymentRow, err := s.store.MarkPaymentPaid(ctx, ref, s.nowFn().UTC())
+	paymentRow, err = s.store.MarkPaymentPaid(ctx, ref, s.nowFn().UTC())
 	if err != nil {
 		return fmt.Errorf("mark payment paid: %w", err)
 	}
@@ -112,21 +132,21 @@ func (s *Service) HandleWebhook(ctx context.Context, payload []byte, signatureHe
 		return nil
 	}
 
-	if _, err := s.store.ProvisionIfNeeded(ctx, checkout.ID, s.nowFn().UTC(), s.buildProvisionData); err != nil {
-		_, _ = s.store.MarkProvisionFailure(ctx, checkout.ID, "SESSION_PROVISION_FAILED", truncateFailureDetail(err))
+	if _, err := s.store.ProvisionIfNeeded(ctx, checkout.ID, s.nowFn().UTC(), s.buildFulfillmentData); err != nil {
+		_, _ = s.store.MarkProvisionFailure(ctx, checkout.ID, "PAYMENT_PROVISION_FAILED", truncateFailureDetail(err))
 		return fmt.Errorf("provision checkout session: %w", err)
 	}
 	return nil
 }
 
 func (s *Service) GetCheckoutStatus(ctx context.Context, checkoutSessionID string) (*CheckoutStatus, error) {
-	result, err := s.store.ResolveCheckoutSessionForPoll(ctx, strings.TrimSpace(checkoutSessionID), s.nowFn().UTC(), s.buildProvisionData)
+	result, err := s.store.ResolveCheckoutSessionForPoll(ctx, strings.TrimSpace(checkoutSessionID), s.nowFn().UTC(), s.buildFulfillmentData)
 	if err != nil {
 		switch {
 		case errors.Is(err, shared.ErrNotFound), errors.Is(err, ErrRevealExpired), errors.Is(err, ErrRevealConsumed):
 			return nil, err
 		default:
-			_, _ = s.store.MarkProvisionFailure(ctx, checkoutSessionID, "SESSION_PROVISION_FAILED", truncateFailureDetail(err))
+			_, _ = s.store.MarkProvisionFailure(ctx, checkoutSessionID, "PAYMENT_PROVISION_FAILED", truncateFailureDetail(err))
 			return &CheckoutStatus{Status: "pending"}, nil
 		}
 	}
@@ -140,39 +160,84 @@ func (s *Service) GetCheckoutStatus(ctx context.Context, checkoutSessionID strin
 	case StatusFailed:
 		return &CheckoutStatus{Status: "failed", FailureCode: result.Payment.FailureCode}, nil
 	case StatusProvisioned:
-		return &CheckoutStatus{
-			Status:      "ready",
-			SessionCode: result.SessionCode,
-			PIN:         result.PIN,
-		}, nil
+		switch result.Payment.ProductType {
+		case ProductTypeDirectSession:
+			return &CheckoutStatus{
+				Status:      "ready",
+				ProductType: ProductTypeDirectSession,
+				SessionCode: result.SessionCode,
+				PIN:         result.PIN,
+			}, nil
+		case ProductTypeCouponPack10:
+			return &CheckoutStatus{
+				Status:            "ready",
+				ProductType:       ProductTypeCouponPack10,
+				CouponCode:        result.CouponCode,
+				CouponMaxUses:     result.CouponMaxUses,
+				CouponCurrentUses: result.CouponCurrentUses,
+			}, nil
+		default:
+			return nil, fmt.Errorf("%w: %q", ErrUnknownProductType, result.Payment.ProductType)
+		}
 	default:
 		return nil, fmt.Errorf("unsupported payment status %q", result.Payment.Status)
 	}
 }
 
-func (s *Service) buildProvisionData() (*ProvisionData, error) {
-	sessionCode, err := session.GenerateSessionCode()
-	if err != nil {
-		return nil, fmt.Errorf("generate session code: %w", err)
-	}
-	pin, err := session.GeneratePIN()
-	if err != nil {
-		return nil, fmt.Errorf("generate pin: %w", err)
-	}
-	pinHash, err := bcrypt.GenerateFromPassword([]byte(pin), bcrypt.DefaultCost)
-	if err != nil {
-		return nil, fmt.Errorf("hash pin: %w", err)
-	}
+func (s *Service) buildFulfillmentData(productType ProductType, paymentID string) (*FulfillmentData, error) {
+	switch productType {
+	case ProductTypeDirectSession:
+		sessionCode, err := session.GenerateSessionCode()
+		if err != nil {
+			return nil, fmt.Errorf("generate session code: %w", err)
+		}
+		pin, err := session.GeneratePIN()
+		if err != nil {
+			return nil, fmt.Errorf("generate pin: %w", err)
+		}
+		pinHash, err := bcrypt.GenerateFromPassword([]byte(pin), bcrypt.DefaultCost)
+		if err != nil {
+			return nil, fmt.Errorf("hash pin: %w", err)
+		}
 
-	now := s.nowFn().UTC()
-	return &ProvisionData{
-		SessionCode:            sessionCode,
-		PIN:                    pin,
-		PINHash:                string(pinHash),
-		ExpiresAt:              now.Add(time.Duration(s.settings.SessionExpiryHours) * time.Hour),
-		RevealExpiresAt:        now.Add(s.settings.RevealPINTTL),
-		InterviewBudgetSeconds: s.settings.InterviewBudgetSeconds,
-	}, nil
+		now := s.nowFn().UTC()
+		return &FulfillmentData{
+			ProductType:            ProductTypeDirectSession,
+			SessionCode:            sessionCode,
+			PIN:                    pin,
+			PINHash:                string(pinHash),
+			PaymentID:              paymentID,
+			ExpiresAt:              now.Add(time.Duration(s.settings.SessionExpiryHours) * time.Hour),
+			RevealExpiresAt:        now.Add(s.settings.RevealPINTTL),
+			InterviewBudgetSeconds: s.settings.InterviewBudgetSeconds,
+		}, nil
+	case ProductTypeCouponPack10:
+		code, err := generateCouponCode(couponPack10Prefix, couponTokenLength)
+		if err != nil {
+			return nil, fmt.Errorf("generate coupon code: %w", err)
+		}
+		return &FulfillmentData{
+			ProductType:       ProductTypeCouponPack10,
+			PaymentID:         paymentID,
+			CouponCode:        code,
+			CouponMaxUses:     couponPack10MaxUses,
+			CouponCurrentUses: 0,
+			CouponSource:      fmt.Sprintf("payment:%s", paymentID),
+		}, nil
+	default:
+		return nil, fmt.Errorf("%w: %q", ErrUnknownProductType, productType)
+	}
+}
+
+func (s *Service) productConfig(productType ProductType) (ProductConfig, error) {
+	switch productType {
+	case ProductTypeDirectSession:
+		return s.settings.DirectSession, nil
+	case ProductTypeCouponPack10:
+		return s.settings.CouponPack10, nil
+	default:
+		return ProductConfig{}, fmt.Errorf("%w: %q", ErrUnknownProductType, productType)
+	}
 }
 
 func normalizeLang(lang string) (string, error) {
@@ -207,6 +272,33 @@ func amountCurrencyMatch(checkout *StripeCheckoutSession, amountCents int, curre
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(checkout.Currency), strings.TrimSpace(currency))
+}
+
+func generateCouponCode(prefix string, tokenLength int) (string, error) {
+	if tokenLength < 4 {
+		return "", fmt.Errorf("token length must be at least 4")
+	}
+
+	token, err := randomToken(tokenLength)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s-%s", prefix, token), nil
+}
+
+func randomToken(length int) (string, error) {
+	var b strings.Builder
+	b.Grow(length)
+
+	max := big.NewInt(int64(len(couponAlphabet)))
+	for i := 0; i < length; i++ {
+		n, err := rand.Int(rand.Reader, max)
+		if err != nil {
+			return "", err
+		}
+		b.WriteByte(couponAlphabet[n.Int64()])
+	}
+	return b.String(), nil
 }
 
 func truncateFailureDetail(err error) string {

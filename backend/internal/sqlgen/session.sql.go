@@ -49,6 +49,34 @@ func (q *Queries) CompleteSession(ctx context.Context, sessionCode string) error
 	return err
 }
 
+const createCoupon = `-- name: CreateCoupon :one
+INSERT INTO coupons (code, max_uses, source)
+VALUES ($1, $2, $3)
+RETURNING id, code, max_uses, current_uses, discount_pct, expires_at, source, created_at
+`
+
+type CreateCouponParams struct {
+	Code    string      `json:"code"`
+	MaxUses int32       `json:"max_uses"`
+	Source  pgtype.Text `json:"source"`
+}
+
+func (q *Queries) CreateCoupon(ctx context.Context, arg CreateCouponParams) (Coupon, error) {
+	row := q.db.QueryRow(ctx, createCoupon, arg.Code, arg.MaxUses, arg.Source)
+	var i Coupon
+	err := row.Scan(
+		&i.ID,
+		&i.Code,
+		&i.MaxUses,
+		&i.CurrentUses,
+		&i.DiscountPct,
+		&i.ExpiresAt,
+		&i.Source,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createPaidSession = `-- name: CreatePaidSession :exec
 INSERT INTO sessions (session_code, pin_hash, payment_id, status, expires_at, interview_budget_seconds)
 VALUES ($1, $2, $3, 'created', $4, $5)
@@ -74,17 +102,28 @@ func (q *Queries) CreatePaidSession(ctx context.Context, arg CreatePaidSessionPa
 }
 
 const createSession = `-- name: CreateSession :one
-INSERT INTO sessions (session_code, pin_hash, coupon_code, status, expires_at, interview_budget_seconds)
-VALUES ($1, $2, $3, 'created', $4, $5)
-RETURNING session_code, pin_hash, track, status, role, ended_at, payment_id, coupon_code, expires_at, created_at, interview_budget_seconds, interview_lapsed_seconds, interview_lapsed_updated_at, interview_started_at, current_interview_started_at, last_api_call_at, conversation_history, preferred_language, flow_step, expected_turn_id, display_question_number, active_question_text_es, active_question_text_en, active_question_area, active_question_kind, active_question_issued_at, active_answer_deadline_at
+INSERT INTO sessions (
+    session_code,
+    pin_hash,
+    coupon_code,
+    coupon_max_uses_at_claim,
+    coupon_current_uses_at_claim,
+    status,
+    expires_at,
+    interview_budget_seconds
+)
+VALUES ($1, $2, $3, $4, $5, 'created', $6, $7)
+RETURNING session_code, pin_hash, track, status, role, ended_at, payment_id, coupon_code, expires_at, created_at, interview_budget_seconds, interview_lapsed_seconds, interview_lapsed_updated_at, interview_started_at, current_interview_started_at, last_api_call_at, conversation_history, preferred_language, flow_step, expected_turn_id, display_question_number, active_question_text_es, active_question_text_en, active_question_area, active_question_kind, active_question_issued_at, active_answer_deadline_at, coupon_max_uses_at_claim, coupon_current_uses_at_claim
 `
 
 type CreateSessionParams struct {
-	SessionCode            string             `json:"session_code"`
-	PinHash                string             `json:"pin_hash"`
-	CouponCode             pgtype.Text        `json:"coupon_code"`
-	ExpiresAt              pgtype.Timestamptz `json:"expires_at"`
-	InterviewBudgetSeconds int32              `json:"interview_budget_seconds"`
+	SessionCode              string             `json:"session_code"`
+	PinHash                  string             `json:"pin_hash"`
+	CouponCode               pgtype.Text        `json:"coupon_code"`
+	CouponMaxUsesAtClaim     pgtype.Int4        `json:"coupon_max_uses_at_claim"`
+	CouponCurrentUsesAtClaim pgtype.Int4        `json:"coupon_current_uses_at_claim"`
+	ExpiresAt                pgtype.Timestamptz `json:"expires_at"`
+	InterviewBudgetSeconds   int32              `json:"interview_budget_seconds"`
 }
 
 func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error) {
@@ -92,6 +131,8 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		arg.SessionCode,
 		arg.PinHash,
 		arg.CouponCode,
+		arg.CouponMaxUsesAtClaim,
+		arg.CouponCurrentUsesAtClaim,
 		arg.ExpiresAt,
 		arg.InterviewBudgetSeconds,
 	)
@@ -124,12 +165,14 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		&i.ActiveQuestionKind,
 		&i.ActiveQuestionIssuedAt,
 		&i.ActiveAnswerDeadlineAt,
+		&i.CouponMaxUsesAtClaim,
+		&i.CouponCurrentUsesAtClaim,
 	)
 	return i, err
 }
 
 const getSessionByCode = `-- name: GetSessionByCode :one
-SELECT session_code, pin_hash, track, status, role, ended_at, payment_id, coupon_code, expires_at, created_at, interview_budget_seconds, interview_lapsed_seconds, interview_lapsed_updated_at, interview_started_at, current_interview_started_at, last_api_call_at, conversation_history, preferred_language, flow_step, expected_turn_id, display_question_number, active_question_text_es, active_question_text_en, active_question_area, active_question_kind, active_question_issued_at, active_answer_deadline_at FROM sessions WHERE session_code = $1
+SELECT session_code, pin_hash, track, status, role, ended_at, payment_id, coupon_code, expires_at, created_at, interview_budget_seconds, interview_lapsed_seconds, interview_lapsed_updated_at, interview_started_at, current_interview_started_at, last_api_call_at, conversation_history, preferred_language, flow_step, expected_turn_id, display_question_number, active_question_text_es, active_question_text_en, active_question_area, active_question_kind, active_question_issued_at, active_answer_deadline_at, coupon_max_uses_at_claim, coupon_current_uses_at_claim FROM sessions WHERE session_code = $1
 `
 
 func (q *Queries) GetSessionByCode(ctx context.Context, sessionCode string) (Session, error) {
@@ -163,6 +206,8 @@ func (q *Queries) GetSessionByCode(ctx context.Context, sessionCode string) (Ses
 		&i.ActiveQuestionKind,
 		&i.ActiveQuestionIssuedAt,
 		&i.ActiveAnswerDeadlineAt,
+		&i.CouponMaxUsesAtClaim,
+		&i.CouponCurrentUsesAtClaim,
 	)
 	return i, err
 }
@@ -175,7 +220,7 @@ SET status = 'interviewing',
     preferred_language = COALESCE(preferred_language, $2)
 WHERE session_code = $1
   AND status IN ('created', 'active', 'interviewing')
-RETURNING session_code, pin_hash, track, status, role, ended_at, payment_id, coupon_code, expires_at, created_at, interview_budget_seconds, interview_lapsed_seconds, interview_lapsed_updated_at, interview_started_at, current_interview_started_at, last_api_call_at, conversation_history, preferred_language, flow_step, expected_turn_id, display_question_number, active_question_text_es, active_question_text_en, active_question_area, active_question_kind, active_question_issued_at, active_answer_deadline_at
+RETURNING session_code, pin_hash, track, status, role, ended_at, payment_id, coupon_code, expires_at, created_at, interview_budget_seconds, interview_lapsed_seconds, interview_lapsed_updated_at, interview_started_at, current_interview_started_at, last_api_call_at, conversation_history, preferred_language, flow_step, expected_turn_id, display_question_number, active_question_text_es, active_question_text_en, active_question_area, active_question_kind, active_question_issued_at, active_answer_deadline_at, coupon_max_uses_at_claim, coupon_current_uses_at_claim
 `
 
 type StartSessionParams struct {
@@ -217,6 +262,8 @@ func (q *Queries) StartSession(ctx context.Context, arg StartSessionParams) (Ses
 		&i.ActiveQuestionKind,
 		&i.ActiveQuestionIssuedAt,
 		&i.ActiveAnswerDeadlineAt,
+		&i.CouponMaxUsesAtClaim,
+		&i.CouponCurrentUsesAtClaim,
 	)
 	return i, err
 }

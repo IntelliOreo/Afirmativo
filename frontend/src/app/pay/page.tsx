@@ -10,7 +10,7 @@ import { Input } from "@components/Input";
 import { Alert } from "@components/Alert";
 import { api } from "@/lib/api";
 import { withLang } from "@/lib/language";
-import { writeCouponReveal, writePin } from "@/lib/storage/sessionPinStore";
+import { writePin } from "@/lib/storage/sessionPinStore";
 import { useLanguage } from "@/lib/useLanguage";
 import { getCommonMessages } from "@/messages/commonMessages";
 import { getPayMessages } from "@/messages/payMessages";
@@ -30,10 +30,11 @@ function PayPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const requestedLang = searchParams.get("lang");
+  const couponPrefill = searchParams.get("coupon") ?? "";
   const { lang, setLang } = useLanguage({ requestedLang });
   const t = getPayMessages(lang);
   const common = getCommonMessages(lang);
-  const [coupon, setCoupon] = useState("");
+  const [coupon, setCoupon] = useState(couponPrefill);
   const [couponError, setCouponError] = useState("");
   const [checkoutError, setCheckoutError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -51,17 +52,6 @@ function PayPageContent() {
 
       if (ok && data?.valid && data.session_code) {
         writePin(data.session_code, data.pin ?? "");
-        if (
-          data.coupon?.code &&
-          typeof data.coupon.max_uses === "number" &&
-          typeof data.coupon.current_uses === "number"
-        ) {
-          writeCouponReveal(data.session_code, {
-            code: data.coupon.code,
-            maxUses: data.coupon.max_uses,
-            currentUses: data.coupon.current_uses,
-          });
-        }
         router.push(withLang(`/session/${data.session_code}`, lang));
       } else {
         setCouponError(t.couponInvalid);
@@ -73,14 +63,14 @@ function PayPageContent() {
     }
   }
 
-  async function handleStripeCheckout() {
+  async function handleStripeCheckout(product: "direct_session" | "coupon_pack_10") {
     setLoading(true);
     setCheckoutError("");
 
     try {
       const { ok, data } = await api<{ url?: string }>("/api/payment/checkout", {
         method: "POST",
-        body: { lang },
+        body: { lang, product },
       });
 
       if (ok && data?.url) {
@@ -154,8 +144,11 @@ function PayPageContent() {
             <p className="text-sm text-gray-600 mb-4">
               {t.onlinePaymentBody}
             </p>
-            <Button fullWidth disabled={loading} onClick={handleStripeCheckout}>
-              {t.payByCard}
+            <Button fullWidth disabled={loading} onClick={() => handleStripeCheckout("direct_session")}>
+              {t.payDirectSession}
+            </Button>
+            <Button fullWidth variant="secondary" className="mt-3" disabled={loading} onClick={() => handleStripeCheckout("coupon_pack_10")}>
+              {t.payCouponPack10}
             </Button>
             {checkoutError && (
               <Alert variant="error" className="mt-4">
