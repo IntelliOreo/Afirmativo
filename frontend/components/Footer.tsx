@@ -16,6 +16,11 @@ export function Footer() {
             <p>
               Esta herramienta es solo para fines de preparación.
             </p>
+            <p className="mt-2">
+              <a href="mailto:abogada@asilo-afirmativo.com" className="text-primary hover:text-primary-dark underline">
+                abogada@asilo-afirmativo.com
+              </a>
+            </p>
           </div>
         </div>
       </div>
